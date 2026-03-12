@@ -553,7 +553,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 // ─────────────────────────────────────────────────────────────
 // 상수 (사용자 제공 스펙)
 // ─────────────────────────────────────────────────────────────
-const PAGES_PER_BATCH    = 6;
+const PAGES_PER_BATCH    = 4;  // 배치당 페이지 수 (줄일수록 항목 누락 감소)
 const RENDER_SCALE       = 2.5;
 const IMG_QUALITY        = 0.85;
 // 병렬 처리 동시성
@@ -1256,15 +1256,22 @@ function mergeRuleAndVision(ruleHitsByPage, visionItems) {
   });
 
   // 2) 규칙에만 있고 Vision에 없는 항목 추가 (중복 방지)
+  // ※ 중복 판단: 동일 type + 내용이 80% 이상 겹치는 경우에만 중복으로 처리
+  //   (느슨한 includes 조건 제거 → 다른 위반 요소가 오탐 필터링되는 문제 방지)
   for (const ri of ruleItems) {
     const p = String(ri.page);
     const visionPage = visionByPage[p] || [];
-    // Vision 결과에 동일 내용이 없을 때만 추가
-    const alreadyCovered = visionPage.some(vi =>
-      vi.content && ri.content &&
-      (vi.content.toLowerCase().includes(ri.content.toLowerCase()) ||
-       ri.content.toLowerCase().includes(vi.content.toLowerCase()))
-    );
+    // 같은 type이면서 내용이 거의 동일한 경우에만 중복으로 판단
+    const alreadyCovered = visionPage.some(vi => {
+      if (!vi.content || !ri.content) return false;
+      const viC = vi.content.toLowerCase().trim();
+      const riC = ri.content.toLowerCase().trim();
+      // 정확히 같은 내용이거나, 한쪽이 다른 쪽의 부분 문자열이면서 길이가 비슷한 경우만
+      const exactMatch = viC === riC;
+      const shortContains = (viC.includes(riC) && riC.length >= 4 && riC.length / viC.length > 0.5)
+                         || (riC.includes(viC) && viC.length >= 4 && viC.length / riC.length > 0.5);
+      return exactMatch || shortContains;
+    });
     if (!alreadyCovered) {
       merged.push(ri);
     }
