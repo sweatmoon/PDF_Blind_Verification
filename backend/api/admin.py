@@ -1,9 +1,12 @@
 """
 관리자 API – 사전 관리 / 시스템 설정 / 통계
+- Claude API 키 런타임 업데이트 추가
+- 단일 항목 추가/삭제 'term' 필드 지원
 """
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from models.schemas import DictionaryUpdateRequest
 from services.rule_detector import get_rule_detector
 from core.config import get_logger, load_dict, save_dict
@@ -61,9 +64,10 @@ def update_dictionary(req: DictionaryUpdateRequest):
 # ── 단일 항목 추가 ────────────────────────────────────────────
 @router.post("/dictionary/{group}/{subcategory}")
 def add_item(group: str, subcategory: str, body: dict):
-    item = (body.get("item") or "").strip()
+    # 'term' 또는 'item' 필드 지원
+    item = (body.get("term") or body.get("item") or "").strip()
     if not item:
-        raise HTTPException(400, "item 값 필요")
+        raise HTTPException(400, "term 또는 item 값 필요")
     return update_dictionary(DictionaryUpdateRequest(
         group=group, subcategory=subcategory, items=[item], action="add"))
 
@@ -80,15 +84,46 @@ def delete_item(group: str, subcategory: str, item: str):
 # ── 시스템 설정 조회 ──────────────────────────────────────────
 @router.get("/config")
 def get_config():
-    from core.config import AUTO_DELETE_MIN, MAX_FILE_SIZE_MB, OCR_ENABLED, CLAUDE_ENABLED, CLAUDE_MODEL
+    import core.config as cfg
     return JSONResponse({
-        "auto_delete_minutes": AUTO_DELETE_MIN,
-        "max_file_size_mb":    MAX_FILE_SIZE_MB,
-        "ocr_enabled":         OCR_ENABLED,
-        "claude_enabled":      CLAUDE_ENABLED,
-        "claude_model":        CLAUDE_MODEL,
+        "auto_delete_minutes": cfg.AUTO_DELETE_MIN,
+        "max_file_size_mb":    cfg.MAX_FILE_SIZE_MB,
+        "ocr_enabled":         cfg.OCR_ENABLED,
+        "claude_enabled":      cfg.CLAUDE_ENABLED,
+        "claude_model":        cfg.CLAUDE_MODEL,
         "allowed_formats":     ["PDF"],
     })
+
+
+# ── Claude API 키 런타임 설정 ─────────────────────────────────
+class ClaudeKeyRequest(BaseModel):
+    api_key: str
+
+@router.post("/claude-key")
+def set_claude_key(req: ClaudeKeyRequest):
+    import core.config as cfg
+    from services.claude_judge import _reset_judge
+    
+    api_key = req.api_key.strip()
+    if not api_key:
+        raise HTTPException(400, "API 키 필요")
+    if not api_key.startswith("sk-ant-"):
+        raise HTTPException(400, "올바르지 않은 Anthropic API 키 형식")
+
+    # 런타임 설정 업데이트
+    cfg.ANTHROPIC_API_KEY = api_key
+    cfg.CLAUDE_ENABLED = True
+
+    # Claude 클라이언트 재초기화
+    try:
+        import os
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+        _reset_judge()
+        logger.info("Claude API 키 런타임 업데이트 완료")
+        return JSONResponse({"success": True, "claude_enabled": True, "model": cfg.CLAUDE_MODEL})
+    except Exception as e:
+        logger.error(f"Claude 재초기화 오류: {e}")
+        raise HTTPException(500, f"Claude 초기화 실패: {e}")
 
 
 # ── 저장소 통계 ───────────────────────────────────────────────

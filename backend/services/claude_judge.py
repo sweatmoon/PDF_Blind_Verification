@@ -8,7 +8,8 @@ from __future__ import annotations
 import json, re
 from typing import List, Optional
 from models.schemas import DetectionResult, DetectionType, VerdictType
-from core.config import get_logger, ANTHROPIC_API_KEY, CLAUDE_ENABLED, CLAUDE_MODEL
+import core.config as _cfg
+from core.config import get_logger
 
 logger = get_logger("claude_judge")
 
@@ -61,13 +62,13 @@ SYSTEM = """너는 공공입찰 제안서 블라인드 검수 심사관이다.
 # ── Claude 클라이언트 ─────────────────────────────────────────
 class ClaudeJudge:
     def __init__(self):
-        self.enabled = CLAUDE_ENABLED
+        self.enabled = _cfg.CLAUDE_ENABLED
         self._client = None
         if self.enabled:
             try:
                 import anthropic
-                self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-                logger.info(f"Claude 준비: {CLAUDE_MODEL}")
+                self._client = anthropic.Anthropic(api_key=_cfg.ANTHROPIC_API_KEY)
+                logger.info(f"Claude 준비: {_cfg.CLAUDE_MODEL}")
             except Exception as e:
                 logger.warning(f"Claude 초기화 실패: {e}")
                 self.enabled = False
@@ -134,7 +135,7 @@ class ClaudeJudge:
 
         try:
             resp = self._client.messages.create(
-                model=CLAUDE_MODEL,
+                model=_cfg.CLAUDE_MODEL,
                 max_tokens=2048,
                 system=SYSTEM,
                 messages=[{"role": "user", "content": user_msg}],
@@ -168,7 +169,7 @@ class ClaudeJudge:
 
         try:
             resp = self._client.messages.create(
-                model=CLAUDE_MODEL,
+                model=_cfg.CLAUDE_MODEL,
                 max_tokens=2048,
                 system=SYSTEM,
                 messages=[{"role": "user", "content": user_msg}],
@@ -238,3 +239,9 @@ def get_claude_judge() -> ClaudeJudge:
     global _inst
     if _inst is None: _inst = ClaudeJudge()
     return _inst
+
+def _reset_judge():
+    """런타임 API 키 변경 시 Claude 클라이언트 재초기화"""
+    global _inst
+    _inst = None
+    return get_claude_judge()

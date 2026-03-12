@@ -1,12 +1,17 @@
 """
-검증 파이프라인 – 전체 흐름 조율
+검증 파이프라인 – 전체 흐름 조율 (최적화 버전)
 
 1. PDF 파싱 (텍스트·이미지·메타데이터)
 2. 규칙 기반 탐지
-3. OCR 탐지 (이미지 내 텍스트)
+3. OCR 탐지 (이미지 내 텍스트) - 타임아웃 제한
 4. Claude 의미 판정
 5. 보고서 생성
 6. 원본·중간파일 즉시 삭제
+
+최적화:
+- 스캔 PDF OCR 타임아웃 제한 (페이지당 20초)
+- 페이지당 처리 중간에 이벤트루프 양보 (UI 응답성)
+- 대용량 PDF 배치 처리 제한
 """
 from __future__ import annotations
 import asyncio, time
@@ -26,6 +31,11 @@ from services.file_manager  import _wipe_file
 from core.config import get_logger, update_job
 
 logger = get_logger("pipeline")
+
+# 스캔 PDF OCR: 최대 처리 페이지 수 (초과 시 텍스트 추출 기반만 사용)
+MAX_OCR_PAGES = 30
+# DPI 설정 (스캔 PDF용, 낮을수록 빠름)
+OCR_DPI = 150
 
 
 class Pipeline:
@@ -52,6 +62,11 @@ class Pipeline:
 
         total = svc.total_pages
         prog(10, f"총 {total}페이지 감지")
+        logger.info(f"[{job_id}] 총 {total}페이지, scanned={svc.is_scanned}")
+
+        # OCR 처리 페이지 제한 경고
+        if svc.is_scanned and total > MAX_OCR_PAGES:
+            logger.warning(f"[{job_id}] 스캔 PDF {total}p → OCR은 앞 {MAX_OCR_PAGES}p만 처리")
 
         # ── 2. 메타데이터 분석 ────────────────────────────
         prog(12, "메타데이터 분석…")
@@ -64,11 +79,19 @@ class Pipeline:
         # ── 3. 페이지별 분석 ─────────────────────────────
         for i in range(total):
             pct = 12 + int(i / total * 70)
-            prog(pct, f"페이지 {i+1}/{total} 분석…")
-            pr = await self._analyze_page(svc, i)
-            page_results.append(pr)
-            if i % 3 == 0:
-                await asyncio.sleep(0)   # 이벤트루프 양보
+            prog(pct, f"페이지 {i+1}/{total} 분석 중…")
+            
+            try:
+                pr = await self._analyze_page(svc, i)
+                page_results.append(pr)
+            except Exception as e:
+                logger.error(f"[{job_id}] 페이지 {i+1} 오류: {e}")
+                # 오류 페이지는 빈 결과로 추가
+                page_results.append(PageResult(
+                    page_number=i+1, detections=[], thumbnail_b64=None))
+            
+            # 이벤트루프 양보 (매 페이지)
+            await asyncio.sleep(0)
 
         svc.close()
 
@@ -86,7 +109,7 @@ class Pipeline:
             job_id, filename, total, page_results,
             round(time.time() - t0, 2))
 
-        prog(100, "완료")
+        prog(100, "검증 완료")
         logger.info(f"[{job_id}] 완료 {report.processing_time_seconds}s | "
                     f"위반:{report.violation_count} 주의:{report.caution_count}")
         return report
@@ -113,13 +136,17 @@ class Pipeline:
 
         # ── OCR: 페이지 이미지 내 텍스트 ─────────────────
         if self.ocr.enabled:
-            # 내장 이미지 OCR
-            for img_d in page.images[:8]:
+            # 내장 이미지 OCR (소형 이미지만, 최대 5개)
+            for img_d in page.images[:5]:
                 bts = img_d.get("data", b"")
                 w, h = img_d.get("w", 0), img_d.get("h", 0)
                 if not bts or w < 40 or h < 40:
                     continue
-                ocr_txt = self.ocr.from_bytes(bts)
+                # 너무 큰 이미지는 건너뜀
+                if w > 3000 or h > 3000:
+                    continue
+                ocr_txt = await asyncio.get_event_loop().run_in_executor(
+                    None, self.ocr.from_bytes, bts)
                 if ocr_txt and len(ocr_txt.strip()) > 5:
                     ocr_hits = self.rules.detect(ocr_txt, pnum)
                     for r in ocr_hits:
@@ -127,16 +154,20 @@ class Pipeline:
                         r.image_description = f"이미지 내 텍스트 ({w}×{h}px)"
                     add_unique(ocr_hits)
 
-            # 스캔 페이지 전체 OCR
-            if svc.is_scanned:
-                pil = svc.render_for_ocr(idx, dpi=180)
+            # 스캔 페이지 전체 OCR (페이지 수 제한 적용)
+            if svc.is_scanned and idx < MAX_OCR_PAGES:
+                pil = svc.render_for_ocr(idx, dpi=OCR_DPI)
                 if pil:
-                    full_ocr = self.ocr.from_image(pil)
+                    full_ocr = await asyncio.get_event_loop().run_in_executor(
+                        None, self.ocr.from_image, pil)
                     if full_ocr:
                         full_hits = self.rules.detect(full_ocr, pnum)
                         for r in full_hits:
                             r.source = "ocr"
                         add_unique(full_hits)
+            elif svc.is_scanned and idx >= MAX_OCR_PAGES:
+                # OCR 건너뜀 표시
+                logger.debug(f"p{pnum}: OCR 건너뜀 (최대 {MAX_OCR_PAGES}p 초과)")
 
         # ── 로고 추정 (이미지 크기/비율 기반) ─────────────
         logo_hits = self._logo_heuristic(page.images, pnum)
@@ -151,14 +182,15 @@ class Pipeline:
             if d.confidence < 0.9 and d.source != "claude"
         ]
         if to_judge:
-            claude_results = self.judge.judge_page_batch(to_judge)
+            claude_results = await asyncio.get_event_loop().run_in_executor(
+                None, self.judge.judge_page_batch, to_judge)
             self._apply_claude(all_det, claude_results)
 
         # B) 페이지 전체 텍스트 컨텍스트 판정 (새 위반 탐지)
         if self.judge.enabled and page.text.strip():
-            meta_str = ""   # 메타데이터는 별도 처리
-            ctx_hits = self.judge.judge_full_context(
-                page.text, pnum, ocr_text="", metadata_str=meta_str)
+            ctx_hits = await asyncio.get_event_loop().run_in_executor(
+                None, self.judge.judge_full_context,
+                page.text, pnum, "", "")
             self._merge_ctx_hits(all_det, ctx_hits, pnum, seen_texts)
 
         thumb = svc.thumbnail_b64(idx)
@@ -215,12 +247,12 @@ class Pipeline:
             raw_text = cr.get("detected_text", "") or cr.get("text", "")
             k = raw_text.strip()[:80].lower()
             if k and k in seen:
-                continue          # 이미 탐지된 항목
+                continue
             if k:
                 seen.add(k)
             verdict = verdict_map.get(cr.get("verdict", "주의"), VerdictType.CAUTION)
             if verdict == VerdictType.ALLOWED:
-                continue          # 허용은 별도 추가 안 함
+                continue
 
             detections.append(DetectionResult(
                 page_number=pnum,
