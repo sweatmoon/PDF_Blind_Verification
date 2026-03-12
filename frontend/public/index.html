@@ -886,6 +886,15 @@ async function applyVisionKey() {
 async function startVerification() {
   if (!state.selectedFile) return;
 
+  // ── 검증 시작 즉시 진행 상태 완전 초기화 ─────────────────────
+  setProgress(0, '');
+  ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
+  document.getElementById('batchList').innerHTML = '';
+  document.getElementById('batchProgress').classList.add('hidden');
+  const visionLabel = document.getElementById('step-vision-label');
+  if (visionLabel) visionLabel.innerHTML =
+    `Claude Vision AI 배치 분석 (<span class="text-indigo-500">×${BATCH_CONCURRENCY} 배치 병렬</span>)`;
+
   const btn = document.getElementById('uploadBtn');
   btn.disabled = true;
   document.getElementById('uploadBtnText').textContent = '업로드 중…';
@@ -933,7 +942,12 @@ async function startVisionAnalysis() {
   }
   setStep('upload', 'done');
 
-  // 처리 화면으로 전환
+  // 처리 화면으로 전환 — 화면 전환 직전에 한 번 더 초기화 (이전 결과 잔여 방지)
+  setProgress(0, '');
+  ['scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
+  document.getElementById('batchList').innerHTML = '';
+  document.getElementById('step-vision-label').innerHTML =
+    `Claude Vision AI 배치 분석 (<span class="text-indigo-500">×${BATCH_CONCURRENCY} 배치 병렬</span>)`;
   document.getElementById('processingFileName').textContent = file.name;
   showPage('processing');
   document.getElementById('batchProgress').classList.remove('hidden');
