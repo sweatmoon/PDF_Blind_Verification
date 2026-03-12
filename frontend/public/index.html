@@ -29,7 +29,8 @@
     .step-done { color: #059669 !important; }
     .step-active { color: #6366f1 !important; font-weight: 600; }
     .batch-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
-    .batch-card.processing { border-color: #a5b4fc; background: #eef2ff; }
+    .batch-card.pending { border-color: #e2e8f0; background: #f8fafc; opacity: 0.6; }
+    .batch-card.processing { border-color: #a5b4fc; background: #eef2ff; opacity: 1; }
     .batch-card.done-ok { border-color: #6ee7b7; background: #f0fdf4; }
     .batch-card.done-warn { border-color: #fcd34d; background: #fffbeb; }
     .batch-card.done-err { border-color: #fca5a5; background: #fef2f2; }
@@ -243,7 +244,7 @@
           <p class="font-semibold flex items-center gap-1.5"><i class="fas fa-sparkles"></i> Vision AI 분석 특징</p>
           <ul class="space-y-1.5 pl-1">
             <li>• 페이지 이미지 직접 분석 (텍스트+그래픽)</li>
-            <li>• 6페이지 배치 병렬 처리</li>
+            <li>• <strong>×4 병렬 렌더링</strong> + <strong>×3 배치 동시 전송</strong></li>
             <li>• 인력소개 카드·조직도 실명 탐지 강화</li>
             <li>• 로고·CI/BI 시각적 인식</li>
             <li>• 반복 패턴 범위 묶음 처리</li>
@@ -301,14 +302,14 @@
             <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-image"></i>
             </div>
-            <span>PDF 페이지 이미지 렌더링 (PDF.js)</span>
+            <span>PDF 페이지 이미지 렌더링 (PDF.js · <span class="text-indigo-500">×4 병렬</span>)</span>
             <span id="step-render-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-vision" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
             <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-robot"></i>
             </div>
-            <span id="step-vision-label">Claude Vision AI 배치 분석</span>
+            <span id="step-vision-label">Claude Vision AI 배치 분석 (<span class="text-indigo-500">×3 배치 병렬</span>)</span>
             <span id="step-vision-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-report" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
@@ -508,9 +509,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 // ─────────────────────────────────────────────────────────────
 // 상수 (사용자 제공 스펙)
 // ─────────────────────────────────────────────────────────────
-const PAGES_PER_BATCH = 6;
-const RENDER_SCALE    = 2.5;
-const IMG_QUALITY     = 0.85;
+const PAGES_PER_BATCH    = 6;
+const RENDER_SCALE       = 2.5;
+const IMG_QUALITY        = 0.85;
+// 병렬 처리 동시성
+const RENDER_CONCURRENCY = 4;   // PDF 페이지 렌더링 동시 처리 수
+const BATCH_CONCURRENCY  = 3;   // Claude API 배치 동시 전송 수
 // Claude Sonnet 4 비용 (USD per 1M tokens)
 const COST_INPUT_PER_M  = 3.0;
 const COST_OUTPUT_PER_M = 15.0;
@@ -797,56 +801,93 @@ async function startVisionAnalysis() {
   document.getElementById('batchProgress').classList.remove('hidden');
   document.getElementById('costTracker').classList.remove('hidden');
 
-  // 2. PDF.js로 페이지 이미지 렌더링
+  // 2. PDF.js로 페이지 이미지 렌더링 (병렬 RENDER_CONCURRENCY=4)
   setStep('render', 'active');
   setProgress(10, 'PDF 페이지 이미지 렌더링 중…');
   let pageImages;
+  let renderedCount = 0;
   try {
-    pageImages = await pdfToImages(state.pdfDoc || await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise);
+    pageImages = await pdfToImages(
+      state.pdfDoc || await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise,
+      (done, total) => {
+        renderedCount = done;
+        const pct = 10 + Math.round((done / total) * 10);
+        setProgress(pct, `페이지 렌더링 ${done}/${total} (병렬 ${RENDER_CONCURRENCY}개)…`);
+      }
+    );
   } catch(e) {
     showToast('PDF 렌더링 오류: ' + e.message, 'error');
     await failJob(jobId, 'PDF 렌더링 실패'); return;
   }
   setStep('render', 'done', `${pageImages.length}페이지`);
 
-  // 3. 배치 분석
+  // 3. 배치 분석 (병렬 BATCH_CONCURRENCY 개 동시 전송)
   setStep('vision', 'active');
   const batches = chunkArray(pageImages, PAGES_PER_BATCH);
   const allItems = [];
+  const batchCount = batches.length;
 
-  for (let bi = 0; bi < batches.length; bi++) {
-    const batch = batches[bi];
-    const pStart = batch[0].page;
-    const pEnd   = batch[batch.length-1].page;
-    const pct    = 20 + Math.round((bi / batches.length) * 65);
+  // 배치 카드 미리 생성 (순서 유지)
+  batches.forEach((batch, bi) => {
+    addBatchCard(bi, batch[0].page, batch[batch.length-1].page, 'pending');
+  });
+  setProgress(20, `총 ${batchCount}개 배치 · 최대 ${BATCH_CONCURRENCY}개 동시 분석…`);
+  document.getElementById('step-vision-label').textContent =
+    `Claude Vision AI · 배치 ${batchCount}개 병렬 분석`;
 
-    addBatchCard(bi, pStart, pEnd, 'processing');
-    setProgress(pct, `배치 ${bi+1}/${batches.length} 분석 중 (p${pStart}~${pEnd})…`);
+  // 슬라이딩 윈도우: BATCH_CONCURRENCY 개씩 묶어 Promise.all
+  let completedBatches = 0;
+  const batchResultsMap = new Array(batchCount).fill(null);
+
+  for (let wi = 0; wi < batchCount; wi += BATCH_CONCURRENCY) {
+    const window = batches.slice(wi, wi + BATCH_CONCURRENCY);
+
+    // 윈도우 내 모든 배치를 동시에 active 표시
+    window.forEach((_, localIdx) => {
+      const bi = wi + localIdx;
+      updateBatchCard(bi, 'processing', '분석 중…');
+    });
+
+    const windowResults = await Promise.allSettled(
+      window.map(async (batch, localIdx) => {
+        const bi = wi + localIdx;
+        try {
+          const items = await analyzeChunk(batch);
+          const vCount = items.filter(it => it.judgment === '위반').length;
+          const cCount = items.filter(it => it.judgment === '주의').length;
+          updateBatchCard(bi,
+            vCount > 0 ? 'done-warn' : (cCount > 0 ? 'done-warn' : 'done-ok'),
+            `위반 ${vCount}건 · 주의 ${cCount}건`);
+          return { bi, items };
+        } catch(e) {
+          console.error(`배치 ${bi+1} 오류:`, e);
+          updateBatchCard(bi, 'done-err', `오류: ${e.message?.slice(0,50)}`);
+          return { bi, items: [] };
+        }
+      })
+    );
+
+    // 결과 수집 (순서 보장)
+    windowResults.forEach(r => {
+      const { bi, items } = r.value || r.reason || { bi: wi, items: [] };
+      if (items) batchResultsMap[bi] = items;
+    });
+    completedBatches += window.length;
+
+    // 비용 / 진행률 업데이트
+    const pagesAnalyzed = Math.min(completedBatches * PAGES_PER_BATCH, pageImages.length);
+    state.totalInputTokens  = pagesAnalyzed * TOKENS_PER_IMAGE;
+    state.totalOutputTokens = completedBatches * TOKENS_OUTPUT_EST;
+    updateCostDisplay();
+
+    const pct = 20 + Math.round((completedBatches / batchCount) * 70);
+    setProgress(pct, `배치 ${completedBatches}/${batchCount} 완료…`);
     document.getElementById('step-vision-label').textContent =
-      `Claude Vision AI · 배치 ${bi+1}/${batches.length}`;
-
-    try {
-      const items = await analyzeChunk(batch);
-      allItems.push(...items);
-
-      // 비용 추적
-      const inTok = batch.length * TOKENS_PER_IMAGE;
-      const outTok = TOKENS_OUTPUT_EST;
-      state.totalInputTokens  += inTok;
-      state.totalOutputTokens += outTok;
-      updateCostDisplay();
-
-      const vCount = items.filter(it => it.judgment === '위반').length;
-      const cCount = items.filter(it => it.judgment === '주의').length;
-      updateBatchCard(bi, vCount > 0 ? 'done-warn' : (cCount > 0 ? 'done-warn' : 'done-ok'),
-        `위반 ${vCount}건 · 주의 ${cCount}건`);
-
-    } catch(e) {
-      console.error(`배치 ${bi+1} 오류:`, e);
-      updateBatchCard(bi, 'done-err', `오류: ${e.message?.slice(0,50)}`);
-      // Claude 비활성화 또는 오류 시 계속 진행
-    }
+      `Claude Vision AI · ${completedBatches}/${batchCount} 완료`;
   }
+
+  // 순서대로 allItems 합산
+  batchResultsMap.forEach(items => { if (items) allItems.push(...items); });
   setStep('vision', 'done', `${allItems.length}건 검출`);
 
   // 4. 결과 집계
@@ -899,25 +940,56 @@ async function failJob(jobId, msg) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PDF.js 페이지 → JPEG base64 변환
+// PDF.js 페이지 → JPEG base64 변환 (병렬 렌더링)
+// RENDER_CONCURRENCY 개 페이지를 동시에 렌더링 (세마포어 패턴)
 // ─────────────────────────────────────────────────────────────
-async function pdfToImages(pdfDoc) {
-  const images = [];
-  const total = pdfDoc.numPages;
-  for (let i = 1; i <= total; i++) {
-    const page    = await pdfDoc.getPage(i);
-    const vp      = page.getViewport({ scale: RENDER_SCALE });
-    const canvas  = document.createElement('canvas');
-    canvas.width  = vp.width;
-    canvas.height = vp.height;
-    const ctx = canvas.getContext('2d');
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    const b64 = canvas.toDataURL('image/jpeg', IMG_QUALITY).split(',')[1];
-    images.push({ page: i, b64, media_type: 'image/jpeg' });
-    // 메모리 해제
-    canvas.width = 0; canvas.height = 0;
-  }
-  return images;
+async function pdfToImages(pdfDoc, onPageDone) {
+  const total   = pdfDoc.numPages;
+  const results = new Array(total);
+
+  // 세마포어: 동시에 최대 RENDER_CONCURRENCY 개 페이지만 렌더링
+  let running = 0;
+  let nextIdx = 0;   // 1-based page number next to start
+
+  await new Promise((resolve, reject) => {
+    function tryLaunch() {
+      while (running < RENDER_CONCURRENCY && nextIdx < total) {
+        const pageNum = nextIdx + 1;  // 1-based
+        nextIdx++;
+        running++;
+
+        (async () => {
+          try {
+            const page   = await pdfDoc.getPage(pageNum);
+            const vp     = page.getViewport({ scale: RENDER_SCALE });
+            const canvas = document.createElement('canvas');
+            canvas.width  = vp.width;
+            canvas.height = vp.height;
+            const ctx = canvas.getContext('2d');
+            await page.render({ canvasContext: ctx, viewport: vp }).promise;
+            const b64 = canvas.toDataURL('image/jpeg', IMG_QUALITY).split(',')[1];
+            results[pageNum - 1] = { page: pageNum, b64, media_type: 'image/jpeg' };
+            // 메모리 해제
+            canvas.width = 0; canvas.height = 0;
+            if (onPageDone) onPageDone(pageNum, total);
+          } catch (e) {
+            reject(e);
+            return;
+          } finally {
+            running--;
+          }
+          if (nextIdx >= total && running === 0) {
+            resolve();
+          } else {
+            tryLaunch();
+          }
+        })();
+      }
+    }
+    tryLaunch();
+  });
+
+  return results;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1109,11 +1181,12 @@ function addBatchCard(idx, pStart, pEnd, status) {
   const div = document.createElement('div');
   div.id = `batch-${idx}`;
   div.className = `batch-card ${status}`;
+  const waitIcon = status === 'pending'
+    ? '<i class="fas fa-clock text-slate-300"></i>'
+    : '<i class="fas fa-spinner spinner text-indigo-400"></i>';
   div.innerHTML = `<span class="font-medium">배치 ${idx+1}</span>
     <span class="text-slate-500 ml-2">p${pStart}~${pEnd}</span>
-    <span id="batch-status-${idx}" class="float-right">
-      <i class="fas fa-spinner spinner text-indigo-400"></i>
-    </span>`;
+    <span id="batch-status-${idx}" class="float-right">${waitIcon}</span>`;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
@@ -1124,10 +1197,13 @@ function updateBatchCard(idx, status, detail) {
   div.className = `batch-card ${status}`;
   const statusEl = document.getElementById(`batch-status-${idx}`);
   if (statusEl) {
-    const icon = status === 'done-err' ? 'fa-xmark text-red-400' :
-                 status === 'done-warn' ? 'fa-triangle-exclamation text-amber-400' :
+    const icon = status === 'processing'  ? 'fa-spinner spinner text-indigo-400' :
+                 status === 'done-err'    ? 'fa-xmark text-red-400' :
+                 status === 'done-warn'   ? 'fa-triangle-exclamation text-amber-400' :
+                 status === 'pending'     ? 'fa-clock text-slate-300' :
                  'fa-check text-green-500';
-    statusEl.innerHTML = `<i class="fas ${icon} mr-1"></i><span class="text-xs">${detail}</span>`;
+    const detailHtml = detail ? `<span class="text-xs ml-1">${detail}</span>` : '';
+    statusEl.innerHTML = `<i class="fas ${icon} mr-1"></i>${detailHtml}`;
   }
 }
 
