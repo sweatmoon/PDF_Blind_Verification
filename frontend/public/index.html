@@ -205,60 +205,25 @@
 
       </div>
 
-      <!-- 우측: 검출 항목 안내 + 최근 검증 -->
+      <!-- 우측: 검증 결과 저장함 -->
       <div class="space-y-4">
-        <!-- 검출 대상 -->
         <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <h2 class="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm">
-            <i class="fas fa-list-check text-indigo-500"></i> 검출 대상 목록
-          </h2>
-          <div class="space-y-3 text-xs">
-            <div>
-              <p class="font-semibold text-red-600 mb-1.5 flex items-center gap-1.5">
-                <i class="fas fa-xmark-circle"></i> 위반 (직접 식별자)
-              </p>
-              <ul class="space-y-1 text-slate-600 pl-2">
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>업체명·영문명·약칭·로고</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>대표자 성명</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>참여인력 실명 (인력 소개·조직도)</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>회사 이메일·도메인·URL</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>사업자등록번호</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>CI/BI 이미지·워터마크</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>PDF 메타데이터 식별정보</li>
-              </ul>
-            </div>
-            <div>
-              <p class="font-semibold text-amber-600 mb-1.5 flex items-center gap-1.5">
-                <i class="fas fa-triangle-exclamation"></i> 주의 (간접 식별자)
-              </p>
-              <ul class="space-y-1 text-slate-600 pl-2">
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>회사 고유 색상명</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>내부 솔루션·서비스명 추정</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>회사 고유 슬로건·표현</li>
-                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>유추 가능한 실적 조합</li>
-              </ul>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="font-semibold text-slate-700 flex items-center gap-2 text-sm">
+              <i class="fas fa-folder-open text-indigo-500"></i> 검증 결과 저장함
+            </h2>
+            <button onclick="clearAllSavedReports()" id="clearAllBtn"
+              class="hidden text-xs text-slate-400 hover:text-red-500 transition">
+              <i class="fas fa-trash mr-1"></i>전체 삭제
+            </button>
+          </div>
+          <div id="savedReportsList" class="space-y-2">
+            <div id="savedEmpty" class="text-center py-8 text-slate-300">
+              <i class="fas fa-inbox text-3xl mb-2 block"></i>
+              <p class="text-xs">저장된 결과가 없습니다</p>
+              <p class="text-xs mt-1">검증 완료 후 자동 저장됩니다</p>
             </div>
           </div>
-        </div>
-
-        <!-- Claude Vision 특징 -->
-        <div class="bg-indigo-50 rounded-xl border border-indigo-100 p-4 text-xs text-indigo-800 space-y-2">
-          <p class="font-semibold flex items-center gap-1.5"><i class="fas fa-sparkles"></i> Vision AI 분석 특징</p>
-          <ul class="space-y-1.5 pl-1">
-            <li>• 페이지 이미지 직접 분석 (텍스트+그래픽)</li>
-            <li>• <strong>×4 병렬 렌더링</strong> + <strong>×3 배치 동시 전송</strong></li>
-            <li>• 인력소개 카드·조직도 실명 탐지 강화</li>
-            <li>• 로고·CI/BI 시각적 인식</li>
-            <li>• 반복 패턴 범위 묶음 처리</li>
-          </ul>
-        </div>
-
-        <!-- 최근 검증 -->
-        <div id="recentJobs" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <h2 class="font-semibold text-slate-700 mb-3 text-sm flex items-center gap-2">
-            <i class="fas fa-clock-rotate-left text-slate-400"></i> 최근 검증
-          </h2>
-          <div id="recentJobsList" class="space-y-2"></div>
         </div>
       </div>
     </div>
@@ -906,6 +871,8 @@ async function startVisionAnalysis() {
   state.currentReport = report;
   renderResult(report);
   updateRecentJobStatus(jobId, 'completed');
+  // ✅ 저장함에 저장
+  saveReportToStorage(jobId, state.selectedFile?.name || report.filename || '', state.selectedFile?.size || 0, report);
   setTimeout(() => showPage('result'), 600);
 }
 
@@ -1240,6 +1207,9 @@ async function pollStatus() {
       renderResult(data.report);
       showPage('result');
       updateRecentJobStatus(state.currentJobId, 'completed');
+      // ✅ 저장함에 저장
+      const j = state.recentJobs.find(r => r.jobId === state.currentJobId);
+      saveReportToStorage(state.currentJobId, j?.filename || data.filename || '', j?.size || 0, data.report);
     } else if (data.status === 'failed') {
       clearInterval(state.pollTimer);
       showToast('검증 실패: ' + (data.error || '알 수 없는 오류'), 'error');
@@ -1709,53 +1679,128 @@ async function removeDictItem(group, subkey, term) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 최근 작업
+// 검증 결과 저장함 (localStorage, 최대 20개)
 // ─────────────────────────────────────────────────────────────
+const SAVED_REPORTS_KEY = 'savedReports';
+const MAX_SAVED = 20;
+
+function getSavedReports() {
+  try { return JSON.parse(localStorage.getItem(SAVED_REPORTS_KEY) || '[]'); }
+  catch(e) { return []; }
+}
+function setSavedReports(list) {
+  localStorage.setItem(SAVED_REPORTS_KEY, JSON.stringify(list));
+}
+
+// 검증 완료 시 리포트 저장
+function saveReportToStorage(jobId, filename, fileSize, report) {
+  const list = getSavedReports();
+  // 중복 제거
+  const filtered = list.filter(r => r.jobId !== jobId);
+  const entry = {
+    jobId,
+    filename,
+    fileSize,
+    savedAt:        Date.now(),
+    violation_count: report.violation_count || 0,
+    caution_count:   report.caution_count   || 0,
+    allowed_count:   report.allowed_count   || 0,
+    risk_level:      report.risk_level      || 'LOW',
+    page_count:      report.page_count      || 0,
+    report:          report,  // 리포트 전체 저장
+  };
+  filtered.unshift(entry);
+  setSavedReports(filtered.slice(0, MAX_SAVED));
+  renderSavedReports();
+}
+
+function deleteSavedReport(jobId) {
+  setSavedReports(getSavedReports().filter(r => r.jobId !== jobId));
+  renderSavedReports();
+  showToast('삭제됐습니다.', 'info');
+}
+
+function clearAllSavedReports() {
+  if (!confirm('저장된 검증 결과를 모두 삭제할까요?')) return;
+  setSavedReports([]);
+  renderSavedReports();
+  showToast('전체 삭제됐습니다.', 'info');
+}
+
+function renderSavedReports() {
+  const list      = getSavedReports();
+  const container = document.getElementById('savedReportsList');
+  const emptyEl   = document.getElementById('savedEmpty');
+  const clearBtn  = document.getElementById('clearAllBtn');
+
+  if (!list.length) {
+    if (emptyEl)  emptyEl.classList.remove('hidden');
+    if (clearBtn) clearBtn.classList.add('hidden');
+    // 빈 상태면 empty만 남기고 나머지 제거
+    Array.from(container.children).forEach(c => {
+      if (c.id !== 'savedEmpty') c.remove();
+    });
+    return;
+  }
+  if (emptyEl)  emptyEl.classList.add('hidden');
+  if (clearBtn) clearBtn.classList.remove('hidden');
+
+  // 기존 카드 제거 후 재렌더
+  Array.from(container.children).forEach(c => {
+    if (c.id !== 'savedEmpty') c.remove();
+  });
+
+  list.forEach(entry => {
+    const riskColor = entry.risk_level === 'HIGH'   ? 'bg-red-100 text-red-700' :
+                      entry.risk_level === 'MEDIUM' ? 'bg-amber-100 text-amber-700' :
+                                                      'bg-green-100 text-green-700';
+    const card = document.createElement('div');
+    card.className = 'group relative border border-slate-100 rounded-xl p-3 hover:border-indigo-200 hover:bg-indigo-50/40 transition cursor-pointer';
+    card.innerHTML = `
+      <div class="flex items-start gap-2" onclick="openSavedReport('${entry.jobId}')">
+        <i class="fas fa-file-pdf text-red-400 mt-0.5 flex-shrink-0"></i>
+        <div class="flex-1 min-w-0">
+          <p class="text-xs font-medium text-slate-700 truncate" title="${esc(entry.filename)}">${esc(entry.filename)}</p>
+          <p class="text-xs text-slate-400 mt-0.5">${entry.page_count}p · ${formatSize(entry.fileSize)} · ${timeAgo(entry.savedAt)}</p>
+          <div class="flex items-center gap-1.5 mt-1.5">
+            <span class="text-xs px-1.5 py-0.5 rounded-full font-medium ${riskColor}">${entry.risk_level}</span>
+            ${entry.violation_count ? `<span class="text-xs text-red-600">위반 ${entry.violation_count}</span>` : ''}
+            ${entry.caution_count   ? `<span class="text-xs text-amber-600">주의 ${entry.caution_count}</span>`   : ''}
+            ${!entry.violation_count && !entry.caution_count ? `<span class="text-xs text-green-600">이상 없음</span>` : ''}
+          </div>
+        </div>
+      </div>
+      <button onclick="event.stopPropagation(); deleteSavedReport('${entry.jobId}')"
+        class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition text-xs">
+        <i class="fas fa-times"></i>
+      </button>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function openSavedReport(jobId) {
+  const entry = getSavedReports().find(r => r.jobId === jobId);
+  if (!entry || !entry.report) { showToast('저장된 결과를 찾을 수 없습니다.', 'error'); return; }
+  state.currentJobId  = jobId;
+  state.currentReport = entry.report;
+  renderResult(entry.report);
+  showPage('result');
+}
+
+// ── 하위 호환용 래퍼 (기존 코드에서 호출) ──────────────────────
 function addRecentJob(jobId, filename, size) {
+  // 완료 후 saveReportToStorage 에서 실제 저장하므로 여기선 state만 업데이트
   state.recentJobs = [
     {jobId, filename, size, status:'processing', time:Date.now()},
     ...state.recentJobs.filter(j=>j.jobId!==jobId)
-  ].slice(0,5);
-  localStorage.setItem('recentJobs', JSON.stringify(state.recentJobs));
+  ].slice(0, MAX_SAVED);
 }
 function updateRecentJobStatus(jobId, status) {
   const job = state.recentJobs.find(j=>j.jobId===jobId);
-  if (job) { job.status=status; localStorage.setItem('recentJobs', JSON.stringify(state.recentJobs)); }
+  if (job) job.status = status;
 }
-function renderRecentJobs() {
-  const container = document.getElementById('recentJobsList');
-  const wrapper   = document.getElementById('recentJobs');
-  if (!state.recentJobs.length) { wrapper.classList.add('hidden'); return; }
-  wrapper.classList.remove('hidden');
-  container.innerHTML = state.recentJobs.map(j => {
-    const icon = j.status==='completed'?'✅':j.status==='failed'?'❌':'⏳';
-    return `<div class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 rounded p-1.5 transition"
-                 onclick="loadPreviousResult('${j.jobId}')">
-      <span class="text-sm">${icon}</span>
-      <div class="flex-1 min-w-0">
-        <p class="text-xs text-slate-700 truncate">${j.filename}</p>
-        <p class="text-xs text-slate-400">${formatSize(j.size)} · ${timeAgo(j.time)}</p>
-      </div>
-    </div>`;
-  }).join('');
-}
-async function loadPreviousResult(jobId) {
-  try {
-    const res = await fetch(`/api/verify/status/${jobId}`);
-    if (!res.ok) { showToast('해당 작업을 찾을 수 없습니다.', 'error'); return; }
-    const data = await res.json();
-    if (data.status==='completed' && data.report) {
-      state.currentJobId=jobId; state.currentReport=data.report;
-      renderResult(data.report); showPage('result');
-    } else if (data.status==='processing') {
-      state.currentJobId=jobId;
-      document.getElementById('processingFileName').textContent = data.filename||'';
-      showPage('processing'); startPolling();
-    } else {
-      showToast('이미 만료된 작업입니다.', 'error');
-    }
-  } catch(e) { showToast('로드 실패: '+e.message, 'error'); }
-}
+function renderRecentJobs() { renderSavedReports(); }
 
 // ─────────────────────────────────────────────────────────────
 // 유틸리티
