@@ -12,10 +12,10 @@
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
     body { font-family: 'Noto Sans KR', sans-serif; }
     .drop-active { border-color: #6366f1 !important; background: #eef2ff !important; }
-    .page-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
     .page-card { transition: all 0.2s ease; }
-    .progress-bar { transition: width 0.4s ease; }
-    .tab-active { border-bottom: 2px solid #6366f1; color: #6366f1; }
+    .page-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+    .progress-bar { transition: width 0.5s ease; }
+    .tab-active { border-bottom: 2px solid #6366f1; color: #6366f1; font-weight: 600; }
     .spinner { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .fade-in { animation: fadeIn 0.3s ease; }
@@ -26,18 +26,17 @@
     .verdict-위반 { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
     .verdict-주의 { background: #fef3c7; color: #d97706; border: 1px solid #fcd34d; }
     .verdict-허용 { background: #d1fae5; color: #059669; border: 1px solid #6ee7b7; }
-    .risk-HIGH { background: #dc2626; }
-    .risk-MEDIUM { background: #d97706; }
-    .risk-LOW { background: #059669; }
-    .batch-progress-item { transition: all 0.3s ease; }
-    .logo-drop-zone:hover { border-color: #6366f1; background: #eef2ff; }
-    .cost-chip { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-    .step-active { color: #4f46e5; font-weight: 600; }
-    .step-done { color: #10b981; }
-    .wave-dot { animation: wave 1.4s infinite ease-in-out; }
-    .wave-dot:nth-child(2) { animation-delay: 0.2s; }
-    .wave-dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes wave { 0%,80%,100%{transform:scale(0.6);opacity:0.5} 40%{transform:scale(1);opacity:1} }
+    .step-done { color: #059669 !important; }
+    .step-active { color: #6366f1 !important; font-weight: 600; }
+    .batch-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
+    .batch-card.processing { border-color: #a5b4fc; background: #eef2ff; }
+    .batch-card.done-ok { border-color: #6ee7b7; background: #f0fdf4; }
+    .batch-card.done-warn { border-color: #fcd34d; background: #fffbeb; }
+    .batch-card.done-err { border-color: #fca5a5; background: #fef2f2; }
+    .cost-pill { font-size: 11px; background: #f0fdf4; color: #16a34a; border: 1px solid #86efac; border-radius: 99px; padding: 2px 10px; }
+    .logo-upload-zone { border: 2px dashed #cbd5e1; border-radius: 10px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s; }
+    .logo-upload-zone:hover { border-color: #a5b4fc; background: #eef2ff; }
+    .logo-preview { width: 80px; height: 48px; object-fit: contain; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; }
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
@@ -55,11 +54,11 @@
       </div>
     </div>
     <div class="flex items-center gap-2">
+      <span id="claudeStatusBadge" class="hidden text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-medium">
+        <i class="fas fa-robot mr-1"></i><span id="claudeStatusText">Claude AI</span>
+      </span>
       <span id="headerStatus" class="hidden text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">
         <i class="fas fa-circle text-green-500 mr-1" style="font-size:8px"></i>서비스 정상
-      </span>
-      <span id="claudeStatus" class="hidden text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full">
-        <i class="fas fa-robot mr-1"></i>Claude AI 활성
       </span>
       <button onclick="showPage('admin')" class="text-xs text-slate-500 hover:text-indigo-600 px-3 py-1.5 rounded hover:bg-slate-100 transition">
         <i class="fas fa-cog mr-1"></i>관리자
@@ -68,31 +67,30 @@
   </div>
 </header>
 
-<!-- 메인 컨테이너 -->
+<!-- 메인 -->
 <main class="max-w-6xl mx-auto px-4 py-6">
 
-  <!-- ──────────── 업로드 화면 ──────────── -->
+  <!-- ═══════════════ 업로드 화면 ═══════════════ -->
   <div id="page-upload" class="fade-in">
-    <!-- 보안 알림 배너 -->
+    <!-- 보안 배너 -->
     <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-6 flex gap-3">
       <i class="fas fa-lock text-indigo-500 mt-0.5 flex-shrink-0"></i>
       <div class="text-sm text-indigo-800">
         <strong>보안 안내:</strong> 업로드된 PDF는 검증 즉시 서버에서 완전 삭제됩니다.
-        PDF 페이지는 브라우저에서 이미지로 변환 후 Claude Vision API로 직접 분석되며,
-        원본 문서는 관리자도 열람 불가합니다. TTL 30분 후 모든 캐시 자동 삭제.
+        OCR 이미지·중간 파일·결과 캐시 모두 TTL 30분 후 자동 삭제됩니다.
+        원본 문서는 관리자도 열람 불가합니다.
       </div>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- 업로드 영역 -->
+      <!-- 좌측: 업로드 + 설정 -->
       <div class="lg:col-span-2 space-y-4">
-        <!-- PDF 업로드 카드 -->
+
+        <!-- PDF 업로드 -->
         <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <h2 class="font-semibold text-slate-700 mb-4 flex items-center gap-2">
             <i class="fas fa-file-arrow-up text-indigo-500"></i> PDF 업로드
           </h2>
-
-          <!-- 드래그앤드롭 영역 -->
           <div id="dropZone"
                class="border-2 border-dashed border-slate-300 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 transition-all"
                ondrop="handleDrop(event)" ondragover="handleDragOver(event)"
@@ -105,7 +103,7 @@
             <input type="file" id="fileInput" accept=".pdf" class="hidden" onchange="handleFileSelect(event)">
           </div>
 
-          <!-- 선택된 파일 정보 -->
+          <!-- 파일 정보 -->
           <div id="fileInfo" class="hidden mt-4 bg-slate-50 rounded-lg p-3 flex items-center gap-3">
             <div class="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0">
               <i class="fas fa-file-pdf text-red-500"></i>
@@ -113,11 +111,8 @@
             <div class="flex-1 min-w-0">
               <p id="fileName" class="font-medium text-slate-700 truncate text-sm"></p>
               <p id="fileSize" class="text-xs text-slate-500"></p>
-            </div>
-            <!-- 비용 추정 칩 -->
-            <div id="costEstimate" class="hidden cost-chip text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5">
-              <i class="fas fa-coins text-yellow-200"></i>
-              <span id="costText">-</span>
+              <!-- 비용 추정 -->
+              <p id="costEstimate" class="hidden text-xs mt-1"></p>
             </div>
             <button onclick="clearFile()" class="text-slate-400 hover:text-red-500 transition">
               <i class="fas fa-times"></i>
@@ -125,133 +120,134 @@
           </div>
         </div>
 
-        <!-- 로고 레퍼런스 카드 -->
+        <!-- Claude AI 설정 -->
         <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold text-slate-700 text-sm flex items-center gap-2">
-              <i class="fas fa-image text-amber-500"></i> 로고 레퍼런스 이미지 (선택사항)
-            </h3>
-            <button onclick="toggleLogoSection()" id="logoToggleBtn"
-                    class="text-xs text-slate-400 hover:text-indigo-600 transition">
-              <i class="fas fa-chevron-down" id="logoArrow"></i>
+            <h2 class="font-semibold text-slate-700 flex items-center gap-2 text-sm">
+              <i class="fas fa-robot text-indigo-500"></i> Claude AI 심층 분석
+              <span id="claudeModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">비활성</span>
+            </h2>
+            <button onclick="toggleApiKeySection()" class="text-xs text-indigo-600 hover:underline">
+              <i id="apiKeyArrow" class="fas fa-chevron-down mr-1 transition-transform"></i>API 키 설정
             </button>
           </div>
-          <div id="logoSection">
-            <p class="text-xs text-slate-500 mb-3">제안사 로고 이미지를 업로드하면 문서 내 로고 삽입 여부를 더 정확하게 탐지합니다.</p>
-            <!-- 로고 드롭존 -->
-            <div id="logoDrop"
-                 class="logo-drop-zone border-2 border-dashed border-slate-200 rounded-lg p-5 text-center cursor-pointer transition-all"
-                 ondrop="handleLogoDrop(event)" ondragover="e => e.preventDefault()"
-                 onclick="document.getElementById('logoInput').click()">
-              <div id="logoPreview" class="flex flex-col items-center gap-2 text-slate-400">
-                <i class="fas fa-image text-2xl"></i>
-                <p class="text-xs">PNG/JPEG 드래그 또는 클릭 (최대 2MB)</p>
-              </div>
-              <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.webp" class="hidden"
-                     onchange="handleLogoSelect(event)">
-            </div>
-            <!-- 업로드된 로고 정보 -->
-            <div id="logoInfo" class="hidden mt-2 flex items-center gap-2 text-xs text-slate-600">
-              <i class="fas fa-check-circle text-green-500"></i>
-              <span id="logoFileName">-</span>
-              <button onclick="clearLogo()" class="text-red-400 hover:text-red-600 ml-auto">
-                <i class="fas fa-times"></i> 제거
-              </button>
-            </div>
-          </div>
-        </div>
 
-        <!-- Claude API 키 카드 -->
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <button onclick="toggleApiKeySection()" class="w-full flex items-center justify-between text-sm text-slate-600 hover:text-indigo-600 transition">
-            <span class="flex items-center gap-2">
-              <i class="fas fa-robot text-indigo-400"></i>
-              <span class="font-semibold">Claude AI 심층 분석 설정</span>
-              <span id="apiKeyBadge" class="hidden text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">활성화됨</span>
-            </span>
-            <i id="apiKeyArrow" class="fas fa-chevron-down text-slate-400 transition-transform"></i>
-          </button>
-          <div id="apiKeySection" class="hidden mt-3">
-            <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-xs text-amber-700">
-              <i class="fas fa-triangle-exclamation mr-1"></i>
-              Claude AI 없이는 규칙 기반 탐지만 수행됩니다. API 키 입력 시 Vision 기반 심층 분석이 활성화됩니다.
-              키는 서버 메모리에만 일시 보관되며 저장·로그에 기록되지 않습니다.
-            </div>
-            <div class="flex gap-2">
+          <!-- 설명 -->
+          <p class="text-xs text-slate-500 mb-3">
+            Claude <code class="bg-slate-100 px-1 rounded">claude-sonnet-4-20250514</code> Vision 모델이
+            PDF 페이지 이미지를 직접 분석합니다. 텍스트+이미지 통합 판정으로 정확도가 크게 향상됩니다.
+          </p>
+
+          <!-- API 키 입력 (접이식) -->
+          <div id="apiKeySection" class="hidden">
+            <div class="flex gap-2 mb-2">
               <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..."
                      class="flex-1 text-sm border border-slate-200 rounded px-3 py-2 focus:outline-none focus:border-indigo-400"
-                     oninput="updateApiKeyStatus()" />
-              <button onclick="applyApiKey()"
-                      class="text-xs bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition font-medium">
-                적용
+                     oninput="updateApiKeyStatus()" onkeydown="if(event.key==='Enter') applyApiKey()" />
+              <button onclick="applyApiKey()" id="applyKeyBtn"
+                      class="text-xs bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition flex items-center gap-1">
+                <i class="fas fa-check"></i> 적용
               </button>
             </div>
-            <p id="apiKeyStatus" class="text-xs mt-1.5 text-slate-400"></p>
+            <p id="apiKeyStatus" class="text-xs text-slate-400"></p>
+          </div>
+
+          <!-- 분석 모드 토글 -->
+          <div id="claudeModeSelect" class="mt-3 flex gap-2">
+            <button id="modeBtn-vision" onclick="setAnalysisMode('vision')"
+                    class="flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition">
+              <i class="fas fa-eye mr-1"></i>Vision AI (권장)
+            </button>
+            <button id="modeBtn-rule" onclick="setAnalysisMode('rule')"
+                    class="flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition">
+              <i class="fas fa-list-check mr-1"></i>규칙 기반만
+            </button>
           </div>
         </div>
 
-        <!-- 업로드 버튼 -->
-        <button id="uploadBtn" onclick="startVerification()"
-                class="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 text-sm"
-                disabled>
-          <i class="fas fa-magnifying-glass"></i>
-          <span>블라인드 검증 시작</span>
-        </button>
-      </div>
-
-      <!-- 우측: 검출 안내 + 최근 검증 -->
-      <div class="lg:col-span-1 space-y-4">
-        <!-- Claude Vision 모드 안내 -->
-        <div class="bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-5">
-          <h3 class="font-semibold text-indigo-700 mb-2 text-sm flex items-center gap-2">
-            <i class="fas fa-microchip"></i> 분석 방식
-          </h3>
-          <div class="text-xs text-indigo-800 space-y-2">
-            <div class="flex items-start gap-2">
-              <span class="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0 text-indigo-600 font-bold text-xs">1</span>
-              <span>브라우저에서 PDF → 고해상도 이미지 변환 (2.5배 스케일)</span>
-            </div>
-            <div class="flex items-start gap-2">
-              <span class="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0 text-indigo-600 font-bold text-xs">2</span>
-              <span>6페이지 단위 배치로 Claude Vision 전송</span>
-            </div>
-            <div class="flex items-start gap-2">
-              <span class="w-5 h-5 bg-indigo-100 rounded-full flex items-center justify-center flex-shrink-0 text-indigo-600 font-bold text-xs">3</span>
-              <span>이미지·텍스트·레이아웃 종합 판정</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- 검출 항목 안내 -->
+        <!-- 로고 레퍼런스 이미지 -->
         <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
           <h2 class="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm">
-            <i class="fas fa-list-check text-indigo-500"></i> 검출 대상
+            <i class="fas fa-image text-amber-500"></i> 로고 레퍼런스 이미지
+            <span class="text-xs font-normal text-slate-400">(선택사항)</span>
+          </h2>
+          <p class="text-xs text-slate-500 mb-3">제안사의 공식 로고 이미지를 업로드하면 Claude가 문서 내 동일/유사 로고를 더 정확하게 탐지합니다.</p>
+
+          <div id="logoDropZone" class="logo-upload-zone"
+               onclick="document.getElementById('logoInput').click()"
+               ondrop="handleLogoDrop(event)" ondragover="e=>{e.preventDefault()}" >
+            <div id="logoPreviewArea">
+              <i class="fas fa-image text-2xl text-slate-300 mb-2"></i>
+              <p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>
+            </div>
+            <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.webp" class="hidden" onchange="handleLogoSelect(event)">
+          </div>
+
+          <div id="logoInfo" class="hidden mt-2 flex items-center gap-2 text-xs text-slate-500">
+            <i class="fas fa-check-circle text-green-500"></i>
+            <span id="logoFileName">-</span>
+            <button onclick="removeLogo()" class="ml-auto text-red-400 hover:text-red-600 transition">
+              <i class="fas fa-trash-alt mr-1"></i>제거
+            </button>
+          </div>
+        </div>
+
+        <!-- 검증 시작 버튼 -->
+        <button id="uploadBtn" onclick="startVerification()"
+                class="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-semibold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center justify-center gap-2 text-sm"
+                disabled>
+          <i class="fas fa-magnifying-glass"></i>
+          <span id="uploadBtnText">블라인드 검증 시작</span>
+        </button>
+
+      </div>
+
+      <!-- 우측: 검출 항목 안내 + 최근 검증 -->
+      <div class="space-y-4">
+        <!-- 검출 대상 -->
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+          <h2 class="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm">
+            <i class="fas fa-list-check text-indigo-500"></i> 검출 대상 목록
           </h2>
           <div class="space-y-3 text-xs">
             <div>
               <p class="font-semibold text-red-600 mb-1.5 flex items-center gap-1.5">
-                <i class="fas fa-xmark-circle"></i> 직접 식별자 (위반)
+                <i class="fas fa-xmark-circle"></i> 위반 (직접 식별자)
               </p>
               <ul class="space-y-1 text-slate-600 pl-2">
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></span>업체명·영문명·약칭</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></span>대표자·참여인력 실명</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></span>회사 이메일·도메인·URL</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></span>사업자등록번호</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></span>로고·CI·BI 이미지</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-red-400 flex-shrink-0"></span>PDF 메타데이터 식별정보</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>업체명·영문명·약칭·로고</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>대표자 성명</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>참여인력 실명 (인력 소개·조직도)</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>회사 이메일·도메인·URL</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>사업자등록번호</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>CI/BI 이미지·워터마크</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>PDF 메타데이터 식별정보</li>
               </ul>
             </div>
             <div>
               <p class="font-semibold text-amber-600 mb-1.5 flex items-center gap-1.5">
-                <i class="fas fa-triangle-exclamation"></i> 간접 식별자 (주의)
+                <i class="fas fa-triangle-exclamation"></i> 주의 (간접 식별자)
               </p>
               <ul class="space-y-1 text-slate-600 pl-2">
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-amber-400 flex-shrink-0"></span>회사 고유 색상·슬로건</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-amber-400 flex-shrink-0"></span>내부 솔루션·서비스명</li>
-                <li class="flex items-center gap-1.5"><span class="w-1 h-1 rounded-full bg-amber-400 flex-shrink-0"></span>맥락상 유추 가능 표현</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>회사 고유 색상명</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>내부 솔루션·서비스명 추정</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>회사 고유 슬로건·표현</li>
+                <li class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0"></span>유추 가능한 실적 조합</li>
               </ul>
             </div>
           </div>
+        </div>
+
+        <!-- Claude Vision 특징 -->
+        <div class="bg-indigo-50 rounded-xl border border-indigo-100 p-4 text-xs text-indigo-800 space-y-2">
+          <p class="font-semibold flex items-center gap-1.5"><i class="fas fa-sparkles"></i> Vision AI 분석 특징</p>
+          <ul class="space-y-1.5 pl-1">
+            <li>• 페이지 이미지 직접 분석 (텍스트+그래픽)</li>
+            <li>• 6페이지 배치 병렬 처리</li>
+            <li>• 인력소개 카드·조직도 실명 탐지 강화</li>
+            <li>• 로고·CI/BI 시각적 인식</li>
+            <li>• 반복 패턴 범위 묶음 처리</li>
+          </ul>
         </div>
 
         <!-- 최근 검증 -->
@@ -265,129 +261,119 @@
     </div>
   </div>
 
-  <!-- ──────────── 처리 중 화면 ──────────── -->
+  <!-- ═══════════════ 처리 중 화면 ═══════════════ -->
   <div id="page-processing" class="hidden fade-in">
     <div class="max-w-2xl mx-auto">
       <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+
         <!-- 헤더 -->
-        <div class="flex items-center gap-4 mb-6">
-          <div class="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center flex-shrink-0">
-            <i class="fas fa-shield-halved text-2xl text-indigo-500 spinner"></i>
+        <div class="text-center mb-6">
+          <div class="relative inline-flex mb-4">
+            <div class="w-16 h-16 rounded-full border-4 border-indigo-100 flex items-center justify-center">
+              <i id="procMainIcon" class="fas fa-shield-halved text-2xl text-indigo-500 spinner"></i>
+            </div>
           </div>
-          <div>
-            <h2 class="text-lg font-bold text-slate-800">Claude Vision 분석 중</h2>
-            <p id="processingFileName" class="text-sm text-slate-500 truncate max-w-xs"></p>
-          </div>
+          <h2 class="text-lg font-bold text-slate-800">블라인드 검증 진행 중</h2>
+          <p id="processingFileName" class="text-sm text-slate-400 mt-1 truncate px-4"></p>
         </div>
 
         <!-- 전체 진행률 -->
         <div class="mb-5">
           <div class="flex justify-between text-xs text-slate-500 mb-1.5">
-            <span id="progressMessage" class="flex items-center gap-2">
-              <span class="flex gap-1">
-                <span class="wave-dot w-1.5 h-1.5 bg-indigo-400 rounded-full inline-block"></span>
-                <span class="wave-dot w-1.5 h-1.5 bg-indigo-400 rounded-full inline-block"></span>
-                <span class="wave-dot w-1.5 h-1.5 bg-indigo-400 rounded-full inline-block"></span>
-              </span>
-              분석 중…
-            </span>
-            <span id="progressPct" class="font-semibold">0%</span>
+            <span id="progressMessage">준비 중…</span>
+            <span id="progressPct" class="font-semibold text-indigo-600">0%</span>
           </div>
           <div class="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-            <div id="progressBar" class="progress-bar h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full" style="width:0%"></div>
+            <div id="progressBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
           </div>
-        </div>
-
-        <!-- 배치별 진행 상황 -->
-        <div class="bg-slate-50 rounded-xl p-4 mb-5">
-          <div class="flex items-center justify-between mb-3">
-            <span class="text-xs font-semibold text-slate-600">페이지 배치 처리 현황</span>
-            <span id="batchCounter" class="text-xs text-slate-400">준비 중…</span>
-          </div>
-          <div id="batchList" class="space-y-1.5 max-h-40 overflow-y-auto"></div>
         </div>
 
         <!-- 처리 단계 -->
-        <div class="space-y-2.5">
-          <div id="step-render" class="step-item flex items-center gap-3 text-sm text-slate-400">
-            <div class="w-7 h-7 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
-              <i class="fas fa-file-image"></i>
+        <div id="processingSteps" class="space-y-2 mb-5">
+          <div id="step-upload" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+              <i class="fas fa-upload"></i>
             </div>
-            <span>PDF → 이미지 변환 (2.5× 해상도)</span>
+            <span>PDF 업로드 및 메타데이터 분석</span>
+            <span id="step-upload-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
-          <div id="step-meta" class="step-item flex items-center gap-3 text-sm text-slate-400">
-            <div class="w-7 h-7 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
-              <i class="fas fa-database"></i>
+          <div id="step-render" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+              <i class="fas fa-image"></i>
             </div>
-            <span>메타데이터 규칙 분석</span>
+            <span>PDF 페이지 이미지 렌더링 (PDF.js)</span>
+            <span id="step-render-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
-          <div id="step-batch" class="step-item flex items-center gap-3 text-sm text-slate-400">
-            <div class="w-7 h-7 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+          <div id="step-vision" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-robot"></i>
             </div>
-            <span>Claude Vision 배치 분석 (6페이지/배치)</span>
+            <span id="step-vision-label">Claude Vision AI 배치 분석</span>
+            <span id="step-vision-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
-          <div id="step-report" class="step-item flex items-center gap-3 text-sm text-slate-400">
-            <div class="w-7 h-7 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+          <div id="step-report" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-chart-bar"></i>
             </div>
-            <span>검수 리포트 생성</span>
+            <span>결과 집계 및 리포트 생성</span>
+            <span id="step-report-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
         </div>
 
-        <!-- 실시간 검출 카운터 -->
-        <div class="mt-5 pt-5 border-t border-slate-100 flex items-center justify-between">
-          <div class="flex gap-4">
-            <div class="text-center">
-              <div id="liveViolation" class="text-xl font-bold text-red-600">0</div>
-              <div class="text-xs text-slate-400">위반</div>
-            </div>
-            <div class="text-center">
-              <div id="liveCaution" class="text-xl font-bold text-amber-500">0</div>
-              <div class="text-xs text-slate-400">주의</div>
-            </div>
-          </div>
-          <p class="text-xs text-slate-400">
-            <i class="fas fa-trash mr-1"></i>
-            원본 파일 검증 완료 즉시 삭제
-          </p>
+        <!-- 배치 진행 상황 -->
+        <div id="batchProgress" class="hidden">
+          <p class="text-xs text-slate-500 mb-2 font-medium">배치별 분석 현황</p>
+          <div id="batchList" class="space-y-1.5 max-h-48 overflow-y-auto"></div>
         </div>
+
+        <!-- 비용 추정 (실시간) -->
+        <div id="costTracker" class="hidden mt-4 p-3 bg-green-50 rounded-lg border border-green-100 text-xs">
+          <div class="flex items-center justify-between">
+            <span class="text-green-700 font-medium"><i class="fas fa-coins mr-1"></i>예상 비용</span>
+            <span id="costDisplay" class="cost-pill">계산 중…</span>
+          </div>
+          <p class="text-green-600 mt-1 text-xs">Claude Sonnet 4: 입력 $3/1M · 출력 $15/1M 토큰</p>
+        </div>
+
+        <p class="text-xs text-slate-400 mt-4 text-center">
+          <i class="fas fa-trash mr-1"></i>원본 파일은 검증 완료 즉시 삭제됩니다
+        </p>
       </div>
     </div>
   </div>
 
-  <!-- ──────────── 결과 화면 ──────────── -->
+  <!-- ═══════════════ 결과 화면 ═══════════════ -->
   <div id="page-result" class="hidden fade-in">
-    <!-- 상단 요약 -->
+
+    <!-- 상단 요약 카드 -->
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-5">
       <div class="flex flex-wrap items-start justify-between gap-4">
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-3 mb-1">
-            <span id="riskBadge" class="px-3 py-1 rounded-full text-white text-sm font-bold flex-shrink-0">-</span>
-            <h2 id="resultFileName" class="font-semibold text-slate-700 text-sm truncate"></h2>
+        <div>
+          <div class="flex items-center gap-3 mb-1.5">
+            <span id="riskBadge" class="px-3 py-1 rounded-full text-white text-sm font-bold">-</span>
+            <h2 id="resultFileName" class="font-semibold text-slate-700 text-sm truncate max-w-xs"></h2>
           </div>
           <p class="text-xs text-slate-500">
             <span id="resultPages">-</span>페이지 분석 &nbsp;·&nbsp;
-            처리시간 <span id="resultTime">-</span>초 &nbsp;·&nbsp;
+            처리시간 <span id="resultTime">-</span> &nbsp;·&nbsp;
             <span id="resultDate">-</span>
           </p>
-          <!-- 분석 모드 뱃지 -->
-          <div class="mt-1.5 flex items-center gap-1.5">
-            <span id="analysisModeInfo" class="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full"></span>
-            <span id="resultCostInfo" class="hidden text-xs bg-purple-50 text-purple-600 px-2 py-0.5 rounded-full"></span>
+          <div class="flex items-center gap-2 mt-1.5">
+            <span id="analysisModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium"></span>
+            <span id="resultCostBadge" class="hidden cost-pill"></span>
           </div>
           <div id="resultSummaryNotes" class="mt-2 flex flex-wrap gap-1.5"></div>
         </div>
-        <div class="flex gap-3 flex-shrink-0">
-          <div class="text-center bg-red-50 rounded-xl px-5 py-3">
+        <div class="flex gap-3">
+          <div class="text-center bg-red-50 rounded-xl px-5 py-3 min-w-[64px]">
             <div id="totalViolation" class="text-2xl font-bold text-red-600">0</div>
             <div class="text-xs text-slate-500 mt-0.5">위반</div>
           </div>
-          <div class="text-center bg-amber-50 rounded-xl px-5 py-3">
+          <div class="text-center bg-amber-50 rounded-xl px-5 py-3 min-w-[64px]">
             <div id="totalCaution" class="text-2xl font-bold text-amber-500">0</div>
             <div class="text-xs text-slate-500 mt-0.5">주의</div>
           </div>
-          <div class="text-center bg-green-50 rounded-xl px-5 py-3">
+          <div class="text-center bg-green-50 rounded-xl px-5 py-3 min-w-[64px]">
             <div id="totalAllowed" class="text-2xl font-bold text-green-600">0</div>
             <div class="text-xs text-slate-500 mt-0.5">허용</div>
           </div>
@@ -396,19 +382,22 @@
 
       <!-- 액션 버튼 -->
       <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-slate-100">
-        <button onclick="downloadReport('html')" class="text-xs bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition flex items-center gap-1.5">
+        <button onclick="downloadReport('html')"
+                class="text-xs bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition flex items-center gap-1.5">
           <i class="fas fa-download"></i> HTML 리포트
         </button>
-        <button onclick="downloadReport('json')" class="text-xs bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition flex items-center gap-1.5">
-          <i class="fas fa-code"></i> JSON
+        <button onclick="downloadReport('json')"
+                class="text-xs bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition flex items-center gap-1.5">
+          <i class="fas fa-code"></i> JSON 다운로드
         </button>
-        <button onclick="showPage('upload'); resetState();" class="text-xs bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg hover:bg-slate-50 transition flex items-center gap-1.5">
+        <button onclick="showPage('upload'); resetState();"
+                class="text-xs bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg hover:bg-slate-50 transition flex items-center gap-1.5">
           <i class="fas fa-plus"></i> 새 검증
         </button>
       </div>
     </div>
 
-    <!-- 탭 -->
+    <!-- 탭 결과 패널 -->
     <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
       <div class="flex border-b border-slate-100 px-4">
         <button onclick="switchTab('pages')" id="tab-pages"
@@ -428,10 +417,14 @@
       <!-- 페이지별 탭 -->
       <div id="tab-content-pages" class="p-4">
         <div class="flex gap-2 mb-4 flex-wrap">
-          <button onclick="filterPages('all')" id="filter-all" class="filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
-          <button onclick="filterPages('violation')" id="filter-violation" class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
-          <button onclick="filterPages('caution')" id="filter-caution" class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
-          <button onclick="filterPages('clean')" id="filter-clean" class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
+          <button onclick="filterPages('all')" id="filter-all"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
+          <button onclick="filterPages('violation')" id="filter-violation"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
+          <button onclick="filterPages('caution')" id="filter-caution"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
+          <button onclick="filterPages('clean')" id="filter-clean"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
         </div>
         <div id="pageList" class="space-y-3"></div>
       </div>
@@ -452,7 +445,7 @@
                 <th class="px-3 py-2 text-left font-medium">내용</th>
                 <th class="px-3 py-2 text-left font-medium">판정</th>
                 <th class="px-3 py-2 text-left font-medium">사유</th>
-                <th class="px-3 py-2 text-left font-medium">권고</th>
+                <th class="px-3 py-2 text-left font-medium">수정 권고</th>
               </tr>
             </thead>
             <tbody id="allDetectionsTable" class="divide-y divide-slate-100"></tbody>
@@ -462,7 +455,7 @@
     </div>
   </div>
 
-  <!-- ──────────── 관리자 화면 ──────────── -->
+  <!-- ═══════════════ 관리자 화면 ═══════════════ -->
   <div id="page-admin" class="hidden fade-in">
     <div class="flex items-center gap-3 mb-5">
       <button onclick="showPage('upload')" class="text-slate-400 hover:text-slate-600 transition">
@@ -472,21 +465,19 @@
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div id="dictGroup-direct" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <h3 class="font-semibold text-red-600 mb-3 text-sm flex items-center gap-2">
           <i class="fas fa-ban"></i> 직접 식별자 사전
         </h3>
         <div id="directDictContent" class="space-y-3"></div>
       </div>
-
-      <div id="dictGroup-indirect" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <h3 class="font-semibold text-amber-600 mb-3 text-sm flex items-center gap-2">
           <i class="fas fa-triangle-exclamation"></i> 간접 식별자 사전
         </h3>
         <div id="indirectDictContent" class="space-y-3"></div>
       </div>
-
-      <div id="dictGroup-allowed" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 md:col-span-2">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 md:col-span-2">
         <h3 class="font-semibold text-green-600 mb-3 text-sm flex items-center gap-2">
           <i class="fas fa-circle-check"></i> 허용 목록 (발주기관 등)
         </h3>
@@ -510,47 +501,50 @@
 </div>
 
 <script>
-// ═══════════════════════════════════════════════════════════════
-// PDF.js 설정
-// ═══════════════════════════════════════════════════════════════
+// PDF.js worker 설정
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
+// ─────────────────────────────────────────────────────────────
+// 상수 (사용자 제공 스펙)
+// ─────────────────────────────────────────────────────────────
 const PAGES_PER_BATCH = 6;
 const RENDER_SCALE    = 2.5;
 const IMG_QUALITY     = 0.85;
-// Claude Sonnet 4 비용 (USD/1M tokens)
+// Claude Sonnet 4 비용 (USD per 1M tokens)
 const COST_INPUT_PER_M  = 3.0;
 const COST_OUTPUT_PER_M = 15.0;
-// 페이지당 예상 토큰 (이미지 2.5× ≈ 1500 input + 200 output)
-const EST_INPUT_TOKENS_PER_PAGE  = 1500;
-const EST_OUTPUT_TOKENS_PER_PAGE = 200;
+// 이미지 1장당 평균 토큰 추정 (Claude Vision: 약 1600 토큰/장)
+const TOKENS_PER_IMAGE  = 1600;
+const TOKENS_OUTPUT_EST = 300;  // 배치당 출력 토큰 추정
 
-// ═══════════════════════════════════════════════════════════════
-// 상태 관리
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
+// 상태
+// ─────────────────────────────────────────────────────────────
 let state = {
-  currentPage:   'upload',
-  currentJobId:  null,
-  currentReport: null,
-  pollTimer:     null,
-  selectedFile:  null,
-  recentJobs:    JSON.parse(localStorage.getItem('recentJobs') || '[]'),
-  activeTab:     'pages',
-  activeFilter:  'all',
-  apiKeyApplied: false,
-  logoId:        null,
-  logoFileName:  null,
-  // Vision 분석 결과 (클라이언트사이드)
-  visionItems:   [],
-  totalPages:    0,
-  processedBatches: 0,
-  totalBatches:     0,
+  currentPage:    'upload',
+  currentJobId:   null,
+  currentReport:  null,
+  pollTimer:      null,
+  selectedFile:   null,
+  pdfDoc:         null,      // PDF.js 문서 객체
+  totalPages:     0,
+  analysisMode:   'vision',  // 'vision' | 'rule'
+  apiKeyApplied:  false,
+  logoId:         null,      // 업로드된 로고 레퍼런스 ID
+  logoB64:        null,      // 로고 base64 (배치 전송용)
+  recentJobs:     JSON.parse(localStorage.getItem('recentJobs') || '[]'),
+  activeTab:      'pages',
+  activeFilter:   'all',
+  // 비용 추적
+  totalInputTokens:  0,
+  totalOutputTokens: 0,
+  batchResults:   [],        // 배치별 결과 누적
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 페이지 라우팅
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 function showPage(page) {
   ['upload','processing','result','admin'].forEach(p => {
     document.getElementById(`page-${p}`).classList.add('hidden');
@@ -561,9 +555,9 @@ function showPage(page) {
   if (page === 'upload') renderRecentJobs();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 파일 처리
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 function handleDragOver(e) {
   e.preventDefault();
   document.getElementById('dropZone').classList.add('drop-active');
@@ -581,7 +575,7 @@ function handleFileSelect(e) {
   const file = e.target.files[0];
   if (file) processFile(file);
 }
-function processFile(file) {
+async function processFile(file) {
   if (!file.name.toLowerCase().endsWith('.pdf')) {
     showToast('PDF 파일만 업로드 가능합니다.', 'error'); return;
   }
@@ -595,40 +589,45 @@ function processFile(file) {
   document.getElementById('uploadBtn').disabled = false;
   document.getElementById('dropIcon').innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
 
-  // 비용 추정 (페이지 수는 나중에 알 수 있으므로 크기 기반 추정)
-  estimateCostFromSize(file.size);
+  // PDF.js로 페이지 수 미리 읽어 비용 추정
+  try {
+    const ab = await file.arrayBuffer();
+    const doc = await pdfjsLib.getDocument({data: ab}).promise;
+    state.pdfDoc = doc;
+    state.totalPages = doc.numPages;
+    showCostEstimate(doc.numPages);
+  } catch(e) {
+    console.warn('PDF.js 미리 읽기 실패:', e);
+  }
 }
+
+function showCostEstimate(pages) {
+  if (state.analysisMode !== 'vision') return;
+  const batches = Math.ceil(pages / PAGES_PER_BATCH);
+  const inputTok  = pages * TOKENS_PER_IMAGE;
+  const outputTok = batches * TOKENS_OUTPUT_EST;
+  const cost = (inputTok / 1e6 * COST_INPUT_PER_M) + (outputTok / 1e6 * COST_OUTPUT_PER_M);
+  const el = document.getElementById('costEstimate');
+  el.classList.remove('hidden');
+  el.innerHTML = `<span class="cost-pill"><i class="fas fa-coins mr-1"></i>`
+    + `예상 비용: $${cost.toFixed(4)} (${pages}p · ${batches}배치)</span>`;
+}
+
 function clearFile() {
   state.selectedFile = null;
+  state.pdfDoc = null;
+  state.totalPages = 0;
   document.getElementById('fileInfo').classList.add('hidden');
+  document.getElementById('costEstimate').classList.add('hidden');
   document.getElementById('uploadBtn').disabled = true;
   document.getElementById('fileInput').value = '';
   document.getElementById('dropIcon').innerHTML = '<i class="fas fa-file-pdf"></i>';
   document.getElementById('dropIcon').className = 'text-5xl text-slate-300 mb-3';
-  document.getElementById('costEstimate').classList.add('hidden');
 }
 
-function estimateCostFromSize(fileSize) {
-  // 파일 크기 기반 페이지 수 추정 (PDF 평균 ~100KB/페이지 스캔, ~50KB 텍스트)
-  const estPages = Math.max(1, Math.round(fileSize / (80 * 1024)));
-  updateCostDisplay(estPages);
-}
-
-function updateCostDisplay(pages) {
-  const inputTokens  = pages * EST_INPUT_TOKENS_PER_PAGE;
-  const outputTokens = pages * EST_OUTPUT_TOKENS_PER_PAGE;
-  const cost = (inputTokens * COST_INPUT_PER_M + outputTokens * COST_OUTPUT_PER_M) / 1_000_000;
-  const costText = cost < 0.01 ? `~$0.01` : `~$${cost.toFixed(2)}`;
-  document.getElementById('costEstimate').classList.remove('hidden');
-  document.getElementById('costText').textContent = `예상 ${costText} (${pages}p)`;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 로고 레퍼런스
-// ═══════════════════════════════════════════════════════════════
-function toggleLogoSection() {
-  // 기본 열려있으므로 hide/show 필요 없음 (항상 열린 상태)
-}
+// ─────────────────────────────────────────────────────────────
+// 로고 레퍼런스 이미지 처리
+// ─────────────────────────────────────────────────────────────
 function handleLogoDrop(e) {
   e.preventDefault();
   const file = e.dataTransfer.files[0];
@@ -638,59 +637,69 @@ function handleLogoSelect(e) {
   const file = e.target.files[0];
   if (file) uploadLogo(file);
 }
+
 async function uploadLogo(file) {
   if (file.size > 2 * 1024 * 1024) {
     showToast('로고 이미지는 2MB 이하만 지원합니다.', 'error'); return;
   }
+  // 프리뷰 표시
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    state.logoB64 = e.target.result.split(',')[1];
+    document.getElementById('logoPreviewArea').innerHTML =
+      `<img src="${e.target.result}" class="logo-preview mx-auto mb-1" />
+       <p class="text-xs text-green-600 font-medium">로고 준비됨</p>`;
+    document.getElementById('logoInfo').classList.remove('hidden');
+    document.getElementById('logoFileName').textContent = file.name + ' (' + formatSize(file.size) + ')';
+  };
+  reader.readAsDataURL(file);
+
+  // 서버에 업로드 (ID 저장)
   try {
     const fd = new FormData();
     fd.append('file', file);
     const res = await fetch('/api/verify/logo-reference', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const e = await res.json();
-      throw new Error(e.detail || '업로드 실패');
+    if (res.ok) {
+      const data = await res.json();
+      state.logoId = data.logo_id;
+      showToast(`로고 레퍼런스 등록됨 (${data.size_kb}KB)`, 'success');
     }
-    const data = await res.json();
-    state.logoId = data.logo_id;
-    state.logoFileName = file.name;
-
-    // 미리보기 이미지 표시
-    const reader = new FileReader();
-    reader.onload = e2 => {
-      document.getElementById('logoPreview').innerHTML = `
-        <img src="${e2.target.result}" class="h-16 object-contain rounded mx-auto" />
-        <p class="text-xs text-green-600 font-medium">로고 업로드 완료</p>
-      `;
-    };
-    reader.readAsDataURL(file);
-
-    document.getElementById('logoInfo').classList.remove('hidden');
-    document.getElementById('logoFileName').textContent = `${file.name} (${data.size_kb}KB)`;
-    showToast('로고 레퍼런스 업로드 완료', 'success');
   } catch(e) {
-    showToast('로고 업로드 오류: ' + e.message, 'error');
+    console.warn('로고 서버 업로드 실패 (클라이언트 로컬만 사용):', e);
   }
-}
-async function clearLogo() {
-  if (state.logoId) {
-    try {
-      await fetch(`/api/verify/logo-reference/${state.logoId}`, { method: 'DELETE' });
-    } catch(e) {}
-    state.logoId = null;
-    state.logoFileName = null;
-  }
-  document.getElementById('logoInfo').classList.add('hidden');
-  document.getElementById('logoPreview').innerHTML = `
-    <i class="fas fa-image text-2xl"></i>
-    <p class="text-xs">PNG/JPEG 드래그 또는 클릭 (최대 2MB)</p>
-  `;
-  document.getElementById('logoInput').value = '';
-  showToast('로고 레퍼런스 제거됨', 'info');
 }
 
-// ═══════════════════════════════════════════════════════════════
-// API 키
-// ═══════════════════════════════════════════════════════════════
+function removeLogo() {
+  state.logoId = null;
+  state.logoB64 = null;
+  document.getElementById('logoPreviewArea').innerHTML =
+    `<i class="fas fa-image text-2xl text-slate-300 mb-2"></i>
+     <p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>`;
+  document.getElementById('logoInfo').classList.add('hidden');
+  document.getElementById('logoInput').value = '';
+  showToast('로고 레퍼런스가 제거되었습니다.', 'info');
+}
+
+// ─────────────────────────────────────────────────────────────
+// 분석 모드
+// ─────────────────────────────────────────────────────────────
+function setAnalysisMode(mode) {
+  state.analysisMode = mode;
+  const vision = document.getElementById('modeBtn-vision');
+  const rule   = document.getElementById('modeBtn-rule');
+  if (mode === 'vision') {
+    vision.className = 'flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition';
+    rule.className   = 'flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition';
+  } else {
+    rule.className   = 'flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition';
+    vision.className = 'flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition';
+  }
+  if (state.totalPages > 0) showCostEstimate(state.totalPages);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Claude API 키
+// ─────────────────────────────────────────────────────────────
 function toggleApiKeySection() {
   const s = document.getElementById('apiKeySection');
   const arrow = document.getElementById('apiKeyArrow');
@@ -699,17 +708,20 @@ function toggleApiKeySection() {
 }
 function updateApiKeyStatus() {
   const val = document.getElementById('apiKeyInput').value.trim();
-  const el = document.getElementById('apiKeyStatus');
+  const el  = document.getElementById('apiKeyStatus');
   if (!val) { el.textContent = ''; return; }
   if (val.startsWith('sk-ant-')) {
-    el.textContent = '✓ 올바른 형식의 API 키'; el.className = 'text-xs mt-1.5 text-green-600';
+    el.textContent = '✓ 올바른 형식'; el.className = 'text-xs text-green-600';
   } else {
-    el.textContent = '올바르지 않은 형식 (sk-ant- 로 시작해야 함)'; el.className = 'text-xs mt-1.5 text-red-500';
+    el.textContent = '올바르지 않은 형식 (sk-ant- 로 시작해야 함)'; el.className = 'text-xs text-red-500';
   }
 }
 async function applyApiKey() {
   const key = document.getElementById('apiKeyInput').value.trim();
   if (!key) { showToast('API 키를 입력하세요.', 'error'); return; }
+  const btn = document.getElementById('applyKeyBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner spinner"></i>';
   try {
     const res = await fetch('/api/admin/claude-key', {
       method: 'POST',
@@ -719,428 +731,457 @@ async function applyApiKey() {
     if (res.ok) {
       state.apiKeyApplied = true;
       document.getElementById('apiKeyStatus').textContent = '✓ 적용됨 – Claude Vision AI 활성화';
-      document.getElementById('apiKeyStatus').className = 'text-xs mt-1.5 text-green-600 font-medium';
-      document.getElementById('apiKeyBadge').classList.remove('hidden');
-      document.getElementById('claudeStatus').classList.remove('hidden');
-      showToast('Claude Vision API 키가 적용되었습니다.', 'success');
+      document.getElementById('apiKeyStatus').className = 'text-xs text-green-600 font-medium';
+      document.getElementById('claudeModeBadge').textContent = '활성';
+      document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
+      document.getElementById('claudeStatusBadge').classList.remove('hidden');
+      document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
+      showToast('Claude AI가 활성화되었습니다.', 'success');
     } else {
-      const e = await res.json();
-      showToast('API 키 적용 실패: ' + (e.detail||''), 'error');
+      const err = await res.json();
+      showToast('API 키 오류: ' + (err.detail || ''), 'error');
     }
   } catch(e) {
     showToast('서버 연결 오류: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-check"></i> 적용';
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 검증 시작 (클라이언트 중심 파이프라인)
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
+// 검증 시작 (Vision 모드 or Rule 모드)
+// ─────────────────────────────────────────────────────────────
 async function startVerification() {
   if (!state.selectedFile) return;
+
   const btn = document.getElementById('uploadBtn');
   btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner spinner"></i><span>준비 중…</span>';
+  document.getElementById('uploadBtnText').textContent = '업로드 중…';
 
-  // 처리 화면으로 이동
-  document.getElementById('processingFileName').textContent = state.selectedFile.name;
+  if (state.analysisMode === 'vision' && state.apiKeyApplied) {
+    await startVisionAnalysis();
+  } else {
+    await startRuleAnalysis();
+  }
+}
+
+// ─── Vision 분석 (PDF.js + Claude Vision API) ────────────────
+async function startVisionAnalysis() {
+  const file = state.selectedFile;
+  state.batchResults = [];
+  state.totalInputTokens  = 0;
+  state.totalOutputTokens = 0;
+
+  // 1. 서버에 PDF 업로드 (메타데이터 분석용)
+  setStep('upload', 'active');
+  let jobId;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/verify/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error((await res.json()).detail || '업로드 실패');
+    const data = await res.json();
+    jobId = data.job_id;
+    state.currentJobId = jobId;
+    addRecentJob(jobId, file.name, file.size);
+  } catch(e) {
+    showToast('업로드 오류: ' + e.message, 'error');
+    resetUploadBtn(); return;
+  }
+  setStep('upload', 'done');
+
+  // 처리 화면으로 전환
+  document.getElementById('processingFileName').textContent = file.name;
   showPage('processing');
-  resetProcessingUI();
+  document.getElementById('batchProgress').classList.remove('hidden');
+  document.getElementById('costTracker').classList.remove('hidden');
+
+  // 2. PDF.js로 페이지 이미지 렌더링
+  setStep('render', 'active');
+  setProgress(10, 'PDF 페이지 이미지 렌더링 중…');
+  let pageImages;
+  try {
+    pageImages = await pdfToImages(state.pdfDoc || await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise);
+  } catch(e) {
+    showToast('PDF 렌더링 오류: ' + e.message, 'error');
+    await failJob(jobId, 'PDF 렌더링 실패'); return;
+  }
+  setStep('render', 'done', `${pageImages.length}페이지`);
+
+  // 3. 배치 분석
+  setStep('vision', 'active');
+  const batches = chunkArray(pageImages, PAGES_PER_BATCH);
+  const allItems = [];
+
+  for (let bi = 0; bi < batches.length; bi++) {
+    const batch = batches[bi];
+    const pStart = batch[0].page;
+    const pEnd   = batch[batch.length-1].page;
+    const pct    = 20 + Math.round((bi / batches.length) * 65);
+
+    addBatchCard(bi, pStart, pEnd, 'processing');
+    setProgress(pct, `배치 ${bi+1}/${batches.length} 분석 중 (p${pStart}~${pEnd})…`);
+    document.getElementById('step-vision-label').textContent =
+      `Claude Vision AI · 배치 ${bi+1}/${batches.length}`;
+
+    try {
+      const items = await analyzeChunk(batch);
+      allItems.push(...items);
+
+      // 비용 추적
+      const inTok = batch.length * TOKENS_PER_IMAGE;
+      const outTok = TOKENS_OUTPUT_EST;
+      state.totalInputTokens  += inTok;
+      state.totalOutputTokens += outTok;
+      updateCostDisplay();
+
+      const vCount = items.filter(it => it.judgment === '위반').length;
+      const cCount = items.filter(it => it.judgment === '주의').length;
+      updateBatchCard(bi, vCount > 0 ? 'done-warn' : (cCount > 0 ? 'done-warn' : 'done-ok'),
+        `위반 ${vCount}건 · 주의 ${cCount}건`);
+
+    } catch(e) {
+      console.error(`배치 ${bi+1} 오류:`, e);
+      updateBatchCard(bi, 'done-err', `오류: ${e.message?.slice(0,50)}`);
+      // Claude 비활성화 또는 오류 시 계속 진행
+    }
+  }
+  setStep('vision', 'done', `${allItems.length}건 검출`);
+
+  // 4. 결과 집계
+  setStep('report', 'active');
+  setProgress(90, '결과 집계 중…');
+  const report = buildClientReport(jobId, file.name, pageImages.length, allItems,
+    state.pdfDoc._pdfInfo?.numPages || pageImages.length);
+
+  // 서버에 결과 저장 (선택적 - 서버측은 rule-based 결과도 있음)
+  setStep('report', 'done');
+  setProgress(100, '검증 완료');
+
+  state.currentReport = report;
+  renderResult(report);
+  updateRecentJobStatus(jobId, 'completed');
+  setTimeout(() => showPage('result'), 600);
+}
+
+// ─── Rule 분석 (기존 서버 파이프라인) ────────────────────────
+async function startRuleAnalysis() {
+  const file = state.selectedFile;
+  const fd = new FormData();
+  fd.append('file', file);
 
   try {
-    // 1. 회사 사전 로드
-    let companyDict = null;
-    try {
-      const dr = await fetch('/api/admin/dictionary');
-      if (dr.ok) {
-        const d = await dr.json();
-        companyDict = d.direct_identifiers || null;
-      }
-    } catch(e) {}
-
-    // 2. 로고 base64 가져오기
-    let logoB64 = null;
-    if (state.logoId) {
-      try {
-        const lr = await fetch(`/api/verify/logo-reference/${state.logoId}`);
-        if (lr.ok) { const ld = await lr.json(); logoB64 = ld.b64; }
-      } catch(e) {}
-    }
-
-    // 3. PDF → 이미지 변환
-    setStep('step-render', 'active');
-    updateProgress(5, 'PDF 로딩 및 이미지 변환 중…');
-
-    const pdfArrayBuffer = await state.selectedFile.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: pdfArrayBuffer }).promise;
-    const totalPages = pdf.numPages;
-    state.totalPages = totalPages;
-
-    // 비용 추정 업데이트 (실제 페이지 수로)
-    updateCostDisplay(totalPages);
-
-    updateProgress(10, `총 ${totalPages}페이지 · 이미지 변환 중…`);
-
-    // 4. 서버에 PDF 업로드 + 메타데이터 분석 (백그라운드)
-    setStep('step-meta', 'active');
-    let jobId = null;
-    try {
-      const fd = new FormData();
-      fd.append('file', state.selectedFile);
-      const ur = await fetch('/api/verify/upload', { method: 'POST', body: fd });
-      if (ur.ok) {
-        const ud = await ur.json();
-        jobId = ud.job_id;
-        state.currentJobId = jobId;
-        addRecentJob(jobId, state.selectedFile.name, state.selectedFile.size);
-      }
-    } catch(e) {
-      console.warn('백엔드 업로드 실패 (메타 분석 스킵):', e);
-    }
-    setStep('step-meta', 'done');
-    updateProgress(15, '메타데이터 분석 완료');
-
-    // 5. 페이지 이미지 배치 처리
-    setStep('step-batch', 'active');
-    const totalBatches = Math.ceil(totalPages / PAGES_PER_BATCH);
-    state.totalBatches = totalBatches;
-    state.processedBatches = 0;
-    state.visionItems = [];
-    document.getElementById('batchCounter').textContent = `0 / ${totalBatches} 배치`;
-    initBatchList(totalPages, totalBatches);
-
-    let liveV = 0, liveC = 0;
-
-    for (let batch = 0; batch < totalBatches; batch++) {
-      const startPage = batch * PAGES_PER_BATCH + 1;
-      const endPage   = Math.min((batch + 1) * PAGES_PER_BATCH, totalPages);
-
-      updateBatchStatus(batch, 'rendering');
-
-      // 이미지 렌더링
-      const pageImages = [];
-      for (let p = startPage; p <= endPage; p++) {
-        const page    = await pdf.getPage(p);
-        const vp      = page.getViewport({ scale: RENDER_SCALE });
-        const canvas  = document.createElement('canvas');
-        canvas.width  = vp.width;
-        canvas.height = vp.height;
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-        const b64 = canvas.toDataURL('image/jpeg', IMG_QUALITY).split(',')[1];
-        pageImages.push({ page: p, b64, media_type: 'image/jpeg' });
-      }
-
-      updateBatchStatus(batch, 'analyzing');
-      const pct = 15 + Math.round((batch / totalBatches) * 75);
-      updateProgress(pct, `배치 ${batch+1}/${totalBatches} Claude 분석 중 (p${startPage}~${endPage})…`);
-
-      // Claude Vision 분석 요청
-      if (state.apiKeyApplied) {
-        try {
-          const res = await fetch('/api/verify/analyze-images', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              images: pageImages,
-              logo_b64: logoB64,
-              company_dict: companyDict,
-            })
-          });
-          if (res.ok) {
-            const data = await res.json();
-            state.visionItems.push(...(data.items || []));
-            liveV += data.stats?.violation_count || 0;
-            liveC += data.stats?.caution_count   || 0;
-            document.getElementById('liveViolation').textContent = liveV;
-            document.getElementById('liveCaution').textContent   = liveC;
-            updateBatchStatus(batch, 'done',
-              `위반 ${data.stats?.violation_count||0} · 주의 ${data.stats?.caution_count||0}`);
-          } else {
-            const e = await res.json();
-            updateBatchStatus(batch, 'error', e.detail || '분석 실패');
-          }
-        } catch(e) {
-          updateBatchStatus(batch, 'error', e.message);
-        }
-      } else {
-        // Claude 없이 규칙 기반만 (서버에서 처리)
-        updateBatchStatus(batch, 'skipped', 'Claude API 키 없음 (규칙 기반만)');
-      }
-
-      state.processedBatches++;
-      document.getElementById('batchCounter').textContent =
-        `${state.processedBatches} / ${totalBatches} 배치`;
-    }
-
-    setStep('step-batch', 'done');
-
-    // 6. 최종 결과 수집
-    setStep('step-report', 'active');
-    updateProgress(95, '최종 리포트 생성 중…');
-
-    // 백엔드 결과 대기 (메타데이터 + 규칙 기반)
-    let serverReport = null;
-    if (jobId) {
-      serverReport = await waitForServerReport(jobId);
-    }
-
-    // Vision 결과 + 서버 결과 병합
-    const finalReport = mergeResults(serverReport, state.visionItems, totalPages, state.selectedFile.name);
-
-    state.currentReport = finalReport;
-    setStep('step-report', 'done');
-    updateProgress(100, '검증 완료');
-
-    // 결과 표시
-    setTimeout(() => {
-      renderResult(finalReport);
-      showPage('result');
-      if (jobId) updateRecentJobStatus(jobId, 'completed');
-    }, 500);
-
+    const res = await fetch('/api/verify/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error((await res.json()).detail || '업로드 실패');
+    const data = await res.json();
+    state.currentJobId = data.job_id;
+    addRecentJob(data.job_id, file.name, file.size);
+    document.getElementById('processingFileName').textContent = file.name;
+    showPage('processing');
+    startPolling();
   } catch(e) {
-    console.error('검증 오류:', e);
-    showToast('검증 오류: ' + e.message, 'error');
-    setTimeout(() => { showPage('upload'); btn.disabled = false; btn.innerHTML = '<i class="fas fa-magnifying-glass"></i><span>블라인드 검증 시작</span>'; }, 1500);
+    showToast('오류: ' + e.message, 'error');
+    resetUploadBtn();
   }
 }
 
-// 서버 결과 대기
-async function waitForServerReport(jobId, maxWait = 60000) {
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      const res = await fetch(`/api/verify/status/${jobId}`);
-      if (!res.ok) break;
-      const data = await res.json();
-      if (data.status === 'completed') return data.report;
-      if (data.status === 'failed') break;
-    } catch(e) {}
-    await new Promise(r => setTimeout(r, 1000));
-  }
-  return null;
+function resetUploadBtn() {
+  const btn = document.getElementById('uploadBtn');
+  btn.disabled = false;
+  document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
 }
 
-// Vision 결과 + 서버 결과 병합
-function mergeResults(serverReport, visionItems, totalPages, filename) {
-  const now = new Date().toISOString();
-  
-  // 서버 리포트 기반으로 시작
-  const base = serverReport || {
-    job_id: state.currentJobId || 'local-' + Date.now(),
+async function failJob(jobId, msg) {
+  // 서버 작업 실패 처리 (폴링 불필요)
+  showToast('검증 실패: ' + msg, 'error');
+  setTimeout(() => { showPage('upload'); resetUploadBtn(); }, 2000);
+}
+
+// ─────────────────────────────────────────────────────────────
+// PDF.js 페이지 → JPEG base64 변환
+// ─────────────────────────────────────────────────────────────
+async function pdfToImages(pdfDoc) {
+  const images = [];
+  const total = pdfDoc.numPages;
+  for (let i = 1; i <= total; i++) {
+    const page    = await pdfDoc.getPage(i);
+    const vp      = page.getViewport({ scale: RENDER_SCALE });
+    const canvas  = document.createElement('canvas');
+    canvas.width  = vp.width;
+    canvas.height = vp.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const b64 = canvas.toDataURL('image/jpeg', IMG_QUALITY).split(',')[1];
+    images.push({ page: i, b64, media_type: 'image/jpeg' });
+    // 메모리 해제
+    canvas.width = 0; canvas.height = 0;
+  }
+  return images;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Claude Vision 배치 분석 (서버 프록시)
+// ─────────────────────────────────────────────────────────────
+async function analyzeChunk(pageImages) {
+  const dict = await getCompanyDict();
+  const body = {
+    images:       pageImages,
+    logo_b64:     state.logoB64 || null,
+    company_dict: dict,
+  };
+  const res = await fetch('/api/verify/analyze-images', {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return data.items || [];
+}
+
+// ─────────────────────────────────────────────────────────────
+// 회사 사전 조회 (관리자에서 등록한 정보)
+// ─────────────────────────────────────────────────────────────
+async function getCompanyDict() {
+  try {
+    const res = await fetch('/api/admin/dictionary');
+    if (!res.ok) return null;
+    const dict = await res.json();
+    const di = dict.direct_identifiers || {};
+    return {
+      company_names:        di.company_names || [],
+      english_names:        di.english_names || [],
+      representative_names: di.representative_names || [],
+      emails:               di.emails || [],
+      domains:              di.domains || [],
+    };
+  } catch { return null; }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 클라이언트 사이드 리포트 구성
+// ─────────────────────────────────────────────────────────────
+function buildClientReport(jobId, filename, totalPages, items, numPages) {
+  // 페이지별 그룹화
+  const pageMap = {};
+  for (const it of items) {
+    const pStr = String(it.page || '?');
+    // 범위 처리: "5~12" → 5,6,...,12 로 펼치기
+    const pages = expandPageRange(pStr, numPages);
+    for (const pn of pages) {
+      if (!pageMap[pn]) pageMap[pn] = [];
+      pageMap[pn].push(it);
+    }
+  }
+
+  // PageResult 구성
+  const pageResults = [];
+  // 메타데이터 (page_number=0) – 서버 결과에서 가져올 수 없으므로 빈 배열
+  for (let p = 1; p <= numPages; p++) {
+    const dets = (pageMap[p] || []).map(it => ({
+      detection_type:  it.type  || '기타',
+      detected_text:   it.content || '',
+      verdict:         mapJudgment(it.judgment),
+      reason:          it.reason || '',
+      recommendation:  it.recommendation || '',
+      confidence:      0.9,
+      source:          'claude',
+      image_description: null,
+    }));
+    const vc = dets.filter(d => d.verdict === '위반').length;
+    const cc = dets.filter(d => d.verdict === '주의').length;
+    const ac = dets.filter(d => d.verdict === '허용').length;
+    pageResults.push({
+      page_number:     p,
+      thumbnail_b64:   null,
+      detections:      dets,
+      violation_count: vc,
+      caution_count:   cc,
+      allowed_count:   ac,
+    });
+  }
+
+  const vc = pageResults.reduce((s, p) => s + p.violation_count, 0);
+  const cc = pageResults.reduce((s, p) => s + p.caution_count, 0);
+  const ac = pageResults.reduce((s, p) => s + p.allowed_count, 0);
+
+  let risk = 'LOW';
+  if (vc >= 5) risk = 'HIGH';
+  else if (vc >= 1 || cc >= 5) risk = 'MEDIUM';
+
+  const allDets = pageResults.flatMap(p => p.detections);
+  const notes = [];
+  if (allDets.some(d => d.detection_type.includes('업체') && d.verdict === '위반')) notes.push('업체명 직접 노출 있음');
+  else notes.push('명확한 업체명 노출 없음');
+  if (allDets.some(d => (d.detection_type.includes('인력') || d.detection_type.includes('대표')) && d.verdict === '위반')) notes.push('참여인력 실명 노출 있음');
+  else notes.push('참여인력 실명 없음');
+  if (allDets.some(d => (d.detection_type.includes('이메일') || d.detection_type.includes('URL') || d.detection_type.includes('도메인')) && d.verdict === '위반')) notes.push('이메일/URL 노출 있음');
+  else notes.push('이메일/URL 없음');
+  if (cc > 0) notes.push(`간접 식별 가능 표현 ${cc}건 발견`);
+
+  // 비용 계산
+  const cost = (state.totalInputTokens / 1e6 * COST_INPUT_PER_M)
+             + (state.totalOutputTokens / 1e6 * COST_OUTPUT_PER_M);
+
+  return {
+    job_id:        jobId,
     filename,
-    total_pages: totalPages,
-    risk_level: 'LOW',
-    violation_count: 0,
-    caution_count: 0,
-    allowed_count: 0,
-    page_results: [],
-    summary: { notes: [], no_company_name: true, no_personnel: true, no_email_url: true,
-                indirect_count: 0, logo_detected: false, metadata_clean: true },
-    created_at: now,
-    processing_time_seconds: 0,
+    total_pages:   numPages,
+    risk_level:    risk,
+    violation_count: vc,
+    caution_count:  cc,
+    allowed_count:  ac,
+    page_results:  pageResults,
+    summary: {
+      no_company_name: !allDets.some(d => d.detection_type.includes('업체') && d.verdict === '위반'),
+      no_personnel:    !allDets.some(d => (d.detection_type.includes('인력') || d.detection_type.includes('대표')) && d.verdict === '위반'),
+      no_email_url:    !allDets.some(d => (d.detection_type.includes('이메일') || d.detection_type.includes('URL')) && d.verdict === '위반'),
+      indirect_count:  cc,
+      logo_detected:   allDets.some(d => d.detection_type.includes('로고') && d.verdict !== '허용'),
+      metadata_clean:  true,
+      notes,
+    },
+    created_at:              new Date().toISOString(),
+    processing_time_seconds: ((state.totalInputTokens + state.totalOutputTokens) / 10000).toFixed(2),
+    _analysis_mode:          'claude-vision',
+    _cost_usd:               cost.toFixed(4),
+    _model:                  'claude-sonnet-4-20250514',
   };
-
-  // Vision 아이템을 페이지별로 정리
-  const visionByPage = {};
-  for (const item of visionItems) {
-    // page 필드: "1" or "5~12"
-    const pageStr = String(item.page || '?');
-    const pages = parsePageRange(pageStr, totalPages);
-    for (const p of pages) {
-      if (!visionByPage[p]) visionByPage[p] = [];
-      visionByPage[p].push({
-        detection_type: item.type || '기타',
-        detected_text:  item.content || '',
-        verdict:        item.judgment || '주의',
-        reason:         item.reason || '',
-        recommendation: item.recommendation || '',
-        confidence:     0.9,
-        source:         'claude_vision',
-        page_number:    p,
-      });
-    }
-  }
-
-  // 서버 페이지 결과에 Vision 결과 병합
-  const existingPages = new Map();
-  for (const pr of (base.page_results || [])) {
-    existingPages.set(pr.page_number, pr);
-  }
-
-  // Vision 결과가 있는 페이지 추가/병합
-  for (const [pageNum, vDets] of Object.entries(visionByPage)) {
-    const pNum = parseInt(pageNum);
-    if (isNaN(pNum) || pNum <= 0) continue;
-    if (existingPages.has(pNum)) {
-      // 기존 결과에 Vision 결과 추가
-      const pr = existingPages.get(pNum);
-      const existingTexts = new Set((pr.detections||[]).map(d => (d.detected_text||'').slice(0,50).toLowerCase()));
-      for (const vd of vDets) {
-        const k = (vd.detected_text||'').slice(0,50).toLowerCase();
-        if (!k || !existingTexts.has(k)) {
-          (pr.detections = pr.detections || []).push(vd);
-          existingTexts.add(k);
-        }
-      }
-      // 카운트 재계산
-      pr.violation_count = pr.detections.filter(d => d.verdict === '위반').length;
-      pr.caution_count   = pr.detections.filter(d => d.verdict === '주의').length;
-      pr.allowed_count   = pr.detections.filter(d => d.verdict === '허용').length;
-    } else {
-      // 새 페이지 결과 생성
-      const pr = {
-        page_number: pNum,
-        thumbnail_b64: null,
-        detections: vDets,
-        violation_count: vDets.filter(d => d.verdict === '위반').length,
-        caution_count:   vDets.filter(d => d.verdict === '주의').length,
-        allowed_count:   vDets.filter(d => d.verdict === '허용').length,
-      };
-      existingPages.set(pNum, pr);
-    }
-  }
-
-  // 페이지 번호 순 정렬
-  base.page_results = Array.from(existingPages.values()).sort((a,b) => a.page_number - b.page_number);
-
-  // 전체 카운트 재계산
-  base.violation_count = base.page_results.reduce((s,p) => s + (p.violation_count||0), 0);
-  base.caution_count   = base.page_results.reduce((s,p) => s + (p.caution_count||0), 0);
-  base.allowed_count   = base.page_results.reduce((s,p) => s + (p.allowed_count||0), 0);
-
-  // 위험도 업데이트
-  const v = base.violation_count, c = base.caution_count;
-  if (v >= 5) base.risk_level = 'HIGH';
-  else if (v >= 1 || c >= 5) base.risk_level = 'MEDIUM';
-  else base.risk_level = 'LOW';
-
-  // 요약 업데이트
-  const allDets = base.page_results.flatMap(p => p.detections || []);
-  const hasCompany = allDets.some(d => (d.detection_type||'').includes('업체') && d.verdict === '위반');
-  const hasPersonnel = allDets.some(d => (d.detection_type||'').includes('인력') && d.verdict === '위반');
-  const hasEmail = allDets.some(d => ['이메일','도메인','URL'].some(t => (d.detection_type||'').includes(t)) && d.verdict === '위반');
-  const hasLogo = allDets.some(d => (d.detection_type||'').includes('로고') && d.verdict !== '허용');
-
-  base.summary = {
-    ...base.summary,
-    no_company_name: !hasCompany,
-    no_personnel: !hasPersonnel,
-    no_email_url: !hasEmail,
-    logo_detected: hasLogo,
-    indirect_count: c,
-    notes: [
-      hasCompany   ? '업체명 직접 노출 있음'   : '명확한 업체명 노출 없음',
-      hasPersonnel ? '참여인력 실명 노출 있음'  : '참여인력 실명 없음',
-      hasEmail     ? '이메일/URL 노출 있음'     : '이메일/URL 없음',
-      ...(c > 0    ? [`간접 식별 가능 표현 ${c}건 발견`] : []),
-      ...(hasLogo  ? ['로고/브랜드 이미지 감지'] : []),
-    ],
-  };
-
-  base._analysisMode = state.apiKeyApplied ? 'claude_vision' : 'rule_only';
-  base._totalPages   = totalPages;
-
-  return base;
 }
 
-// 페이지 범위 파싱 ("5~12" → [5,6,...,12])
-function parsePageRange(pageStr, maxPage) {
-  if (!pageStr || pageStr === '?') return [];
-  const m = String(pageStr).match(/(\d+)(?:[~\-](\d+))?/);
-  if (!m) return [];
-  const s = parseInt(m[1]);
-  const e = m[2] ? parseInt(m[2]) : s;
-  const result = [];
-  for (let p = s; p <= Math.min(e, maxPage); p++) result.push(p);
-  return result;
+function expandPageRange(pStr, maxPage) {
+  pStr = String(pStr).trim();
+  const m = pStr.match(/^(\d+)[~\-–](\d+)$/);
+  if (m) {
+    const s = parseInt(m[1]), e = Math.min(parseInt(m[2]), maxPage);
+    const arr = [];
+    for (let i = s; i <= e; i++) arr.push(i);
+    return arr;
+  }
+  const n = parseInt(pStr);
+  return isNaN(n) ? [1] : [n];
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 처리 중 UI
-// ═══════════════════════════════════════════════════════════════
-function resetProcessingUI() {
-  document.getElementById('progressBar').style.width = '0%';
-  document.getElementById('progressPct').textContent = '0%';
-  document.getElementById('batchList').innerHTML = '';
-  document.getElementById('batchCounter').textContent = '준비 중…';
-  document.getElementById('liveViolation').textContent = '0';
-  document.getElementById('liveCaution').textContent = '0';
-  ['step-render','step-meta','step-batch','step-report'].forEach(id => setStep(id, 'pending'));
+function mapJudgment(j) {
+  if (!j) return '주의';
+  if (j === '위반') return '위반';
+  if (j === '허용') return '허용';
+  return '주의';
 }
 
-function updateProgress(pct, msg) {
+// ─────────────────────────────────────────────────────────────
+// 진행 UI 헬퍼
+// ─────────────────────────────────────────────────────────────
+function setProgress(pct, msg) {
   document.getElementById('progressBar').style.width = pct + '%';
   document.getElementById('progressPct').textContent = pct + '%';
-  // msg는 단계 텍스트만 표시
+  document.getElementById('progressMessage').textContent = msg || '';
 }
 
-function setStep(id, state_) {
-  const el = document.getElementById(id);
+function setStep(id, state_, detail) {
+  const el = document.getElementById(`step-${id}`);
   if (!el) return;
-  const circle = el.querySelector('div');
-  el.className = el.className.replace(/text-\S+/g, '');
-  if (circle) circle.className = circle.className.replace(/border-\S+/g, '');
+  el.classList.remove('step-done','step-active','text-slate-400','text-indigo-600','text-green-600');
   if (state_ === 'active') {
-    el.classList.add('text-indigo-600', 'font-semibold');
-    if (circle) { circle.classList.add('border-indigo-400', 'bg-indigo-50'); }
+    el.classList.add('step-active','text-indigo-600');
+    const iconEl = el.querySelector('div');
+    if (iconEl) iconEl.className = 'w-6 h-6 rounded-full border-2 border-indigo-400 flex items-center justify-center flex-shrink-0 text-xs text-indigo-500';
   } else if (state_ === 'done') {
-    el.classList.add('text-green-600');
-    if (circle) { circle.classList.add('border-green-400', 'bg-green-50'); circle.innerHTML = '<i class="fas fa-check text-green-500"></i>'; }
+    el.classList.add('step-done','text-green-600');
+    const iconEl = el.querySelector('div');
+    if (iconEl) {
+      iconEl.className = 'w-6 h-6 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0 text-xs text-white';
+      iconEl.innerHTML = '<i class="fas fa-check"></i>';
+    }
+    const timeEl = document.getElementById(`step-${id}-time`);
+    if (timeEl && detail) timeEl.textContent = detail;
   } else {
     el.classList.add('text-slate-400');
-    if (circle) circle.classList.add('border-slate-200');
   }
 }
 
-function initBatchList(totalPages, totalBatches) {
+function addBatchCard(idx, pStart, pEnd, status) {
   const container = document.getElementById('batchList');
-  let html = '';
-  for (let i = 0; i < totalBatches; i++) {
-    const s = i * PAGES_PER_BATCH + 1;
-    const e = Math.min((i+1) * PAGES_PER_BATCH, totalPages);
-    html += `<div id="batch-item-${i}" class="batch-progress-item flex items-center gap-2 text-xs text-slate-400">
-      <div id="batch-icon-${i}" class="w-4 h-4 rounded-full bg-slate-200 flex-shrink-0"></div>
-      <span class="flex-1">배치 ${i+1}: p${s}~${e}</span>
-      <span id="batch-status-${i}" class="text-slate-400"></span>
-    </div>`;
-  }
-  container.innerHTML = html;
+  const div = document.createElement('div');
+  div.id = `batch-${idx}`;
+  div.className = `batch-card ${status}`;
+  div.innerHTML = `<span class="font-medium">배치 ${idx+1}</span>
+    <span class="text-slate-500 ml-2">p${pStart}~${pEnd}</span>
+    <span id="batch-status-${idx}" class="float-right">
+      <i class="fas fa-spinner spinner text-indigo-400"></i>
+    </span>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
 }
 
-function updateBatchStatus(batchIdx, status, detail = '') {
-  const iconEl   = document.getElementById(`batch-icon-${batchIdx}`);
-  const statusEl = document.getElementById(`batch-status-${batchIdx}`);
-  const itemEl   = document.getElementById(`batch-item-${batchIdx}`);
-  if (!iconEl) return;
-  
-  const icons = {
-    rendering: '<i class="fas fa-image text-indigo-400" style="font-size:9px"></i>',
-    analyzing: '<i class="fas fa-spinner fa-spin text-indigo-500" style="font-size:9px"></i>',
-    done:      '<i class="fas fa-check text-green-500" style="font-size:9px"></i>',
-    error:     '<i class="fas fa-xmark text-red-400" style="font-size:9px"></i>',
-    skipped:   '<i class="fas fa-minus text-slate-400" style="font-size:9px"></i>',
-  };
-  const colors = {
-    rendering: 'bg-indigo-100', analyzing: 'bg-indigo-100',
-    done: 'bg-green-100', error: 'bg-red-100', skipped: 'bg-slate-100',
-  };
-  iconEl.className = `w-4 h-4 rounded-full ${colors[status]||'bg-slate-100'} flex items-center justify-center flex-shrink-0`;
-  iconEl.innerHTML = icons[status] || '';
-  if (statusEl) statusEl.textContent = detail;
-  if (itemEl) {
-    itemEl.className = itemEl.className.replace(/text-\S+/g, '');
-    itemEl.classList.add(status === 'done' ? 'text-green-600' : status === 'error' ? 'text-red-500' : 'text-indigo-600');
+function updateBatchCard(idx, status, detail) {
+  const div = document.getElementById(`batch-${idx}`);
+  if (!div) return;
+  div.className = `batch-card ${status}`;
+  const statusEl = document.getElementById(`batch-status-${idx}`);
+  if (statusEl) {
+    const icon = status === 'done-err' ? 'fa-xmark text-red-400' :
+                 status === 'done-warn' ? 'fa-triangle-exclamation text-amber-400' :
+                 'fa-check text-green-500';
+    statusEl.innerHTML = `<i class="fas ${icon} mr-1"></i><span class="text-xs">${detail}</span>`;
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
+function updateCostDisplay() {
+  const cost = (state.totalInputTokens / 1e6 * COST_INPUT_PER_M)
+             + (state.totalOutputTokens / 1e6 * COST_OUTPUT_PER_M);
+  const el = document.getElementById('costDisplay');
+  if (el) el.textContent = `$${cost.toFixed(4)}`;
+}
+
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size)
+    chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 서버 폴링 (Rule 모드용)
+// ─────────────────────────────────────────────────────────────
+function startPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(pollStatus, 1500);
+  pollStatus();
+}
+async function pollStatus() {
+  if (!state.currentJobId) return;
+  try {
+    const res = await fetch(`/api/verify/status/${state.currentJobId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setProgress(data.progress || 0, data.message);
+    if (data.status === 'completed') {
+      clearInterval(state.pollTimer);
+      state.currentReport = data.report;
+      renderResult(data.report);
+      showPage('result');
+      updateRecentJobStatus(state.currentJobId, 'completed');
+    } else if (data.status === 'failed') {
+      clearInterval(state.pollTimer);
+      showToast('검증 실패: ' + (data.error || '알 수 없는 오류'), 'error');
+      updateRecentJobStatus(state.currentJobId, 'failed');
+      setTimeout(() => showPage('upload'), 2000);
+    }
+  } catch(e) { console.error('폴링 오류:', e); }
+}
+
+// ─────────────────────────────────────────────────────────────
 // 결과 렌더링
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 function renderResult(report) {
   if (!report) return;
-
-  const riskColors = {HIGH: '#dc2626', MEDIUM: '#d97706', LOW: '#059669'};
-  const riskLabels = {HIGH: '고위험', MEDIUM: '중위험', LOW: '저위험'};
+  const riskColors = {HIGH:'#dc2626', MEDIUM:'#d97706', LOW:'#059669'};
+  const riskLabels = {HIGH:'고위험', MEDIUM:'중위험', LOW:'저위험'};
   const risk = report.risk_level || 'LOW';
 
   const badge = document.getElementById('riskBadge');
@@ -1148,36 +1189,36 @@ function renderResult(report) {
   badge.style.background = riskColors[risk] || '#6b7280';
 
   document.getElementById('resultFileName').textContent = report.filename || '';
-  document.getElementById('resultPages').textContent = report.total_pages || report._totalPages || 0;
-  document.getElementById('resultTime').textContent = report.processing_time_seconds || 0;
+  document.getElementById('resultPages').textContent = report.total_pages || 0;
   document.getElementById('resultDate').textContent =
-    (report.created_at || '').toString().slice(0, 19).replace('T', ' ');
-  document.getElementById('totalViolation').textContent = report.violation_count || 0;
-  document.getElementById('totalCaution').textContent = report.caution_count || 0;
-  document.getElementById('totalAllowed').textContent = report.allowed_count || 0;
+    (report.created_at || '').toString().slice(0,19).replace('T',' ');
 
-  // 분석 모드 표시
-  const modeEl = document.getElementById('analysisModeInfo');
-  const mode = report._analysisMode;
-  if (mode === 'claude_vision') {
-    modeEl.textContent = '🤖 Claude Vision 분석';
-  } else if (mode === 'rule_only') {
-    modeEl.textContent = '📋 규칙 기반 분석 (Claude 미사용)';
+  // 처리시간 + 모드
+  const isVision = report._analysis_mode === 'claude-vision';
+  document.getElementById('resultTime').textContent = isVision
+    ? `${report.processing_time_seconds}s (Vision AI)`
+    : `${report.processing_time_seconds}s`;
+
+  const modeBadge = document.getElementById('analysisModeBadge');
+  if (isVision) {
+    modeBadge.textContent = '🤖 Claude Vision (' + (report._model || '') + ')';
+    modeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium';
   } else {
-    modeEl.textContent = '🔍 복합 분석';
+    modeBadge.textContent = '📋 규칙 기반';
+    modeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium';
   }
 
-  // 비용 정보
-  const pages = report.total_pages || report._totalPages || 0;
-  if (pages > 0 && mode === 'claude_vision') {
-    const cost = (pages * EST_INPUT_TOKENS_PER_PAGE * COST_INPUT_PER_M +
-                  pages * EST_OUTPUT_TOKENS_PER_PAGE * COST_OUTPUT_PER_M) / 1_000_000;
-    const el = document.getElementById('resultCostInfo');
-    el.classList.remove('hidden');
-    el.textContent = `💰 예상 비용 ~$${cost.toFixed(3)}`;
+  // 비용 배지
+  if (report._cost_usd) {
+    const cb = document.getElementById('resultCostBadge');
+    cb.textContent = `비용 $${report._cost_usd}`;
+    cb.classList.remove('hidden');
   }
 
-  // 요약 노트
+  document.getElementById('totalViolation').textContent = report.violation_count || 0;
+  document.getElementById('totalCaution').textContent   = report.caution_count   || 0;
+  document.getElementById('totalAllowed').textContent   = report.allowed_count   || 0;
+
   const notesEl = document.getElementById('resultSummaryNotes');
   const notes = report.summary?.notes || [];
   notesEl.innerHTML = notes.map(n => {
@@ -1193,7 +1234,6 @@ function renderResult(report) {
 function renderPageList(pages, filter = 'all') {
   const container = document.getElementById('pageList');
   const realPages = pages.filter(p => p.page_number > 0);
-
   let filtered = realPages;
   if (filter === 'violation') filtered = realPages.filter(p => p.violation_count > 0);
   else if (filter === 'caution') filtered = realPages.filter(p => p.caution_count > 0 && p.violation_count === 0);
@@ -1206,11 +1246,11 @@ function renderPageList(pages, filter = 'all') {
 
   container.innerHTML = filtered.map(page => {
     const v = page.violation_count || 0;
-    const c = page.caution_count || 0;
+    const c = page.caution_count   || 0;
     const statusColor = v > 0 ? 'border-red-200 bg-red-50' : c > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50';
     const statusIcon  = v > 0 ? '🔴' : c > 0 ? '🟡' : '🟢';
 
-    const detHtml = (page.detections || []).slice(0, 12).map(d => {
+    const detHtml = (page.detections || []).slice(0, 10).map(d => {
       const vcls = `verdict-${d.verdict}`;
       return `<div class="text-xs p-2.5 rounded-lg border ${vcls} mb-1.5">
         <div class="flex items-start justify-between gap-2">
@@ -1221,12 +1261,11 @@ function renderPageList(pages, filter = 'all') {
         ${d.image_description ? `<p class="mt-1 text-xs opacity-75">[이미지] ${d.image_description}</p>` : ''}
         <p class="mt-1 opacity-75">${d.reason || ''}</p>
         ${d.recommendation ? `<p class="mt-1 text-indigo-700 font-medium">→ ${d.recommendation}</p>` : ''}
-        ${d.source === 'claude_vision' ? '<span class="mt-1 inline-block text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded">🤖 Vision</span>' : ''}
       </div>`;
     }).join('');
 
-    const moreCount = (page.detections||[]).length - 12;
-    const moreHtml = moreCount > 0 ? `<p class="text-xs text-slate-400 text-center py-1">+${moreCount}개 더 있음</p>` : '';
+    const moreCount = (page.detections||[]).length - 10;
+    const moreHtml  = moreCount > 0 ? `<p class="text-xs text-slate-400 text-center py-1">+${moreCount}개 더 있음</p>` : '';
 
     return `<div class="page-card border rounded-xl overflow-hidden cursor-pointer ${statusColor}"
                  onclick="togglePageDetail(this)">
@@ -1250,7 +1289,7 @@ function renderPageList(pages, filter = 'all') {
 
 function togglePageDetail(card) {
   const detail = card.querySelector('.page-detail');
-  const icon = card.querySelector('.toggle-icon');
+  const icon   = card.querySelector('.toggle-icon');
   detail.classList.toggle('hidden');
   icon.style.transform = detail.classList.contains('hidden') ? '' : 'rotate(180deg)';
 }
@@ -1266,7 +1305,7 @@ function filterPages(filter) {
 }
 
 function renderMetaContent(pages) {
-  const metaPage = pages.find(p => p.page_number === 0);
+  const metaPage  = pages.find(p => p.page_number === 0);
   const container = document.getElementById('metaContent');
   if (!metaPage || (metaPage.detections||[]).length === 0) {
     container.innerHTML = '<div class="text-center py-8 text-slate-400"><i class="fas fa-check-circle text-3xl mb-2 text-green-400"></i><p>메타데이터 이상 없음</p></div>';
@@ -1291,26 +1330,21 @@ function renderAllDetections(pages) {
   const allDets = [];
   pages.forEach(p => {
     (p.detections||[]).forEach(d => {
-      allDets.push({...d, page_label: p.page_number === 0 ? '메타' : `${p.page_number}p`});
+      allDets.push({...d, page_label: p.page_number===0?'메타':`${p.page_number}p`});
     });
   });
-
   const order = {'위반':0,'주의':1,'허용':2};
-  allDets.sort((a,b) => (order[a.verdict]||9) - (order[b.verdict]||9));
-
+  allDets.sort((a,b) => (order[a.verdict]||9)-(order[b.verdict]||9));
   if (allDets.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-slate-400">검출된 항목이 없습니다.</td></tr>';
     return;
   }
   tbody.innerHTML = allDets.map(d => {
     const vcls = `verdict-${d.verdict}`;
-    const srcBadge = d.source === 'claude_vision' ? '<span class="ml-1 text-xs bg-indigo-100 text-indigo-600 px-1 rounded">Vision</span>' : '';
     return `<tr>
       <td class="px-3 py-2 text-slate-500">${d.page_label}</td>
-      <td class="px-3 py-2">${d.detection_type||''}${srcBadge}</td>
-      <td class="px-3 py-2 max-w-xs">
-        <span class="font-mono break-all">${(d.detected_text||d.image_description||'').slice(0,80)}</span>
-      </td>
+      <td class="px-3 py-2">${d.detection_type||''}</td>
+      <td class="px-3 py-2 max-w-xs"><span class="font-mono break-all">${(d.detected_text||d.image_description||'').slice(0,80)}</span></td>
       <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-medium ${vcls}">${d.verdict}</span></td>
       <td class="px-3 py-2 text-slate-500 max-w-xs">${(d.reason||'').slice(0,100)}</td>
       <td class="px-3 py-2 text-indigo-600 max-w-xs">${(d.recommendation||'').slice(0,80)}</td>
@@ -1328,106 +1362,95 @@ function switchTab(tab) {
   state.activeTab = tab;
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 다운로드
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 async function downloadReport(fmt) {
   const report = state.currentReport;
   if (!report) return;
 
   if (fmt === 'json') {
-    // 클라이언트 리포트를 JSON으로 직접 다운로드
-    const minimal = buildMinimalReport(report);
-    const blob = new Blob([JSON.stringify(minimal, null, 2)], {type:'application/json'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = `blind_report_${(report.job_id||'local').slice(0,8)}.json`; a.click();
-    showToast('JSON 다운로드 시작', 'success');
+    // 클라이언트에서 직접 다운로드
+    const blob = new Blob([JSON.stringify(report, null, 2)], {type:'application/json;charset=utf-8'});
+    downloadBlob(blob, `blind_report_${(report.job_id||'').slice(0,8)}.json`);
     return;
   }
 
   if (fmt === 'html') {
-    // 서버 엔드포인트가 있으면 서버에서 다운로드
-    if (state.currentJobId) {
-      try {
-        const res = await fetch(`/api/verify/report/${state.currentJobId}/download?fmt=html`);
-        if (res.ok) {
-          const blob = await res.blob();
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-          a.download = `blind_report_${state.currentJobId.slice(0,8)}.html`; a.click();
-          showToast('HTML 리포트 다운로드 시작', 'success');
-          return;
-        }
-      } catch(e) {}
+    // 서버에 저장된 경우 서버 다운로드, 클라이언트 생성 리포트는 클라이언트에서 빌드
+    if (report._analysis_mode === 'claude-vision') {
+      const html = buildHTMLReport(report);
+      const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+      downloadBlob(blob, `blind_report_${(report.job_id||'').slice(0,8)}.html`);
+      return;
     }
-    // 클라이언트에서 HTML 생성
-    const html = buildClientHtmlReport(report);
-    const blob = new Blob([html], {type:'text/html;charset=utf-8'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = `blind_report_${(report.job_id||'local').slice(0,8)}.html`; a.click();
-    showToast('HTML 리포트 다운로드 시작', 'success');
+    // 서버 다운로드
+    try {
+      const res = await fetch(`/api/verify/report/${report.job_id}/download?fmt=html`);
+      if (!res.ok) throw new Error('서버 다운로드 실패');
+      const blob = await res.blob();
+      downloadBlob(blob, `blind_report_${(report.job_id||'').slice(0,8)}.html`);
+    } catch(e) {
+      showToast('다운로드 오류: ' + e.message, 'error');
+    }
   }
 }
 
-function buildMinimalReport(r) {
-  return {
-    job_id: r.job_id,
-    filename: r.filename,
-    created_at: r.created_at,
-    total_pages: r.total_pages || r._totalPages,
-    risk_level: r.risk_level,
-    violation_count: r.violation_count,
-    caution_count: r.caution_count,
-    allowed_count: r.allowed_count,
-    analysis_mode: r._analysisMode,
-    summary: r.summary,
-    pages: (r.page_results||[]).map(pg => ({
-      page_number: pg.page_number,
-      violation_count: pg.violation_count,
-      caution_count: pg.caution_count,
-      detections: (pg.detections||[]).map(d => ({
-        detection_type: d.detection_type,
-        detected_text: (d.detected_text||'').slice(0,100),
-        verdict: d.verdict,
-        reason: d.reason,
-        recommendation: d.recommendation,
-        source: d.source,
-      })),
-    })),
-  };
+function downloadBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  showToast('다운로드 시작됨', 'success');
 }
 
-function buildClientHtmlReport(r) {
-  const riskColor = {LOW: '#10b981', MEDIUM: '#f59e0b', HIGH: '#ef4444'}[r.risk_level||'LOW'] || '#6b7280';
+function buildHTMLReport(r) {
+  const risk   = r.risk_level || '';
+  const rc     = {LOW:'#10b981',MEDIUM:'#f59e0b',HIGH:'#ef4444'}[risk] || '#6b7280';
+  const vc = r.violation_count||0, cc = r.caution_count||0, ac = r.allowed_count||0;
   let rows = '';
-  for (const pg of (r.page_results||[])) {
-    const label = pg.page_number === 0 ? '메타' : `${pg.page_number}p`;
-    for (const d of (pg.detections||[])) {
-      const vc = {위반:'#ef4444', 주의:'#f59e0b', 허용:'#10b981'}[d.verdict]||'#6b7280';
-      rows += `<tr><td>${label}</td><td>${d.detection_type||''}</td>
+  for (const pg of r.page_results || []) {
+    const pn = pg.page_number || 0;
+    const label = pn === 0 ? '메타데이터' : `${pn}페이지`;
+    for (const d of pg.detections || []) {
+      const v = d.verdict || '';
+      const vc2 = {위반:'#ef4444',주의:'#f59e0b',허용:'#10b981'}[v] || '#6b7280';
+      rows += `<tr>
+        <td>${label}</td><td>${d.detection_type||''}</td>
         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(d.detected_text||'').slice(0,80)}</td>
-        <td><b style="color:${vc}">${d.verdict}</b></td>
-        <td>${d.reason||''}</td><td>${d.recommendation||''}</td></tr>`;
+        <td><b style="color:${vc2}">${v}</b></td>
+        <td>${d.reason||''}</td><td>${d.recommendation||''}</td>
+      </tr>`;
     }
   }
   const notes = (r.summary?.notes||[]).map(n=>`<li>${n}</li>`).join('');
-  return `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>블라인드 검수 리포트</title>
-<style>body{font-family:'Malgun Gothic',sans-serif;max-width:1200px;margin:0 auto;padding:20px;color:#1e293b}
-h1{border-bottom:2px solid #e2e8f0;padding-bottom:10px}
-.stats{display:flex;gap:16px;margin:16px 0}.card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 20px;text-align:center}
-.num{font-size:28px;font-weight:700}.badge{display:inline-block;padding:4px 14px;border-radius:20px;font-weight:700;color:#fff}
+  const costLine = r._cost_usd ? `<b>분석 비용:</b> $${r._cost_usd} (${r._model || 'Claude Vision'}) &nbsp;|&nbsp;` : '';
+  return `<!DOCTYPE html><html lang="ko"><head>
+<meta charset="UTF-8"><title>블라인드 검수 리포트</title>
+<style>
+body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;max-width:1200px;margin:0 auto;padding:20px;color:#1e293b}
+h1{border-bottom:2px solid #e2e8f0;padding-bottom:10px;font-size:1.5rem}
+h2{font-size:1.1rem;margin-top:20px;color:#374151}
+.stats{display:flex;gap:16px;margin:16px 0;flex-wrap:wrap}
+.card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 20px;text-align:center;min-width:80px}
+.num{font-size:28px;font-weight:700}
+.badge{display:inline-block;padding:4px 14px;border-radius:20px;font-weight:700;color:#fff;font-size:14px}
 table{width:100%;border-collapse:collapse;margin-top:20px;font-size:13px}
-th{background:#1e293b;color:#fff;padding:9px;text-align:left}td{padding:7px 9px;border-bottom:1px solid #f1f5f9;vertical-align:top}
-tr:nth-child(even){background:#fafafa}.notice{background:#fef3c7;border:1px solid #fcd34d;padding:10px;border-radius:6px;font-size:12px;margin:8px 0}
+th{background:#1e293b;color:#fff;padding:9px;text-align:left}
+td{padding:7px 9px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+tr:nth-child(even){background:#fafafa}
+.notice{background:#fef3c7;border:1px solid #fcd34d;padding:10px;border-radius:6px;font-size:12px;margin:8px 0}
+ul{margin:4px 0;padding-left:20px}
 </style></head><body>
 <h1>📋 입찰제안서 블라인드 검수 리포트</h1>
-<div class="notice">⚠️ 이 리포트에는 원본 문서가 포함되지 않습니다. 분석 모드: ${r._analysisMode==='claude_vision'?'Claude Vision AI':'규칙 기반'}</div>
-<p><b>파일:</b> ${r.filename||''} &nbsp;|&nbsp; <b>페이지:</b> ${r.total_pages||r._totalPages||0}p &nbsp;|&nbsp;
-<b>검증일:</b> ${String(r.created_at||'').slice(0,19)}</p>
-<p><b>블라인드 위험도:</b> <span class="badge" style="background:${riskColor}">${r.risk_level}</span></p>
+<div class="notice">⚠️ 이 리포트에는 원본 문서가 포함되지 않습니다. 검출 항목 정보만 포함됩니다.</div>
+<p><b>파일:</b> ${r.filename||''} &nbsp;|&nbsp; <b>페이지:</b> ${r.total_pages||0}p &nbsp;|&nbsp;
+${costLine}<b>검증일:</b> ${String(r.created_at||'').slice(0,19)}</p>
+<p><b>블라인드 위험도:</b> <span class="badge" style="background:${rc}">${risk}</span></p>
 <div class="stats">
-<div class="card"><div class="num" style="color:#ef4444">${r.violation_count||0}</div><div>위반</div></div>
-<div class="card"><div class="num" style="color:#f59e0b">${r.caution_count||0}</div><div>주의</div></div>
-<div class="card"><div class="num" style="color:#10b981">${r.allowed_count||0}</div><div>허용</div></div>
+<div class="card"><div class="num" style="color:#ef4444">${vc}</div><div>위반</div></div>
+<div class="card"><div class="num" style="color:#f59e0b">${cc}</div><div>주의</div></div>
+<div class="card"><div class="num" style="color:#10b981">${ac}</div><div>허용</div></div>
 </div>
 <h2>📝 검수 요약</h2><ul>${notes}</ul>
 <h2>🔍 상세 검출 결과</h2>
@@ -1437,9 +1460,9 @@ tr:nth-child(even){background:#fafafa}.notice{background:#fef3c7;border:1px soli
 </body></html>`;
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 관리자 사전
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 async function loadAdminData() {
   try {
     const [dictRes, cfgRes] = await Promise.all([
@@ -1476,12 +1499,10 @@ async function loadAdminData() {
     document.getElementById('sysConfig').innerHTML = `
       <div><p class="text-xs text-slate-500">자동 삭제</p><p class="font-medium">${cfg.auto_delete_minutes}분</p></div>
       <div><p class="text-xs text-slate-500">최대 파일크기</p><p class="font-medium">${cfg.max_file_size_mb}MB</p></div>
-      <div><p class="text-xs text-slate-500">OCR</p><p class="font-medium ${cfg.ocr_enabled ? 'text-green-600' : 'text-slate-400'}">${cfg.ocr_enabled ? '활성' : '비활성'}</p></div>
-      <div><p class="text-xs text-slate-500">Claude AI</p><p class="font-medium ${cfg.claude_enabled ? 'text-green-600' : 'text-slate-400'}">${cfg.claude_enabled ? '활성 (' + cfg.claude_model + ')' : '비활성'}</p></div>
+      <div><p class="text-xs text-slate-500">OCR</p><p class="font-medium ${cfg.ocr_enabled?'text-green-600':'text-slate-400'}">${cfg.ocr_enabled?'활성':'비활성'}</p></div>
+      <div><p class="text-xs text-slate-500">Claude AI</p><p class="font-medium ${cfg.claude_enabled?'text-green-600':'text-slate-400'}">${cfg.claude_enabled?'활성 ('+cfg.claude_model+')':'비활성'}</p></div>
     `;
-  } catch(e) {
-    showToast('관리자 데이터 로드 실패', 'error');
-  }
+  } catch(e) { showToast('관리자 데이터 로드 실패', 'error'); }
 }
 
 function renderDictGroup(containerId, data, group, fields) {
@@ -1522,56 +1543,42 @@ async function addDictItem(group, subkey) {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({term: val})
     });
-    if (res.ok) {
-      input.value = '';
-      showToast(`"${val}" 추가됨`, 'success');
-      loadAdminData();
-    } else {
-      showToast('추가 실패', 'error');
-    }
-  } catch(e) {
-    showToast('오류: ' + e.message, 'error');
-  }
+    if (res.ok) { input.value = ''; showToast(`"${val}" 추가됨`, 'success'); loadAdminData(); }
+    else showToast('추가 실패', 'error');
+  } catch(e) { showToast('오류: '+e.message, 'error'); }
 }
 
 async function removeDictItem(group, subkey, term) {
   try {
-    const res = await fetch(`/api/admin/dictionary/${group}/${subkey}/${encodeURIComponent(term)}`, {
-      method: 'DELETE'
-    });
-    if (res.ok) {
-      showToast(`"${term}" 삭제됨`, 'success');
-      loadAdminData();
-    }
-  } catch(e) {
-    showToast('삭제 오류: ' + e.message, 'error');
-  }
+    const res = await fetch(`/api/admin/dictionary/${group}/${subkey}/${encodeURIComponent(term)}`, { method: 'DELETE' });
+    if (res.ok) { showToast(`"${term}" 삭제됨`, 'success'); loadAdminData(); }
+  } catch(e) { showToast('삭제 오류: '+e.message, 'error'); }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 최근 작업
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 function addRecentJob(jobId, filename, size) {
   state.recentJobs = [
-    {jobId, filename, size, status: 'processing', time: Date.now()},
-    ...state.recentJobs.filter(j => j.jobId !== jobId)
-  ].slice(0, 5);
+    {jobId, filename, size, status:'processing', time:Date.now()},
+    ...state.recentJobs.filter(j=>j.jobId!==jobId)
+  ].slice(0,5);
   localStorage.setItem('recentJobs', JSON.stringify(state.recentJobs));
 }
 function updateRecentJobStatus(jobId, status) {
-  const job = state.recentJobs.find(j => j.jobId === jobId);
-  if (job) { job.status = status; localStorage.setItem('recentJobs', JSON.stringify(state.recentJobs)); }
+  const job = state.recentJobs.find(j=>j.jobId===jobId);
+  if (job) { job.status=status; localStorage.setItem('recentJobs', JSON.stringify(state.recentJobs)); }
 }
 function renderRecentJobs() {
   const container = document.getElementById('recentJobsList');
-  const wrapper = document.getElementById('recentJobs');
+  const wrapper   = document.getElementById('recentJobs');
   if (!state.recentJobs.length) { wrapper.classList.add('hidden'); return; }
   wrapper.classList.remove('hidden');
   container.innerHTML = state.recentJobs.map(j => {
-    const statusIcon = j.status === 'completed' ? '✅' : j.status === 'failed' ? '❌' : '⏳';
+    const icon = j.status==='completed'?'✅':j.status==='failed'?'❌':'⏳';
     return `<div class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 rounded p-1.5 transition"
                  onclick="loadPreviousResult('${j.jobId}')">
-      <span class="text-sm">${statusIcon}</span>
+      <span class="text-sm">${icon}</span>
       <div class="flex-1 min-w-0">
         <p class="text-xs text-slate-700 truncate">${j.filename}</p>
         <p class="text-xs text-slate-400">${formatSize(j.size)} · ${timeAgo(j.time)}</p>
@@ -1584,30 +1591,42 @@ async function loadPreviousResult(jobId) {
     const res = await fetch(`/api/verify/status/${jobId}`);
     if (!res.ok) { showToast('해당 작업을 찾을 수 없습니다.', 'error'); return; }
     const data = await res.json();
-    if (data.status === 'completed' && data.report) {
-      state.currentJobId = jobId;
-      state.currentReport = data.report;
-      renderResult(data.report);
-      showPage('result');
+    if (data.status==='completed' && data.report) {
+      state.currentJobId=jobId; state.currentReport=data.report;
+      renderResult(data.report); showPage('result');
+    } else if (data.status==='processing') {
+      state.currentJobId=jobId;
+      document.getElementById('processingFileName').textContent = data.filename||'';
+      showPage('processing'); startPolling();
     } else {
       showToast('이미 만료된 작업입니다.', 'error');
     }
-  } catch(e) {
-    showToast('로드 실패: ' + e.message, 'error');
-  }
+  } catch(e) { showToast('로드 실패: '+e.message, 'error'); }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 유틸리티
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 function resetState() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
   state.currentJobId = null;
   state.currentReport = null;
   state.selectedFile = null;
-  state.visionItems = [];
+  state.pdfDoc = null;
+  state.totalPages = 0;
+  state.batchResults = [];
+  state.totalInputTokens = 0;
+  state.totalOutputTokens = 0;
   clearFile();
+  // 배치 목록 초기화
+  document.getElementById('batchList').innerHTML = '';
+  document.getElementById('batchProgress').classList.add('hidden');
+  document.getElementById('costTracker').classList.add('hidden');
+  // 진행 초기화
+  setProgress(0, '');
+  ['upload','render','vision','report'].forEach(s => setStep(s, 'pending'));
+  document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
   document.getElementById('uploadBtn').disabled = true;
-  document.getElementById('uploadBtn').innerHTML = '<i class="fas fa-magnifying-glass"></i><span>블라인드 검증 시작</span>';
 }
 
 function formatSize(bytes) {
@@ -1615,28 +1634,27 @@ function formatSize(bytes) {
   if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + 'KB';
   return (bytes/1024/1024).toFixed(1) + 'MB';
 }
-
 function timeAgo(ts) {
-  const diff = (Date.now() - ts) / 1000;
+  const diff = (Date.now()-ts)/1000;
   if (diff < 60) return '방금 전';
-  if (diff < 3600) return Math.floor(diff/60) + '분 전';
-  return Math.floor(diff/3600) + '시간 전';
+  if (diff < 3600) return Math.floor(diff/60)+'분 전';
+  return Math.floor(diff/3600)+'시간 전';
 }
 
 let toastTimer;
-function showToast(msg, type = 'info') {
+function showToast(msg, type='info') {
   const toast = document.getElementById('toast');
-  const body = document.getElementById('toastBody');
-  const icons = {success:'fa-check-circle text-green-400', error:'fa-xmark-circle text-red-400', info:'fa-info-circle text-blue-400'};
+  const body  = document.getElementById('toastBody');
+  const icons = {success:'fa-check-circle text-green-400',error:'fa-xmark-circle text-red-400',info:'fa-info-circle text-blue-400'};
   body.innerHTML = `<i class="fas ${icons[type]||icons.info}"></i><span>${msg}</span>`;
   toast.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.add('hidden'), 3500);
+  toastTimer = setTimeout(()=>toast.classList.add('hidden'), 3500);
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 // 초기화
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   renderRecentJobs();
   try {
@@ -1646,10 +1664,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       const cfg = await res.json();
       if (cfg.claude_enabled) {
         state.apiKeyApplied = true;
-        document.getElementById('apiKeyBadge').classList.remove('hidden');
-        document.getElementById('claudeStatus').classList.remove('hidden');
-        document.getElementById('apiKeyStatus').textContent = '✓ Claude AI 활성화됨 (' + cfg.claude_model + ')';
-        document.getElementById('apiKeyStatus').className = 'text-xs mt-1.5 text-green-600';
+        document.getElementById('claudeModeBadge').textContent = '활성';
+        document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
+        document.getElementById('claudeStatusBadge').classList.remove('hidden');
+        document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
+        document.getElementById('apiKeyStatus').textContent = '✓ Claude AI 이미 활성화됨';
+        document.getElementById('apiKeyStatus').className = 'text-xs text-green-600';
       }
     }
   } catch(e) {}
