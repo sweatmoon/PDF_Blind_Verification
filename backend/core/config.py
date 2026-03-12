@@ -20,7 +20,7 @@ MAX_FILE_SIZE_MB   = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
 AUTO_DELETE_MIN    = int(os.getenv("AUTO_DELETE_MIN", "30"))
 OCR_ENABLED        = os.getenv("OCR_ENABLED", "true").lower() == "true"
 CLAUDE_ENABLED     = bool(ANTHROPIC_API_KEY)
-CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
 # ── 로거 팩토리 ────────────────────────────────────────────────
 def get_logger(name: str) -> logging.Logger:

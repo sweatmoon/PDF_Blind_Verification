@@ -2,14 +2,18 @@
 검증 API 라우터 – 업로드 / 상태 / 리포트 / 다운로드 / 썸네일
 - 청크 기반 파일 읽기로 대용량 파일 업로드 타임아웃 방지
 - 썸네일 lazy 로드 (별도 엔드포인트)
+- Claude Vision 이미지 배치 분석 엔드포인트 (/analyze-images)
+- 로고 레퍼런스 이미지 업로드 지원
 """
 from __future__ import annotations
-import asyncio
+import asyncio, base64, json
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, List
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request, Form
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 
 from models.schemas import JobStatus
 from services.pipeline import Pipeline
@@ -202,6 +206,146 @@ async def get_thumbnail(job_id: str, page_num: int):
 
     # PDF 원본은 이미 삭제됐으므로 빈 응답
     raise HTTPException(404, "썸네일 없음 (원본 파일 삭제됨)")
+
+
+# ── Claude Vision 이미지 배치 분석 (클라이언트 → 서버 프록시) ─────
+class AnalyzeImagesRequest(BaseModel):
+    """클라이언트에서 PDF.js로 렌더링한 페이지 이미지 배치 분석 요청"""
+    images: List[dict]           # [{"page": int, "b64": str, "media_type": "image/jpeg"}]
+    logo_b64: Optional[str] = None    # 로고 레퍼런스 base64 (PNG)
+    company_dict: Optional[dict] = None  # 회사 식별 사전 정보
+
+
+@router.post("/analyze-images")
+async def analyze_images(req: AnalyzeImagesRequest):
+    """
+    클라이언트에서 PDF.js로 렌더링한 페이지 이미지를 받아
+    Claude Vision API로 배치 분석 후 결과 반환.
+    
+    - PAGES_PER_BATCH=6 (클라이언트가 배치 분할)
+    - 이미지 직접 전달 (서버가 API 키 관리)
+    """
+    from services.claude_judge import get_claude_judge
+    
+    judge = get_claude_judge()
+    if not judge.enabled:
+        raise HTTPException(503, "Claude AI가 활성화되지 않았습니다. API 키를 먼저 설정해주세요.")
+    
+    if not req.images:
+        raise HTTPException(400, "분석할 이미지가 없습니다.")
+    
+    if len(req.images) > 10:
+        raise HTTPException(400, f"배치당 최대 10페이지 (요청: {len(req.images)})")
+
+    # 이미지 크기 제한 (base64 기준 약 4MB = 3MB 원본)
+    MAX_B64_SIZE = 4 * 1024 * 1024  # 4MB per image
+    for img in req.images:
+        b64 = img.get("b64", "")
+        if len(b64) > MAX_B64_SIZE:
+            # 너무 크면 스킵
+            img["b64"] = b64[:MAX_B64_SIZE]
+            logger.warning(f"페이지 {img.get('page')} 이미지 크기 초과 → 잘라냄")
+
+    try:
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            items = await loop.run_in_executor(
+                ex,
+                judge.judge_image_batch,
+                req.images,
+                req.logo_b64,
+                req.company_dict,
+            )
+        
+        # 통계 계산
+        violation_count = sum(1 for it in items if it.get("judgment") == "위반")
+        caution_count   = sum(1 for it in items if it.get("judgment") == "주의")
+        allowed_count   = sum(1 for it in items if it.get("judgment") == "허용")
+        
+        logger.info(f"이미지 배치 분석 완료: {len(req.images)}페이지 → "
+                    f"위반:{violation_count} 주의:{caution_count}")
+        
+        return JSONResponse({
+            "success": True,
+            "items": items,
+            "stats": {
+                "pages_analyzed": len(req.images),
+                "violation_count": violation_count,
+                "caution_count": caution_count,
+                "allowed_count": allowed_count,
+            }
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"이미지 배치 분석 오류: {e}", exc_info=True)
+        raise HTTPException(500, f"분석 오류: {str(e)[:200]}")
+
+
+# ── 로고 레퍼런스 이미지 저장/조회 ──────────────────────────────
+_logo_store: dict[str, str] = {}   # session_key → base64
+
+
+@router.post("/logo-reference")
+async def upload_logo_reference(file: UploadFile = File(...)):
+    """로고 레퍼런스 이미지 업로드 (PNG/JPEG, 최대 2MB)"""
+    MAX_LOGO_SIZE = 2 * 1024 * 1024
+    
+    ctype = file.content_type or ""
+    if not any(t in ctype for t in ("image/png", "image/jpeg", "image/jpg", "image/webp")):
+        if not (file.filename or "").lower().endswith((".png",".jpg",".jpeg",".webp")):
+            raise HTTPException(400, "PNG/JPEG/WebP 이미지만 지원합니다.")
+    
+    data = await file.read()
+    if len(data) > MAX_LOGO_SIZE:
+        raise HTTPException(413, f"로고 이미지는 2MB 이하만 지원합니다. (현재 {len(data)//1024}KB)")
+    
+    # PNG로 변환 후 base64 인코딩
+    try:
+        from PIL import Image as PILImage
+        import io
+        img = PILImage.open(io.BytesIO(data))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        # PIL 변환 실패 시 원본 그대로
+        b64 = base64.b64encode(data).decode()
+    
+    logo_id = generate_job_id()[:8]
+    _logo_store[logo_id] = b64
+    
+    # 최대 10개 유지
+    if len(_logo_store) > 10:
+        oldest = next(iter(_logo_store))
+        del _logo_store[oldest]
+    
+    logger.info(f"로고 레퍼런스 업로드: {logo_id} ({len(data)//1024}KB)")
+    return JSONResponse({
+        "logo_id": logo_id,
+        "size_kb": len(data) // 1024,
+        "filename": file.filename,
+    })
+
+
+@router.get("/logo-reference/{logo_id}")
+def get_logo_reference(logo_id: str):
+    """저장된 로고 레퍼런스 base64 반환"""
+    b64 = _logo_store.get(logo_id)
+    if not b64:
+        raise HTTPException(404, "로고 레퍼런스를 찾을 수 없습니다.")
+    return JSONResponse({"logo_id": logo_id, "b64": b64})
+
+
+@router.delete("/logo-reference/{logo_id}")
+def delete_logo_reference(logo_id: str):
+    """로고 레퍼런스 삭제"""
+    if logo_id in _logo_store:
+        del _logo_store[logo_id]
+        return JSONResponse({"success": True})
+    raise HTTPException(404, "로고 레퍼런스를 찾을 수 없습니다.")
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────
