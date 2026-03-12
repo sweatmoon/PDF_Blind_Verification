@@ -2,6 +2,8 @@
 FastAPI 진입점
 """
 import asyncio
+import hashlib
+import time
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -66,23 +68,39 @@ async def spa(full_path: str, request: Request):
     candidate = FRONTEND / full_path
     if candidate.is_file():
         mt = MIME.get(candidate.suffix.lower(), "application/octet-stream")
-        # index.html은 캐시 금지
+        content = candidate.read_bytes()
+        # 모든 HTML은 캐시 완전 금지 + ETag으로 프록시 우회
         if candidate.suffix.lower() == ".html":
+            etag = hashlib.md5(content).hexdigest()
             return Response(
-                content=candidate.read_bytes(), media_type=mt,
-                headers={"Cache-Control": "no-cache, no-store, must-revalidate",
-                         "Pragma": "no-cache", "Expires": "0"})
-        return Response(content=candidate.read_bytes(), media_type=mt)
+                content=content, media_type=mt,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                    "Pragma":        "no-cache",
+                    "Expires":       "0",
+                    "ETag":          f'"{etag}"',
+                    "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(candidate.stat().st_mtime)),
+                    "Vary":          "*",
+                    "X-Content-Ver": etag[:8],
+                })
+        return Response(content=content, media_type=mt)
 
     # SPA index.html 폴백
     index = FRONTEND / "index.html"
     if index.exists():
-        return HTMLResponse(
-            content=index.read_text("utf-8"),
+        content = index.read_bytes()
+        etag = hashlib.md5(content).hexdigest()
+        return Response(
+            content=content,
+            media_type="text/html",
             headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma":        "no-cache",
+                "Expires":       "0",
+                "ETag":          f'"{etag}"',
+                "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(index.stat().st_mtime)),
+                "Vary":          "*",
+                "X-Content-Ver": etag[:8],
             },
         )
     return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
