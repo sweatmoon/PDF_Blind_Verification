@@ -115,8 +115,7 @@
             <div class="flex-1 min-w-0">
               <p id="fileName" class="font-medium text-slate-700 truncate text-sm"></p>
               <p id="fileSize" class="text-xs text-slate-500"></p>
-              <!-- 비용 추정 -->
-              <p id="costEstimate" class="hidden text-xs mt-1"></p>
+              <p id="costEstimate" class="hidden"></p>
             </div>
             <button onclick="clearFile()" class="text-slate-400 hover:text-red-500 transition">
               <i class="fas fa-times"></i>
@@ -330,14 +329,7 @@
           <div id="batchList" class="space-y-1.5 max-h-48 overflow-y-auto"></div>
         </div>
 
-        <!-- 비용 추정 (실시간) -->
-        <div id="costTracker" class="hidden mt-4 p-3 bg-green-50 rounded-lg border border-green-100 text-xs">
-          <div class="flex items-center justify-between">
-            <span class="text-green-700 font-medium"><i class="fas fa-coins mr-1"></i>예상 비용</span>
-            <span id="costDisplay" class="cost-pill">계산 중…</span>
-          </div>
-          <p class="text-green-600 mt-1 text-xs">Claude Sonnet 4: 입력 $3/1M · 출력 $15/1M 토큰</p>
-        </div>
+
 
         <p class="text-xs text-slate-400 mt-4 text-center">
           <i class="fas fa-trash mr-1"></i>원본 파일은 검증 완료 즉시 삭제됩니다
@@ -364,7 +356,7 @@
           </p>
           <div class="flex items-center gap-2 mt-1.5">
             <span id="analysisModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium"></span>
-            <span id="resultCostBadge" class="hidden cost-pill"></span>
+
           </div>
           <div id="resultSummaryNotes" class="mt-2 flex flex-wrap gap-1.5"></div>
         </div>
@@ -608,17 +600,7 @@ async function processFile(file) {
   }
 }
 
-function showCostEstimate(pages) {
-  if (state.analysisMode !== 'vision') return;
-  const batches = Math.ceil(pages / PAGES_PER_BATCH);
-  const inputTok  = pages * TOKENS_PER_IMAGE;
-  const outputTok = batches * TOKENS_OUTPUT_EST;
-  const cost = (inputTok / 1e6 * COST_INPUT_PER_M) + (outputTok / 1e6 * COST_OUTPUT_PER_M);
-  const el = document.getElementById('costEstimate');
-  el.classList.remove('hidden');
-  el.innerHTML = `<span class="cost-pill"><i class="fas fa-coins mr-1"></i>`
-    + `예상 비용: $${cost.toFixed(4)} (${pages}p · ${batches}배치)</span>`;
-}
+function showCostEstimate(pages) { /* 비용 표시 제거 */ }
 
 function clearFile() {
   state.selectedFile = null;
@@ -821,7 +803,6 @@ async function startVisionAnalysis() {
   document.getElementById('processingFileName').textContent = file.name;
   showPage('processing');
   document.getElementById('batchProgress').classList.remove('hidden');
-  document.getElementById('costTracker').classList.remove('hidden');
 
   // 2. PDF.js로 페이지 이미지 렌더링 (병렬 RENDER_CONCURRENCY=4)
   setStep('render', 'active');
@@ -1229,12 +1210,7 @@ function updateBatchCard(idx, status, detail) {
   }
 }
 
-function updateCostDisplay() {
-  const cost = (state.totalInputTokens / 1e6 * COST_INPUT_PER_M)
-             + (state.totalOutputTokens / 1e6 * COST_OUTPUT_PER_M);
-  const el = document.getElementById('costDisplay');
-  if (el) el.textContent = `$${cost.toFixed(4)}`;
-}
+function updateCostDisplay() { /* 비용 표시 제거 */ }
 
 function chunkArray(arr, size) {
   const chunks = [];
@@ -1306,12 +1282,7 @@ function renderResult(report) {
     modeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium';
   }
 
-  // 비용 배지
-  if (report._cost_usd) {
-    const cb = document.getElementById('resultCostBadge');
-    cb.textContent = `비용 $${report._cost_usd}`;
-    cb.classList.remove('hidden');
-  }
+
 
   document.getElementById('totalViolation').textContent = report.violation_count || 0;
   document.getElementById('totalCaution').textContent   = report.caution_count   || 0;
@@ -1806,7 +1777,6 @@ function resetState() {
   // 배치 목록 초기화
   document.getElementById('batchList').innerHTML = '';
   document.getElementById('batchProgress').classList.add('hidden');
-  document.getElementById('costTracker').classList.add('hidden');
   // 진행 초기화
   setProgress(0, '');
   ['upload','render','vision','report'].forEach(s => setStep(s, 'pending'));
