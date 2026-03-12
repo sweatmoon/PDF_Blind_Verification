@@ -36,11 +36,14 @@ def update_dictionary(req: DictionaryUpdateRequest):
     clean = [i.strip() for i in req.items if i.strip()]
 
     if req.action == "add":
-        existing = set(group[req.subcategory])
+        # 대소문자·공백 정규화 후 중복 체크 (batch 엔드포인트와 동일 기준)
+        existing_lower = {x.strip().lower() for x in group[req.subcategory]}
+        added = 0
         for item in clean:
-            if item not in existing:
+            if item.strip().lower() not in existing_lower:
                 group[req.subcategory].append(item)
-                existing.add(item)
+                existing_lower.add(item.strip().lower())
+                added += 1
     elif req.action == "remove":
         rm = set(clean)
         group[req.subcategory] = [x for x in group[req.subcategory] if x not in rm]
@@ -53,12 +56,17 @@ def update_dictionary(req: DictionaryUpdateRequest):
         raise HTTPException(500, "사전 저장 실패")
 
     get_rule_detector().reload()
-    return JSONResponse({
+    resp: dict = {
         "success": True,
         "group":   req.group,
         "subcat":  req.subcategory,
         "count":   len(group[req.subcategory]),
-    })
+    }
+    # add 액션인 경우 추가/중복 건수 포함
+    if req.action == "add":
+        resp["added"]   = added
+        resp["skipped"] = len(clean) - added
+    return JSONResponse(resp)
 
 
 # ── 단일 항목 추가 ────────────────────────────────────────────
@@ -89,13 +97,14 @@ def add_items_batch(group: str, subcategory: str, body: dict):
     data  = load_dict()
     grp   = data.setdefault(group, {})
     grp.setdefault(subcategory, [])
-    existing = set(grp[subcategory])
+    # 대소문자·공백 정규화 후 중복 체크
+    existing_lower = {x.strip().lower() for x in grp[subcategory]}
 
     added = 0
     for item in clean:
-        if item not in existing:
+        if item.strip().lower() not in existing_lower:
             grp[subcategory].append(item)
-            existing.add(item)
+            existing_lower.add(item.strip().lower())
             added += 1
 
     skipped = len(clean) - added
