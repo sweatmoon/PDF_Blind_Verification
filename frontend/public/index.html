@@ -1477,7 +1477,15 @@ function setStep(id, state_, detail) {
     const timeEl = document.getElementById(`step-${id}-time`);
     if (timeEl && detail) timeEl.textContent = detail;
   } else {
+    // pending: 아이콘도 원래 회색 원으로 완전 복원
     el.classList.add('text-slate-400');
+    const iconEl = el.querySelector('div');
+    if (iconEl) {
+      iconEl.className = 'w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs text-slate-300';
+      iconEl.innerHTML = '';
+    }
+    const timeEl = document.getElementById(`step-${id}-time`);
+    if (timeEl) timeEl.textContent = '';
   }
 }
 
