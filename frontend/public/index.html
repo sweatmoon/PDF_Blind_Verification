@@ -1700,9 +1700,6 @@ async function addDictItems(group, subkey, terms) {
     loadAdminData();
   } catch(e) { showToast('오류: '+e.message, 'error'); }
 }
-    loadAdminData();
-  } catch(e) { showToast('오류: '+e.message, 'error'); }
-}
 
 async function removeDictItem(group, subkey, term) {
   try {
