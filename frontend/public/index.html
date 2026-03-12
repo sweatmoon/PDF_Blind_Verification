@@ -649,15 +649,20 @@ async function uploadLogo(file) {
   if (file.size > 2 * 1024 * 1024) {
     showToast('로고 이미지는 2MB 이하만 지원합니다.', 'error'); return;
   }
-  // 프리뷰 표시
+  // 프리뷰 표시 + localStorage 저장
   const reader = new FileReader();
   reader.onload = (e) => {
-    state.logoB64 = e.target.result.split(',')[1];
-    document.getElementById('logoPreviewArea').innerHTML =
-      `<img src="${e.target.result}" class="logo-preview mx-auto mb-1" />
-       <p class="text-xs text-green-600 font-medium">로고 준비됨</p>`;
-    document.getElementById('logoInfo').classList.remove('hidden');
-    document.getElementById('logoFileName').textContent = file.name + ' (' + formatSize(file.size) + ')';
+    const dataUrl = e.target.result;
+    state.logoB64 = dataUrl.split(',')[1];
+    state.logoFileName = file.name;
+    // ✅ localStorage에 base64 통째로 저장
+    try {
+      localStorage.setItem('logoDataUrl', dataUrl);
+      localStorage.setItem('logoFileName', file.name);
+    } catch(err) {
+      console.warn('로고 localStorage 저장 실패 (용량 초과 가능):', err);
+    }
+    _renderLogoPreview(dataUrl, file.name, formatSize(file.size));
   };
   reader.readAsDataURL(file);
 
@@ -669,16 +674,28 @@ async function uploadLogo(file) {
     if (res.ok) {
       const data = await res.json();
       state.logoId = data.logo_id;
-      showToast(`로고 레퍼런스 등록됨 (${data.size_kb}KB)`, 'success');
+      showToast(`로고 레퍼런스 등록됨 (${data.size_kb}KB) · 저장됨`, 'success');
     }
   } catch(e) {
     console.warn('로고 서버 업로드 실패 (클라이언트 로컬만 사용):', e);
   }
 }
 
+function _renderLogoPreview(dataUrl, filename, sizeStr) {
+  document.getElementById('logoPreviewArea').innerHTML =
+    `<img src="${dataUrl}" class="logo-preview mx-auto mb-1" />
+     <p class="text-xs text-green-600 font-medium">로고 준비됨</p>`;
+  document.getElementById('logoInfo').classList.remove('hidden');
+  document.getElementById('logoFileName').textContent = filename + (sizeStr ? ' (' + sizeStr + ')' : '');
+}
+
 function removeLogo() {
   state.logoId = null;
   state.logoB64 = null;
+  state.logoFileName = null;
+  // ✅ localStorage에서도 제거
+  localStorage.removeItem('logoDataUrl');
+  localStorage.removeItem('logoFileName');
   document.getElementById('logoPreviewArea').innerHTML =
     `<i class="fas fa-image text-2xl text-slate-300 mb-2"></i>
      <p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>`;
@@ -737,13 +754,15 @@ async function applyApiKey() {
     });
     if (res.ok) {
       state.apiKeyApplied = true;
+      // ✅ localStorage에 영구 저장
+      localStorage.setItem('claudeApiKey', key);
       document.getElementById('apiKeyStatus').textContent = '✓ 적용됨 – Claude Vision AI 활성화';
       document.getElementById('apiKeyStatus').className = 'text-xs text-green-600 font-medium';
       document.getElementById('claudeModeBadge').textContent = '활성';
       document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
       document.getElementById('claudeStatusBadge').classList.remove('hidden');
       document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
-      showToast('Claude AI가 활성화되었습니다.', 'success');
+      showToast('Claude AI가 활성화되었습니다. (저장됨)', 'success');
     } else {
       const err = await res.json();
       showToast('API 키 오류: ' + (err.detail || ''), 'error');
@@ -1823,6 +1842,36 @@ function showToast(msg, type='info') {
 // ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   renderRecentJobs();
+
+  // ✅ 저장된 API 키 복원
+  const savedKey = localStorage.getItem('claudeApiKey');
+  if (savedKey) {
+    document.getElementById('apiKeyInput').value = savedKey;
+  }
+
+  // ✅ 저장된 로고 복원
+  const savedLogoUrl  = localStorage.getItem('logoDataUrl');
+  const savedLogoName = localStorage.getItem('logoFileName');
+  if (savedLogoUrl && savedLogoName) {
+    state.logoB64      = savedLogoUrl.split(',')[1];
+    state.logoFileName = savedLogoName;
+    _renderLogoPreview(savedLogoUrl, savedLogoName, '');
+    // 서버에도 재업로드 (서버는 재시작 시 메모리 초기화되므로)
+    try {
+      const blob = await fetch(savedLogoUrl).then(r => r.blob());
+      const fd = new FormData();
+      fd.append('file', new File([blob], savedLogoName, {type: blob.type}));
+      const res = await fetch('/api/verify/logo-reference', { method: 'POST', body: fd });
+      if (res.ok) {
+        const data = await res.json();
+        state.logoId = data.logo_id;
+      }
+    } catch(e) {
+      console.warn('로고 서버 재업로드 실패:', e);
+    }
+  }
+
+  // 서버 Claude 활성화 상태 확인
   try {
     const res = await fetch('/api/admin/config');
     if (res.ok) {
@@ -1836,10 +1885,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
         document.getElementById('apiKeyStatus').textContent = '✓ Claude AI 이미 활성화됨';
         document.getElementById('apiKeyStatus').className = 'text-xs text-green-600';
+      } else if (savedKey) {
+        // 서버엔 비활성이지만 저장된 키가 있으면 자동 재적용
+        _autoReapplyKey(savedKey);
       }
     }
   } catch(e) {}
 });
+
+// 저장된 키 자동 재적용 (서버 재시작 후)
+async function _autoReapplyKey(key) {
+  try {
+    const res = await fetch('/api/admin/claude-key', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({api_key: key})
+    });
+    if (res.ok) {
+      state.apiKeyApplied = true;
+      document.getElementById('claudeModeBadge').textContent = '활성';
+      document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
+      document.getElementById('claudeStatusBadge').classList.remove('hidden');
+      document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
+      document.getElementById('apiKeyStatus').textContent = '✓ 저장된 키 자동 적용됨';
+      document.getElementById('apiKeyStatus').className = 'text-xs text-green-600';
+      showToast('저장된 Claude API 키가 자동으로 적용되었습니다.', 'success');
+    }
+  } catch(e) {
+    console.warn('키 자동 재적용 실패:', e);
+  }
+}
 </script>
 </body>
 </html>
