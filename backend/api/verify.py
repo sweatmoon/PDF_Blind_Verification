@@ -21,7 +21,7 @@ from services.file_manager import validate_pdf, register_ttl, delete_job_files
 from core.config import (
     get_logger, sanitize_filename, generate_job_id,
     get_job_tmp_dir, get_job, set_job, update_job,
-    MAX_FILE_SIZE_MB,
+    MAX_FILE_SIZE_MB, get_google_vision_key,
 )
 
 # 썸네일 캐시 (job_id → {page: b64})
@@ -367,7 +367,7 @@ async def scan_text(file: UploadFile = File(...)):
 
         total_pages = svc.total_pages
         rules = get_rule_detector()
-        gv_key = _cfg.get_google_vision_key()
+        gv_key = get_google_vision_key()
 
         # ── 페이지별 텍스트/이미지 수집 ──────────────────────────
         text_pages: dict[int, str] = {}   # 텍스트 레이어 존재 페이지
