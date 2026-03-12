@@ -240,35 +240,35 @@
         <!-- 처리 단계 -->
         <div id="processingSteps" class="space-y-2 mb-5">
           <div id="step-upload" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-upload">
               <i class="fas fa-upload"></i>
             </div>
             <span>검증 준비 (Vision 모드: 서버 파일 전송 없음)</span>
             <span id="step-upload-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-scan" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-file-lines">
               <i class="fas fa-file-lines"></i>
             </div>
             <span id="step-scan-label">텍스트 추출 + 사전 규칙 탐지</span>
             <span id="step-scan-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-render" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-image">
               <i class="fas fa-image"></i>
             </div>
             <span>PDF 페이지 이미지 렌더링 (PDF.js · <span class="text-indigo-500">×4 병렬</span>)</span>
             <span id="step-render-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-vision" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-robot">
               <i class="fas fa-robot"></i>
             </div>
             <span id="step-vision-label">Claude Vision AI 배치 분석 (<span class="text-indigo-500">×3 배치 병렬</span>)</span>
             <span id="step-vision-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-report" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-chart-bar">
               <i class="fas fa-chart-bar"></i>
             </div>
             <span>결과 집계 및 리포트 생성</span>
@@ -588,6 +588,7 @@ let state = {
   totalInputTokens:  0,
   totalOutputTokens: 0,
   batchResults:   [],        // 배치별 결과 누적
+  resultTimer:    null,       // showPage('result') setTimeout ID
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -887,6 +888,8 @@ async function startVerification() {
   if (!state.selectedFile) return;
 
   // ── 검증 시작 즉시 진행 상태 완전 초기화 ─────────────────────
+  // 이전 검증의 결과 화면 전환 타이머 취소 (재검증 시 타이밍 충돌 방지)
+  if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
   setProgress(0, '');
   ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
   document.getElementById('batchList').innerHTML = '';
@@ -914,6 +917,7 @@ async function startVisionAnalysis() {
   state.totalOutputTokens = 0;
 
   // ── 진행 상태 완전 초기화 ──────────────────────────────────
+  if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
   setProgress(0, '');
   ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
   document.getElementById('batchList').innerHTML = '';
@@ -1080,7 +1084,7 @@ async function startVisionAnalysis() {
   updateRecentJobStatus(jobId, 'completed');
   // ✅ 저장함에 저장
   saveReportToStorage(jobId, state.selectedFile?.name || report.filename || '', state.selectedFile?.size || 0, report);
-  setTimeout(() => showPage('result'), 600);
+  state.resultTimer = setTimeout(() => showPage('result'), 600);
 }
 
 // ─── Rule 분석 (기존 서버 파이프라인) ────────────────────────
@@ -1477,12 +1481,13 @@ function setStep(id, state_, detail) {
     const timeEl = document.getElementById(`step-${id}-time`);
     if (timeEl && detail) timeEl.textContent = detail;
   } else {
-    // pending: 아이콘도 원래 회색 원으로 완전 복원
+    // pending: 원래 아이콘으로 완전 복원 (data-icon 속성 활용)
     el.classList.add('text-slate-400');
     const iconEl = el.querySelector('div');
     if (iconEl) {
-      iconEl.className = 'w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs text-slate-300';
-      iconEl.innerHTML = '';
+      iconEl.className = 'w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs';
+      const iconClass = iconEl.dataset.icon || 'fa-circle';
+      iconEl.innerHTML = `<i class="fas ${iconClass}"></i>`;
     }
     const timeEl = document.getElementById(`step-${id}-time`);
     if (timeEl) timeEl.textContent = '';
@@ -2202,6 +2207,7 @@ function renderRecentJobs() { renderSavedReports(); }
 // ─────────────────────────────────────────────────────────────
 function resetState() {
   if (state.pollTimer) clearInterval(state.pollTimer);
+  if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
   state.currentJobId = null;
   state.currentReport = null;
   state.selectedFile = null;
