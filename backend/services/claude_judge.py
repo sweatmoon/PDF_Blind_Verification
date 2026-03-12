@@ -148,19 +148,62 @@ class ClaudeVisionJudge:
 
         # 2. 회사 사전 정보 텍스트 추가
         if company_dict:
-            dict_lines = []
-            if company_dict.get("company_names"):
-                dict_lines.append(f"제안사명: {', '.join(company_dict['company_names'])}")
-            if company_dict.get("emails"):
-                dict_lines.append(f"이메일 도메인: {', '.join(company_dict['emails'])}")
-            if company_dict.get("domains"):
-                dict_lines.append(f"도메인: {', '.join(company_dict['domains'])}")
-            if company_dict.get("representative_names"):
-                dict_lines.append(f"대표자: {', '.join(company_dict['representative_names'])}")
-            if dict_lines:
+            direct = company_dict.get("direct_identifiers", company_dict)  # 중첩 구조 or flat 구조 모두 지원
+
+            def _get(key):
+                # 중첩(direct_identifiers.xxx) 또는 flat(xxx) 두 형태 모두 처리
+                v = direct.get(key) or company_dict.get(key) or []
+                return [str(x).strip() for x in v if str(x).strip()]
+
+            lines = []
+
+            names = _get("company_names")
+            if names:
+                lines.append(f"제안사명: {', '.join(names)}")
+
+            eng = _get("english_names")
+            if eng:
+                lines.append(f"영문명·도메인: {', '.join(eng)}")
+
+            abbr = _get("abbreviations")
+            if abbr:
+                lines.append(f"약칭: {', '.join(abbr)}")
+
+            rep = _get("representative_names")
+            if rep:
+                lines.append(f"대표자: {', '.join(rep)}")
+
+            # ★ 핵심 — 참여인력 실명 목록 (이미지에서 직접 매칭)
+            personnel = _get("personnel_names")
+            if personnel:
+                lines.append(
+                    f"참여인력 실명 목록 (아래 이름 중 하나라도 이미지에 보이면 즉시 위반):\n  {', '.join(personnel)}"
+                )
+
+            emails = _get("emails")
+            if emails:
+                lines.append(f"이메일·도메인: {', '.join(emails)}")
+
+            domains = _get("domains")
+            if domains:
+                lines.append(f"도메인: {', '.join(domains)}")
+
+            brands = _get("brand_names")
+            if brands:
+                lines.append(f"브랜드명: {', '.join(brands)}")
+
+            # 간접 식별자
+            indirect = company_dict.get("indirect_identifiers", {})
+            for k, label in [("color_names","고유색상"), ("solution_names","솔루션명"),
+                              ("slogans","슬로건"), ("org_names","조직명"), ("service_names","서비스명")]:
+                vals = [str(x).strip() for x in (indirect.get(k) or []) if str(x).strip()]
+                if vals:
+                    lines.append(f"{label}: {', '.join(vals)}")
+
+            if lines:
                 content.append({
                     "type": "text",
-                    "text": "━━━ 제안사 식별 사전 (이 정보가 등장하면 즉시 위반) ━━━\n" + "\n".join(dict_lines)
+                    "text": "━━━ 제안사 식별 사전 (이 정보가 등장하면 즉시 위반) ━━━\n" + "\n".join(lines)
                 })
 
         # 3. 페이지 이미지들 첨부

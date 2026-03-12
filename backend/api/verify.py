@@ -133,6 +133,45 @@ async def _run(job_id: str, path: Path, filename: str):
         except Exception: pass
 
 
+# ── Vision 전용: 파일 없이 job_id만 발급 ──────────────────────
+class InitJobRequest(BaseModel):
+    filename: str
+    file_size: int
+
+@router.post("/init-job")
+def init_job(req: InitJobRequest):
+    """
+    Vision 분석 모드 전용.
+    PDF를 서버에 올리지 않고 job_id + 메타 정보만 생성.
+    실제 분석은 클라이언트가 /analyze-images 로 직접 수행.
+    """
+    fname  = (req.filename or "document.pdf").strip()
+    job_id = generate_job_id()
+    set_job(job_id, {
+        "job_id":     job_id,
+        "status":     JobStatus.PENDING.value,
+        "progress":   0,
+        "message":    "Vision 분석 대기 중…",
+        "filename":   fname,
+        "safe_name":  sanitize_filename(fname),
+        "file_size":  req.file_size,
+        "created_at": datetime.now().isoformat(),
+        "report":     None,
+        "error":      None,
+    })
+    register_ttl(job_id)
+    logger.info(f"Vision job 생성 (파일 없음): {fname} ({req.file_size/1024:.1f} KB) job={job_id}")
+    return JSONResponse({
+        "job_id":    job_id,
+        "status":    "pending",
+        "filename":  fname,
+        "file_size": req.file_size,
+        "message":   "Vision 분석 준비됨.",
+    })
+
+
+
+
 # ── 상태 조회 ─────────────────────────────────────────────────
 @router.get("/status/{job_id}")
 def get_status(job_id: str):

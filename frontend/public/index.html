@@ -262,7 +262,7 @@
             <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-upload"></i>
             </div>
-            <span>PDF 업로드 및 메타데이터 분석</span>
+            <span>검증 준비 (Vision 모드: 서버 파일 전송 없음)</span>
             <span id="step-upload-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-render" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
@@ -746,20 +746,22 @@ async function startVisionAnalysis() {
   state.totalInputTokens  = 0;
   state.totalOutputTokens = 0;
 
-  // 1. 서버에 PDF 업로드 (메타데이터 분석용)
+  // 1. job_id 발급 (Vision 모드: 파일 전송 없이 메타만 전송)
   setStep('upload', 'active');
   let jobId;
   try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/verify/upload', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error((await res.json()).detail || '업로드 실패');
+    const res = await fetch('/api/verify/init-job', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ filename: file.name, file_size: file.size })
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'job 생성 실패');
     const data = await res.json();
     jobId = data.job_id;
     state.currentJobId = jobId;
     addRecentJob(jobId, file.name, file.size);
   } catch(e) {
-    showToast('업로드 오류: ' + e.message, 'error');
+    showToast('초기화 오류: ' + e.message, 'error');
     resetUploadBtn(); return;
   }
   setStep('upload', 'done');
@@ -994,12 +996,25 @@ async function getCompanyDict() {
     if (!res.ok) return null;
     const dict = await res.json();
     const di = dict.direct_identifiers || {};
+    const ind = dict.indirect_identifiers || {};
     return {
-      company_names:        di.company_names || [],
-      english_names:        di.english_names || [],
+      // 직접 식별자
+      company_names:        di.company_names        || [],
+      english_names:        di.english_names        || [],
+      abbreviations:        di.abbreviations        || [],
       representative_names: di.representative_names || [],
-      emails:               di.emails || [],
-      domains:              di.domains || [],
+      personnel_names:      di.personnel_names      || [],  // ★ 참여인력 실명
+      emails:               di.emails               || [],
+      domains:              di.domains              || [],
+      brand_names:          di.brand_names          || [],
+      // 간접 식별자
+      indirect_identifiers: {
+        color_names:    ind.color_names    || [],
+        solution_names: ind.solution_names || [],
+        slogans:        ind.slogans        || [],
+        org_names:      ind.org_names      || [],
+        service_names:  ind.service_names  || [],
+      },
     };
   } catch { return null; }
 }
