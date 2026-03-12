@@ -265,6 +265,13 @@
             <span>검증 준비 (Vision 모드: 서버 파일 전송 없음)</span>
             <span id="step-upload-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
+          <div id="step-scan" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
+              <i class="fas fa-file-lines"></i>
+            </div>
+            <span id="step-scan-label">텍스트 추출 + 사전 규칙 탐지</span>
+            <span id="step-scan-time" class="ml-auto text-xs text-slate-300"></span>
+          </div>
           <div id="step-render" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
             <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-image"></i>
@@ -771,7 +778,28 @@ async function startVisionAnalysis() {
   showPage('processing');
   document.getElementById('batchProgress').classList.remove('hidden');
 
-  // 2. PDF.js로 페이지 이미지 렌더링 (병렬 RENDER_CONCURRENCY=4)
+  // 2. 텍스트 추출 + 사전 규칙 탐지 (서버, PDF 1회 전송)
+  setStep('scan', 'active');
+  setProgress(8, '텍스트 추출 및 사전 규칙 탐지 중…');
+  let ruleHitsByPage = {};   // { "5": [{page,type,content,judgment,...}, ...] }
+  try {
+    const scanFd = new FormData();
+    scanFd.append('file', file);
+    const scanRes = await fetch('/api/verify/scan-text', { method: 'POST', body: scanFd });
+    if (scanRes.ok) {
+      const scanData = await scanRes.json();
+      ruleHitsByPage = scanData.hits_by_page || {};
+      const totalHits = Object.values(ruleHitsByPage).reduce((s, v) => s + v.length, 0);
+      setStep('scan', 'done', `규칙 탐지 ${totalHits}건`);
+    } else {
+      // 스캔 실패해도 Vision은 계속 진행
+      setStep('scan', 'done', '텍스트 스캔 실패 (Vision만 진행)');
+    }
+  } catch(e) {
+    setStep('scan', 'done', '텍스트 스캔 오류 (Vision만 진행)');
+  }
+
+  // 3. PDF.js로 페이지 이미지 렌더링 (병렬 RENDER_CONCURRENCY=4)
   setStep('render', 'active');
   setProgress(10, 'PDF 페이지 이미지 렌더링 중…');
   let pageImages;
@@ -860,14 +888,16 @@ async function startVisionAnalysis() {
   batchResultsMap.forEach(items => { if (items) allItems.push(...items); });
   setStep('vision', 'done', `${allItems.length}건 검출`);
 
-  // 4. 결과 집계
+  // 4. 규칙 결과 + Vision 결과 보수적 합산
   setStep('report', 'active');
-  setProgress(90, '결과 집계 중…');
-  const report = buildClientReport(jobId, file.name, pageImages.length, allItems,
-    state.pdfDoc._pdfInfo?.numPages || pageImages.length);
+  setProgress(90, '규칙+Vision 보수적 합산 중…');
+  const mergedItems = mergeRuleAndVision(ruleHitsByPage, allItems);
+  const visionCount = allItems.length;
+  const ruleCount   = Object.values(ruleHitsByPage).reduce((s, v) => s + v.length, 0);
+  const numPages = state.pdfDoc?._pdfInfo?.numPages || pageImages.length;
+  const report = buildClientReport(jobId, file.name, pageImages.length, mergedItems, numPages);
 
-  // 서버에 결과 저장 (선택적 - 서버측은 rule-based 결과도 있음)
-  setStep('report', 'done');
+  setStep('report', 'done', `Vision ${visionCount}건 + 규칙 ${ruleCount}건 → ${mergedItems.length}건`);
   setProgress(100, '검증 완료');
 
   state.currentReport = report;
@@ -962,6 +992,82 @@ async function pdfToImages(pdfDoc, onPageDone) {
   });
 
   return results;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 규칙 탐지 + Vision 결과 보수적 합산
+// 원칙: 둘 중 더 강한 판정 채택 (위반 > 주의 > 허용)
+//   - 규칙이 위반인데 Vision이 허용 → 위반 유지
+//   - Vision이 위반인데 규칙에 없음 → 위반 추가
+//   - 규칙에만 있고 Vision에 없음 → 규칙 결과 그대로 포함
+// ─────────────────────────────────────────────────────────────
+function mergeRuleAndVision(ruleHitsByPage, visionItems) {
+  const JUDGMENT_WEIGHT = { '위반': 2, '주의': 1, '허용': 0 };
+
+  // Vision 결과를 page 기준 맵으로 변환
+  const visionByPage = {};
+  for (const it of visionItems) {
+    const p = String(it.page || '?');
+    if (!visionByPage[p]) visionByPage[p] = [];
+    visionByPage[p].push(it);
+  }
+
+  // 규칙 결과를 item 형식으로 변환 (Vision과 동일한 구조)
+  const ruleItems = [];
+  for (const [pageStr, hits] of Object.entries(ruleHitsByPage)) {
+    for (const h of hits) {
+      ruleItems.push({
+        page:           Number(pageStr) || pageStr,
+        type:           h.type,
+        content:        h.content,
+        judgment:       h.judgment,   // "위반" | "주의"
+        reason:         h.reason + ' [규칙 탐지]',
+        recommendation: h.recommendation,
+        source:         'rule',
+        confidence:     h.confidence || 0.99,
+      });
+    }
+  }
+
+  // 1) Vision 항목 + 같은 페이지 규칙 항목 중 더 강한 판정으로 업그레이드
+  const merged = visionItems.map(vi => {
+    const p = String(vi.page || '?');
+    const pageRules = ruleHitsByPage[p] || [];
+    // 같은 페이지 규칙 중 내용이 유사한 것 탐색
+    const similar = pageRules.find(r =>
+      r.content && vi.content &&
+      (vi.content.includes(r.content) || r.content.includes(vi.content) ||
+       vi.content.toLowerCase().includes(r.content.toLowerCase()))
+    );
+    if (similar) {
+      const ruleW   = JUDGMENT_WEIGHT[similar.judgment] ?? 0;
+      const visionW = JUDGMENT_WEIGHT[vi.judgment]      ?? 0;
+      if (ruleW > visionW) {
+        // 규칙이 더 강하면 판정 업그레이드
+        return { ...vi, judgment: similar.judgment,
+                 reason: vi.reason + ` (규칙 탐지: ${similar.judgment} → 보수 적용)`,
+                 source: 'rule+vision' };
+      }
+    }
+    return vi;
+  });
+
+  // 2) 규칙에만 있고 Vision에 없는 항목 추가 (중복 방지)
+  for (const ri of ruleItems) {
+    const p = String(ri.page);
+    const visionPage = visionByPage[p] || [];
+    // Vision 결과에 동일 내용이 없을 때만 추가
+    const alreadyCovered = visionPage.some(vi =>
+      vi.content && ri.content &&
+      (vi.content.toLowerCase().includes(ri.content.toLowerCase()) ||
+       ri.content.toLowerCase().includes(vi.content.toLowerCase()))
+    );
+    if (!alreadyCovered) {
+      merged.push(ri);
+    }
+  }
+
+  return merged;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1849,7 +1955,7 @@ function resetState() {
   document.getElementById('batchProgress').classList.add('hidden');
   // 진행 초기화
   setProgress(0, '');
-  ['upload','render','vision','report'].forEach(s => setStep(s, 'pending'));
+  ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
   document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
   document.getElementById('uploadBtn').disabled = true;
 }

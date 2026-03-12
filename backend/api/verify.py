@@ -327,6 +327,87 @@ async def analyze_images(req: AnalyzeImagesRequest):
 _logo_store: dict[str, str] = {}   # session_key → base64
 
 
+# ── Vision 전용: PDF 텍스트 추출 + 규칙 탐지 ──────────────────
+@router.post("/scan-text")
+async def scan_text(file: UploadFile = File(...)):
+    """
+    Vision 모드 전용.
+    PDF를 받아 PyMuPDF로 텍스트 추출 + 사전/규칙 탐지 결과를 반환.
+    Claude Vision 결과와 합산하여 보수적 판정에 사용.
+    """
+    import io
+    from services.pdf_service import PDFService, PageData
+    from services.rule_detector import get_rule_detector
+    from pathlib import Path
+    import tempfile, os
+
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(400, "PDF 파일만 지원합니다.")
+
+    data = await file.read()
+    if len(data) < 100 or not data[:5].startswith(b"%PDF-"):
+        raise HTTPException(400, "유효하지 않은 PDF입니다.")
+
+    # 임시 파일로 저장 후 PyMuPDF 파싱
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = Path(tmp.name)
+
+        svc = PDFService(tmp_path)
+        if not svc.open():
+            raise HTTPException(500, "PDF 파싱 실패")
+
+        rules = get_rule_detector()
+        hits_by_page: dict[int, list] = {}
+
+        for i in range(svc.total_pages):
+            page: PageData = svc.extract_page(i)
+            if not page.text.strip():
+                continue
+            detections = rules.detect(page.text, page.page_number)
+            # 위반/주의만 포함 (허용 제외)
+            filtered = [
+                {
+                    "page":           d.page_number,
+                    "type":           d.detection_type.value,
+                    "content":        d.detected_text,
+                    "judgment":       d.verdict.value,   # "위반" | "주의" | "허용"
+                    "reason":         d.reason,
+                    "recommendation": d.recommendation,
+                    "confidence":     d.confidence,
+                    "source":         "rule",
+                }
+                for d in detections
+                if d.verdict.value in ("위반", "주의")
+            ]
+            if filtered:
+                hits_by_page[page.page_number] = filtered
+
+        svc.close()
+        logger.info(f"scan-text: {svc.total_pages}p → 위반/주의 {sum(len(v) for v in hits_by_page.values())}건")
+
+        return JSONResponse({
+            "success":      True,
+            "total_pages":  svc.total_pages,
+            "is_scanned":   svc.is_scanned,
+            "hits_by_page": hits_by_page,   # { "1": [...], "5": [...] }
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"scan-text 오류: {e}", exc_info=True)
+        raise HTTPException(500, f"텍스트 스캔 오류: {str(e)[:200]}")
+    finally:
+        if tmp_path and tmp_path.exists():
+            try: tmp_path.unlink()
+            except: pass
+
+
+
+
 @router.post("/logo-reference")
 async def upload_logo_reference(file: UploadFile = File(...)):
     """로고 레퍼런스 이미지 업로드 (PNG/JPEG, 최대 2MB)"""
