@@ -790,7 +790,8 @@ async function startVisionAnalysis() {
       const scanData = await scanRes.json();
       ruleHitsByPage = scanData.hits_by_page || {};
       const totalHits = Object.values(ruleHitsByPage).reduce((s, v) => s + v.length, 0);
-      setStep('scan', 'done', `규칙 탐지 ${totalHits}건`);
+      const ocrTag = scanData.ocr_used ? ' (OCR)' : '';
+      setStep('scan', 'done', `규칙 탐지 ${totalHits}건${ocrTag}`);
     } else {
       // 스캔 실패해도 Vision은 계속 진행
       setStep('scan', 'done', '텍스트 스캔 실패 (Vision만 진행)');

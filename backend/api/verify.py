@@ -335,6 +335,7 @@ async def scan_text(file: UploadFile = File(...)):
     """
     Vision 모드 전용.
     PDF를 받아 PyMuPDF로 텍스트 추출 + 사전/규칙 탐지 결과를 반환.
+    텍스트 레이어가 없는 이미지 스캔 PDF는 Tesseract OCR로 폴백.
     Claude Vision 결과와 합산하여 보수적 판정에 사용.
     """
     import io
@@ -363,12 +364,38 @@ async def scan_text(file: UploadFile = File(...)):
 
         rules = get_rule_detector()
         hits_by_page: dict[int, list] = {}
+        ocr_used = False
 
         for i in range(svc.total_pages):
             page: PageData = svc.extract_page(i)
-            if not page.text.strip():
+            page_text = page.text.strip()
+
+            # ── 텍스트 레이어가 없는 이미지 스캔 페이지 → Tesseract OCR 폴백 ──
+            if not page_text:
+                try:
+                    import fitz
+                    import pytesseract
+                    from PIL import Image
+                    import io as _io
+
+                    doc = fitz.open(str(tmp_path))
+                    pg  = doc[i]
+                    # 2배율 렌더링 (300dpi 수준)
+                    pix = pg.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                    img = Image.open(_io.BytesIO(pix.tobytes("png")))
+                    doc.close()
+
+                    page_text = pytesseract.image_to_string(img, lang="kor+eng")
+                    if page_text.strip():
+                        ocr_used = True
+                        logger.info(f"OCR 폴백: {page.page_number}p → {len(page_text)}자 추출")
+                except Exception as ocr_err:
+                    logger.warning(f"OCR 폴백 실패 p{page.page_number}: {ocr_err}")
+
+            if not page_text.strip():
                 continue
-            detections = rules.detect(page.text, page.page_number)
+
+            detections = rules.detect(page_text, page.page_number)
             # 위반/주의만 포함 (허용 제외)
             filtered = [
                 {
@@ -376,10 +403,10 @@ async def scan_text(file: UploadFile = File(...)):
                     "type":           d.detection_type.value,
                     "content":        d.detected_text,
                     "judgment":       d.verdict.value,   # "위반" | "주의" | "허용"
-                    "reason":         d.reason,
+                    "reason":         d.reason + (" [OCR]" if ocr_used else ""),
                     "recommendation": d.recommendation,
                     "confidence":     d.confidence,
-                    "source":         "rule",
+                    "source":         "ocr_rule" if ocr_used else "rule",
                 }
                 for d in detections
                 if d.verdict.value in ("위반", "주의")
@@ -388,12 +415,14 @@ async def scan_text(file: UploadFile = File(...)):
                 hits_by_page[page.page_number] = filtered
 
         svc.close()
-        logger.info(f"scan-text: {svc.total_pages}p → 위반/주의 {sum(len(v) for v in hits_by_page.values())}건")
+        total_hits = sum(len(v) for v in hits_by_page.values())
+        logger.info(f"scan-text: {svc.total_pages}p (ocr={ocr_used}) → 위반/주의 {total_hits}건")
 
         return JSONResponse({
             "success":      True,
             "total_pages":  svc.total_pages,
             "is_scanned":   svc.is_scanned,
+            "ocr_used":     ocr_used,
             "hits_by_page": hits_by_page,   # { "1": [...], "5": [...] }
         })
 
