@@ -183,7 +183,13 @@ class RuleDetector:
         for subcat, (dtype, verdict, reason, rec) in direct_map.items():
             for term in d.get("direct_identifiers", {}).get(subcat, []):
                 if not term or len(term) < 2: continue
-                for m in re.finditer(re.escape(term), text, re.I):
+                # 인력명·대표자명 2글자는 한글 단어 경계 매칭 (false positive 방지)
+                # 앞뒤에 한글이 붙어있으면 매칭 제외 (예: '국민은행'에서 '국민' 미탐지)
+                if subcat in ("personnel_names", "representative_names") and len(term) <= 2:
+                    pattern = r"(?<![가-힣])" + re.escape(term) + r"(?![가-힣])"
+                else:
+                    pattern = re.escape(term)
+                for m in re.finditer(pattern, text, re.I):
                     matched = m.group()
                     k = (matched[:60], dtype)
                     if k in seen: continue
