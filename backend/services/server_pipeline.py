@@ -244,7 +244,7 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
 
 def _build_report(job_id: str, filename: str, total_pages: int,
                   page_map: dict, elapsed: float) -> dict:
-    """page_map → VerificationReport dict"""
+    """page_map → VerificationReport dict (프론트엔드 호환)"""
     page_results = []
     for p in range(1, total_pages + 1):
         dets = page_map.get(p, [])
@@ -264,11 +264,11 @@ def _build_report(job_id: str, filename: str, total_pages: int,
     cc_total = sum(p["caution_count"]   for p in page_results)
     ac_total = sum(p["allowed_count"]   for p in page_results)
 
-    if vc_total >= 5:                 risk = "HIGH"
-    elif vc_total >= 1 or cc_total >= 5: risk = "MEDIUM"
-    else:                             risk = "LOW"
+    if vc_total >= 5:                      risk = "HIGH"
+    elif vc_total >= 1 or cc_total >= 5:   risk = "MEDIUM"
+    else:                                  risk = "LOW"
 
-    all_dets = [d for p in page_results for d in p["detections"]]
+    all_dets = [d for pr in page_results for d in pr["detections"]]
 
     def has_type(t):
         return any(t in d["detection_type"] and d["verdict"] == "위반" for d in all_dets)
@@ -277,19 +277,39 @@ def _build_report(job_id: str, filename: str, total_pages: int,
     notes.append("업체명 직접 노출 있음"  if has_type("업체") or has_type("회사") else "명확한 업체명 노출 없음")
     notes.append("참여인력 실명 노출 있음" if has_type("인력") or has_type("대표") else "참여인력 실명 없음")
     notes.append("이메일/URL 노출 있음"   if has_type("이메일") or has_type("URL") else "이메일/URL 없음")
-    if cc_total > 0: notes.append(f"간접 식별 가능 표현 {cc_total}건 발견")
+    if cc_total > 0:
+        notes.append(f"간접 식별 가능 표현 {cc_total}건 발견")
+
+    # 프론트엔드 대시보드용 flat items 배열
+    flat_items = []
+    for pr in page_results:
+        p_num = pr["page_number"]
+        for d in pr["detections"]:
+            flat_items.append({
+                "page":           p_num,
+                "type":           d.get("detection_type", "기타"),
+                "content":        d.get("detected_text", ""),
+                "judgment":       d.get("verdict", "주의"),
+                "reason":         d.get("reason", ""),
+                "recommendation": d.get("recommendation", ""),
+            })
 
     return {
-        "job_id":                   job_id,
-        "filename":                 filename,
-        "total_pages":              total_pages,
-        "processing_time_seconds":  elapsed,
-        "created_at":               datetime.now().isoformat(),
-        "risk_level":               risk,
-        "violation_count":          vc_total,
-        "caution_count":            cc_total,
-        "allowed_count":            ac_total,
-        "page_results":             page_results,
+        "job_id":                  job_id,
+        "filename":                filename,
+        "total_pages":             total_pages,
+        "page_count":              total_pages,
+        "processing_time_seconds": elapsed,
+        "elapsed_sec":             elapsed,
+        "created_at":              datetime.now().isoformat(),
+        "risk_level":              risk,
+        "violation_count":         vc_total,
+        "caution_count":           cc_total,
+        "allowed_count":           ac_total,
+        "_analysis_mode":          "server-pipeline",
+        "items":                   flat_items,
+        "summary_notes":           notes,
+        "page_results":            page_results,
         "summary": {
             "no_company_name": not (has_type("업체") or has_type("회사")),
             "no_personnel":    not (has_type("인력") or has_type("대표")),
@@ -300,7 +320,6 @@ def _build_report(job_id: str, filename: str, total_pages: int,
             "notes":           notes,
         },
     }
-
 
 def _load_logo_b64() -> Optional[str]:
     """저장된 로고 레퍼런스 이미지 로드"""

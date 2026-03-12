@@ -131,26 +131,19 @@
           </div>
         </div>
 
-        <!-- 분석 모드 토글 (간소화) -->
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center justify-between">
+        <!-- 분석 방식 안내 -->
+        <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <i class="fas fa-robot text-indigo-500 text-sm"></i>
-            <span class="text-sm font-medium text-slate-700">Claude AI 심층 분석</span>
-            <span id="claudeModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">비활성</span>
+            <i class="fas fa-server text-indigo-500 text-sm"></i>
+            <span class="text-sm font-medium text-slate-700">서버 자동 처리</span>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">
+              <i class="fas fa-robot mr-1"></i>Claude Vision AI
+            </span>
           </div>
-          <div class="flex items-center gap-2">
-            <div class="flex gap-1">
-              <button id="modeBtn-vision" onclick="setAnalysisMode('vision')"
-                      class="text-xs px-3 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition">
-                <i class="fas fa-eye mr-1"></i>Vision AI
-              </button>
-              <button id="modeBtn-rule" onclick="setAnalysisMode('rule')"
-                      class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 transition">
-                <i class="fas fa-list-check mr-1"></i>규칙만
-              </button>
-            </div>
-            <button onclick="showPage('admin')" class="text-xs text-indigo-600 hover:underline flex items-center gap-1">
-              <i class="fas fa-cog"></i> API 설정
+          <div class="flex items-center gap-2 text-xs text-slate-500">
+            <i class="fas fa-moon mr-1"></i>브라우저 닫아도 계속 처리
+            <button onclick="showPage('admin')" class="ml-2 text-indigo-600 hover:underline flex items-center gap-1">
+              <i class="fas fa-cog"></i> 설정
             </button>
           </div>
         </div>
@@ -248,35 +241,35 @@
         <!-- 처리 단계 -->
         <div id="processingSteps" class="space-y-2 mb-5">
           <div id="step-upload" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-upload">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-upload"></i>
             </div>
-            <span>검증 준비 (Vision 모드: 서버 파일 전송 없음)</span>
+            <span>PDF 서버 업로드</span>
             <span id="step-upload-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-scan" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-file-lines">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-file-lines"></i>
             </div>
-            <span id="step-scan-label">텍스트 추출 + 사전 규칙 탐지</span>
+            <span>텍스트 스캔 + 규칙 탐지</span>
             <span id="step-scan-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-render" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-image">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-image"></i>
             </div>
-            <span>PDF 페이지 이미지 렌더링 (PDF.js · <span class="text-indigo-500">×4 병렬</span>)</span>
+            <span>페이지 이미지 변환 (서버)</span>
             <span id="step-render-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-vision" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-robot">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-robot"></i>
             </div>
-            <span id="step-vision-label">Claude Vision AI 배치 분석 (<span class="text-indigo-500">×3 배치 병렬</span>)</span>
+            <span id="step-vision-label">Claude Vision AI 배치 분석</span>
             <span id="step-vision-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-report" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
-            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs" data-icon="fa-chart-bar">
+            <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-chart-bar"></i>
             </div>
             <span>결과 집계 및 리포트 생성</span>
@@ -284,16 +277,13 @@
           </div>
         </div>
 
-        <!-- 배치 진행 상황 -->
+        <!-- 배치 진행 상황 (숨김 유지) -->
         <div id="batchProgress" class="hidden">
-          <p class="text-xs text-slate-500 mb-2 font-medium">배치별 분석 현황</p>
-          <div id="batchList" class="space-y-1.5 max-h-48 overflow-y-auto"></div>
+          <div id="batchList"></div>
         </div>
 
-
-
         <p class="text-xs text-slate-400 mt-4 text-center">
-          <i class="fas fa-trash mr-1"></i>원본 파일은 검증 완료 즉시 삭제됩니다
+          <i class="fas fa-moon mr-1"></i>서버에서 처리 중입니다. 브라우저를 닫아도 계속 진행됩니다.
         </p>
       </div>
     </div>
@@ -1070,313 +1060,91 @@ async function applyVisionKey() {
 async function startVerification() {
   if (!state.selectedFile) return;
 
-  // ── 검증 시작 즉시 진행 상태 완전 초기화 ─────────────────────
-  // 이전 검증의 결과 화면 전환 타이머 취소 (재검증 시 타이밍 충돌 방지)
-  if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
-  setProgress(0, '');
-  ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
-  document.getElementById('batchList').innerHTML = '';
-  document.getElementById('batchProgress').classList.add('hidden');
-  const visionLabel = document.getElementById('step-vision-label');
-  if (visionLabel) visionLabel.innerHTML =
-    `Claude Vision AI 배치 분석 (<span class="text-indigo-500">×${BATCH_CONCURRENCY} 배치 병렬</span>)`;
-
-  const btn = document.getElementById('uploadBtn');
+  const file = state.selectedFile;
+  const btn  = document.getElementById('uploadBtn');
   btn.disabled = true;
   document.getElementById('uploadBtnText').textContent = '업로드 중…';
 
-  if (state.analysisMode === 'vision' && state.apiKeyApplied) {
-    await startVisionAnalysis();
-  } else {
-    await startRuleAnalysis();
-  }
-}
+  // 처리 화면으로 전환
+  document.getElementById('processingFileName').textContent = file.name;
+  setProgress(0, 'PDF 업로드 중…');
+  showPage('processing');
 
-// ─── Vision 분석 (PDF.js + Claude Vision API) ────────────────
-async function startVisionAnalysis() {
-  const file = state.selectedFile;
-  state.batchResults = [];
-  state.totalInputTokens  = 0;
-  state.totalOutputTokens = 0;
-
-  // ── 진행 상태 완전 초기화 ──────────────────────────────────
-  if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
-  setProgress(0, '');
-  ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
-  document.getElementById('batchList').innerHTML = '';
-  document.getElementById('batchProgress').classList.add('hidden');
-  // step 라벨 원복
-  document.getElementById('step-vision-label').innerHTML =
-    `Claude Vision AI 배치 분석 (<span class="text-indigo-500">×${BATCH_CONCURRENCY} 배치 병렬</span>)`;
-
-  // 1. job_id 발급 (Vision 모드: 파일 전송 없이 메타만 전송)
-  setStep('upload', 'active');
-  let jobId;
   try {
-    const res = await fetch('/api/verify/init-job', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ filename: file.name, file_size: file.size })
-    });
-    if (!res.ok) throw new Error((await res.json()).detail || 'job 생성 실패');
-    const data = await res.json();
-    jobId = data.job_id;
+    // ── 1. PDF 서버 업로드 ─────────────────────────────────
+    setProgress(3, 'PDF 서버에 업로드 중…');
+    const fd = new FormData();
+    fd.append('file', file);
+
+    const res = await fetch('/api/jobs/upload', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `업로드 실패 (HTTP ${res.status})`);
+    }
+    const data   = await res.json();
+    const jobId  = data.job_id;
     state.currentJobId = jobId;
     addRecentJob(jobId, file.name, file.size);
-  } catch(e) {
-    showToast('초기화 오류: ' + e.message, 'error');
-    resetUploadBtn(); return;
-  }
-  setStep('upload', 'done');
 
-  // 처리 화면으로 전환 — 화면 전환 직전에 한 번 더 초기화 (이전 결과 잔여 방지)
-  setProgress(0, '');
-  ['scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
-  document.getElementById('batchList').innerHTML = '';
-  document.getElementById('step-vision-label').innerHTML =
-    `Claude Vision AI 배치 분석 (<span class="text-indigo-500">×${BATCH_CONCURRENCY} 배치 병렬</span>)`;
-  document.getElementById('processingFileName').textContent = file.name;
-  showPage('processing');
-  document.getElementById('batchProgress').classList.remove('hidden');
+    setProgress(5, '서버에서 검증을 시작합니다…');
+    showToast('서버에서 검증이 시작됐습니다. 브라우저를 닫아도 계속 처리됩니다.', 'success');
 
-  // 2. 텍스트 추출 + 사전 규칙 탐지 (서버, PDF 1회 전송)
-  setStep('scan', 'active');
-  setProgress(8, '텍스트 추출 및 사전 규칙 탐지 중…');
-  let ruleHitsByPage = {};   // { "5": [{page,type,content,judgment,...}, ...] }
-  try {
-    const scanFd = new FormData();
-    scanFd.append('file', file);
-    const scanRes = await fetch('/api/verify/scan-text', { method: 'POST', body: scanFd });
-    if (scanRes.ok) {
-      const scanData = await scanRes.json();
-      ruleHitsByPage = scanData.hits_by_page || {};
-      const totalHits = Object.values(ruleHitsByPage).reduce((s, v) => s + v.length, 0);
-      const ocrTag = scanData.ocr_used ? ' (OCR)' : '';
-      setStep('scan', 'done', `규칙 탐지 ${totalHits}건${ocrTag}`);
-    } else {
-      // 스캔 실패해도 Vision은 계속 진행
-      setStep('scan', 'done', '텍스트 스캔 실패 (Vision만 진행)');
-    }
-  } catch(e) {
-    setStep('scan', 'done', '텍스트 스캔 오류 (Vision만 진행)');
-  }
-
-  // 3. PDF.js로 페이지 이미지 렌더링 (병렬 RENDER_CONCURRENCY=4)
-  setStep('render', 'active');
-  setProgress(10, 'PDF 페이지 이미지 렌더링 중…');
-  let pageImages;
-  let renderedCount = 0;
-  try {
-    pageImages = await pdfToImages(
-      state.pdfDoc || await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise,
-      (done, total) => {
-        renderedCount = done;
-        const pct = 10 + Math.round((done / total) * 10);
-        setProgress(pct, `페이지 렌더링 ${done}/${total} (병렬 ${RENDER_CONCURRENCY}개)…`);
-      }
-    );
-  } catch(e) {
-    showToast('PDF 렌더링 오류: ' + e.message, 'error');
-    await failJob(jobId, 'PDF 렌더링 실패'); return;
-  }
-  setStep('render', 'done', `${pageImages.length}페이지`);
-
-  // 3. 배치 분석 (병렬 BATCH_CONCURRENCY 개 동시 전송)
-  setStep('vision', 'active');
-  const batches = chunkArray(pageImages, PAGES_PER_BATCH);
-  const allItems = [];
-  const batchCount = batches.length;
-
-  // 배치 카드 미리 생성 (순서 유지)
-  batches.forEach((batch, bi) => {
-    addBatchCard(bi, batch[0].page, batch[batch.length-1].page, 'pending');
-  });
-  setProgress(20, `총 ${batchCount}개 배치 · 최대 ${BATCH_CONCURRENCY}개 동시 분석…`);
-  document.getElementById('step-vision-label').textContent =
-    `Claude Vision AI · 배치 ${batchCount}개 병렬 분석`;
-
-  // 슬라이딩 윈도우: BATCH_CONCURRENCY 개씩 묶어 Promise.all
-  let completedBatches = 0;
-  const batchResultsMap = new Array(batchCount).fill(null);
-
-  for (let wi = 0; wi < batchCount; wi += BATCH_CONCURRENCY) {
-    const window = batches.slice(wi, wi + BATCH_CONCURRENCY);
-
-    // 윈도우 내 모든 배치를 동시에 active 표시
-    window.forEach((_, localIdx) => {
-      const bi = wi + localIdx;
-      updateBatchCard(bi, 'processing', '분석 중…');
-    });
-
-    const windowResults = await Promise.allSettled(
-      window.map(async (batch, localIdx) => {
-        const bi = wi + localIdx;
-        try {
-          const items = await analyzeChunk(batch, ruleHitsByPage);
-          const vCount = items.filter(it => it.judgment === '위반').length;
-          const cCount = items.filter(it => it.judgment === '주의').length;
-          updateBatchCard(bi,
-            vCount > 0 ? 'done-warn' : (cCount > 0 ? 'done-warn' : 'done-ok'),
-            `위반 ${vCount}건 · 주의 ${cCount}건`);
-          return { bi, items };
-        } catch(e) {
-          console.error(`배치 ${bi+1} 오류:`, e);
-          updateBatchCard(bi, 'done-err', `오류: ${e.message?.slice(0,50)}`);
-          return { bi, items: [] };
-        }
-      })
-    );
-
-    // 결과 수집 (순서 보장)
-    windowResults.forEach(r => {
-      const { bi, items } = r.value || r.reason || { bi: wi, items: [] };
-      if (items) batchResultsMap[bi] = items;
-    });
-    completedBatches += window.length;
-
-    // 비용 / 진행률 업데이트
-    const pagesAnalyzed = Math.min(completedBatches * PAGES_PER_BATCH, pageImages.length);
-    state.totalInputTokens  = pagesAnalyzed * TOKENS_PER_IMAGE;
-    state.totalOutputTokens = completedBatches * TOKENS_OUTPUT_EST;
-    updateCostDisplay();
-
-    const pct = 20 + Math.round((completedBatches / batchCount) * 70);
-    setProgress(pct, `배치 ${completedBatches}/${batchCount} 완료…`);
-    document.getElementById('step-vision-label').textContent =
-      `Claude Vision AI · ${completedBatches}/${batchCount} 완료`;
-  }
-
-  // 순서대로 allItems 합산
-  batchResultsMap.forEach(items => { if (items) allItems.push(...items); });
-  setStep('vision', 'done', `${allItems.length}건 검출`);
-
-  // 4. 규칙 결과 + Vision 결과 보수적 합산
-  setStep('report', 'active');
-  setProgress(90, '규칙+Vision 보수적 합산 중…');
-  const mergedItems = mergeRuleAndVision(ruleHitsByPage, allItems);
-  const visionCount = allItems.length;
-  const ruleCount   = Object.values(ruleHitsByPage).reduce((s, v) => s + v.length, 0);
-  const numPages = state.pdfDoc?._pdfInfo?.numPages || pageImages.length;
-  const report = buildClientReport(jobId, file.name, pageImages.length, mergedItems, numPages);
-
-  setStep('report', 'done', `Vision ${visionCount}건 + 규칙 ${ruleCount}건 → ${mergedItems.length}건`);
-  setProgress(100, '검증 완료');
-
-  state.currentReport = report;
-  renderResult(report);
-  updateRecentJobStatus(jobId, 'completed');
-  // ✅ 저장함에 저장
-  saveReportToStorage(jobId, state.selectedFile?.name || report.filename || '', state.selectedFile?.size || 0, report);
-  // 대시보드가 열려있으면 해당 job 자동 선택하여 결과 표시
-  if (state.currentPage === 'dashboard') {
+    // ── 2. 대시보드로 이동하여 실시간 진행률 표시 ───────────
+    showPage('dashboard');
     _dbSelectedId = jobId;
     renderDashboard();
-    dbSelectDone(jobId);
-    return; // showPage('result') 대신 대시보드에서 표시
-  }
-  state.resultTimer = setTimeout(() => showPage('result'), 600);
-}
 
-// ─── Rule 분석 (기존 서버 파이프라인) ────────────────────────
-async function startRuleAnalysis() {
-  const file = state.selectedFile;
+    // 진행 중 카드 선택
+    dbSelectRunning(jobId, file.name);
 
-  // ── 진행 상태 완전 초기화 ──────────────────────────────────
-  setProgress(0, '');
-  ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
-  document.getElementById('batchList').innerHTML = '';
-  document.getElementById('batchProgress').classList.add('hidden');
+    // ── 3. SSE로 실시간 진행률 구독 ─────────────────────────
+    const sse = new EventSource(`/api/jobs/${jobId}/progress`);
+    sse.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.error) { sse.close(); return; }
 
-  const fd = new FormData();
-  fd.append('file', file);
+        // 대시보드 진행 패널 업데이트
+        const bar   = document.getElementById('db-procBar');
+        const msgEl = document.getElementById('db-procMsg');
+        const pctEl = document.getElementById('db-procPct');
+        if (bar)   bar.style.width   = (d.progress || 0) + '%';
+        if (msgEl) msgEl.textContent = d.message || '';
+        if (pctEl) pctEl.textContent = (d.progress || 0) + '%';
 
-  try {
-    const res = await fetch('/api/verify/upload', { method: 'POST', body: fd });
-    if (!res.ok) throw new Error((await res.json()).detail || '업로드 실패');
-    const data = await res.json();
-    state.currentJobId = data.job_id;
-    addRecentJob(data.job_id, file.name, file.size);
-    document.getElementById('processingFileName').textContent = file.name;
-    showPage('processing');
-    startPolling();
+        if (d.status === 'completed') {
+          sse.close();
+          // 완료 → 리포트 로드 후 카드 전환
+          fetch(`/api/jobs/${jobId}/report`)
+            .then(r => r.json())
+            .then(report => {
+              // localStorage에 저장
+              saveReportToStorage(jobId, file.name, file.size, report);
+              updateRecentJobStatus(jobId, 'completed');
+              renderDashboard();
+              dbSelectDone(jobId);
+            })
+            .catch(err => showToast('결과 로드 실패: ' + err.message, 'error'));
+        } else if (d.status === 'failed') {
+          sse.close();
+          updateRecentJobStatus(jobId, 'failed');
+          showToast('검증 실패: ' + (d.message || '알 수 없는 오류'), 'error');
+          renderDashboard();
+        }
+      } catch(e) { console.error('SSE 파싱 오류', e); }
+    };
+    sse.onerror = () => { sse.close(); };
+
   } catch(e) {
     showToast('오류: ' + e.message, 'error');
-    resetUploadBtn();
+    showPage('upload');
+  } finally {
+    btn.disabled = false;
+    document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
   }
 }
 
-function resetUploadBtn() {
-  const btn = document.getElementById('uploadBtn');
-  btn.disabled = false;
-  document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
-}
 
-async function failJob(jobId, msg) {
-  // 서버 작업 실패 처리 (폴링 불필요)
-  showToast('검증 실패: ' + msg, 'error');
-  setTimeout(() => { showPage('upload'); resetUploadBtn(); }, 2000);
-}
-
-// ─────────────────────────────────────────────────────────────
-// PDF.js 페이지 → JPEG base64 변환 (병렬 렌더링)
-// RENDER_CONCURRENCY 개 페이지를 동시에 렌더링 (세마포어 패턴)
-// ─────────────────────────────────────────────────────────────
-async function pdfToImages(pdfDoc, onPageDone) {
-  const total   = pdfDoc.numPages;
-  const results = new Array(total);
-
-  // 세마포어: 동시에 최대 RENDER_CONCURRENCY 개 페이지만 렌더링
-  let running = 0;
-  let nextIdx = 0;   // 1-based page number next to start
-
-  await new Promise((resolve, reject) => {
-    function tryLaunch() {
-      while (running < RENDER_CONCURRENCY && nextIdx < total) {
-        const pageNum = nextIdx + 1;  // 1-based
-        nextIdx++;
-        running++;
-
-        (async () => {
-          try {
-            const page   = await pdfDoc.getPage(pageNum);
-            const vp     = page.getViewport({ scale: RENDER_SCALE });
-            const canvas = document.createElement('canvas');
-            canvas.width  = vp.width;
-            canvas.height = vp.height;
-            const ctx = canvas.getContext('2d');
-            await page.render({ canvasContext: ctx, viewport: vp }).promise;
-            const b64 = canvas.toDataURL('image/jpeg', IMG_QUALITY).split(',')[1];
-            results[pageNum - 1] = { page: pageNum, b64, media_type: 'image/jpeg' };
-            // 메모리 해제
-            canvas.width = 0; canvas.height = 0;
-            if (onPageDone) onPageDone(pageNum, total);
-          } catch (e) {
-            reject(e);
-            return;
-          } finally {
-            running--;
-          }
-          if (nextIdx >= total && running === 0) {
-            resolve();
-          } else {
-            tryLaunch();
-          }
-        })();
-      }
-    }
-    tryLaunch();
-  });
-
-  return results;
-}
-
-// ─────────────────────────────────────────────────────────────
-// 규칙 탐지 + Vision 결과 보수적 합산
-// 원칙: 둘 중 더 강한 판정 채택 (위반 > 주의 > 허용)
-//   - 규칙이 위반인데 Vision이 허용 → 위반 유지
-//   - Vision이 위반인데 규칙에 없음 → 위반 추가
-//   - 규칙에만 있고 Vision에 없음 → 규칙 결과 그대로 포함
-// ─────────────────────────────────────────────────────────────
 function mergeRuleAndVision(ruleHitsByPage, visionItems) {
   const JUDGMENT_WEIGHT = { '위반': 2, '주의': 1, '허용': 0 };
 
