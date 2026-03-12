@@ -253,6 +253,7 @@ class AnalyzeImagesRequest(BaseModel):
     images: List[dict]           # [{"page": int, "b64": str, "media_type": "image/jpeg"}]
     logo_b64: Optional[str] = None    # 로고 레퍼런스 base64 (PNG)
     company_dict: Optional[dict] = None  # 회사 식별 사전 정보
+    rule_hits: Optional[dict] = None     # scan-text 결과 { "pageNum": [...] } — Claude 힌트용
 
 
 @router.post("/analyze-images")
@@ -286,17 +287,18 @@ async def analyze_images(req: AnalyzeImagesRequest):
             logger.warning(f"페이지 {img.get('page')} 이미지 크기 초과 → 잘라냄")
 
     try:
-        import asyncio
+        import asyncio, functools
         from concurrent.futures import ThreadPoolExecutor
         loop = asyncio.get_event_loop()
+        fn = functools.partial(
+            judge.judge_image_batch,
+            req.images,
+            req.logo_b64,
+            req.company_dict,
+            req.rule_hits,   # ← 텍스트 탐지 힌트 전달
+        )
         with ThreadPoolExecutor(max_workers=1) as ex:
-            items = await loop.run_in_executor(
-                ex,
-                judge.judge_image_batch,
-                req.images,
-                req.logo_b64,
-                req.company_dict,
-            )
+            items = await loop.run_in_executor(ex, fn)
         
         # 통계 계산
         violation_count = sum(1 for it in items if it.get("judgment") == "위반")

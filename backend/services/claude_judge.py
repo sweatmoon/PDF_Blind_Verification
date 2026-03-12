@@ -56,6 +56,18 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 ━━━ 반복 항목 처리 ━━━
 같은 로고·워터마크·하단 표기가 여러 페이지 반복되면 "p.5~12 하단 로고 반복"처럼 범위로 묶어라.
 
+━━━ 텍스트 추출 사전 탐지 결과 우선 처리 (매우 중요) ━━━
+각 페이지 이미지 앞에 "[텍스트 탐지 결과]"가 제공될 수 있다.
+- 텍스트 추출로 이미 "위반" 판정된 항목이 있는 페이지는 → 이미지 분석 결과와 무관하게 반드시 위반으로 출력하라
+- 텍스트로 감지된 실명(예: 서희명)이 있으면 해당 페이지는 무조건 위반으로 포함시켜라
+- 텍스트 탐지 결과가 없는 페이지도 이미지를 꼼꼼히 확인하라
+
+━━━ 절대 금지 사항 ━━━
+- 사전 실명 목록에 있는 이름이 이미지에서 보이면 절대 허용이나 생략 불가 — 반드시 위반으로 출력
+- "전반적으로 OOO 처리됐다"는 요약 판단 절대 금지 — 페이지를 하나씩 개별 확인하라
+- 배치 내 다른 페이지에 OOO이 있다고 해서 이 페이지도 익명처리됐다고 가정하지 말라
+- 사전 이름이 보이는 항목을 items에서 누락하거나 허용으로 분류하는 것은 오류다
+
 반드시 아래 JSON 형식으로만 반환하라. 다른 텍스트 절대 포함 금지:
 {
   "items": [
@@ -69,7 +81,7 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
     }
   ]
 }
-문제 없는 페이지는 포함하지 않아도 된다. 허용 항목은 포함하지 않아도 된다."""
+문제 없는 페이지는 포함하지 않아도 된다. 단, 텍스트 탐지에서 위반이 확인된 페이지는 반드시 포함하라."""
 
 
 class ClaudeVisionJudge:
@@ -129,9 +141,11 @@ class ClaudeVisionJudge:
         page_images: List[dict],   # [{"page": int, "b64": str, "media_type": str}, ...]
         logo_b64: Optional[str],   # 로고 레퍼런스 이미지 base64 (PNG)
         company_dict: Optional[dict] = None,  # 회사 사전 정보
+        rule_hits: Optional[dict] = None,      # 텍스트 추출 규칙 탐지 결과 { "pageNum": [...] }
     ) -> List[dict]:
         """
         페이지 이미지 배치를 Claude Vision으로 분석
+        rule_hits: scan-text 결과, 페이지별 규칙 탐지 항목 → 이미지 분석 힌트로 삽입
         반환: [{"page":"1~3","type":"업체명","content":"...","judgment":"위반","reason":"...","recommendation":"..."}]
         """
         if not page_images:
@@ -219,10 +233,27 @@ class ClaudeVisionJudge:
                     "text": "━━━ 제안사 식별 사전 (이 정보가 등장하면 즉시 위반) ━━━\n" + "\n".join(lines)
                 })
 
-        # 3. 페이지 이미지들 첨부
+        # 3. 페이지 이미지들 첨부 (각 페이지 앞에 텍스트 탐지 힌트 삽입)
         start_page = page_images[0]["page"]
         end_page   = page_images[-1]["page"]
         for pg in page_images:
+            page_key = str(pg["page"])
+            # 이 페이지에 대한 규칙 탐지 결과가 있으면 이미지 앞에 힌트 삽입
+            if rule_hits and page_key in rule_hits and rule_hits[page_key]:
+                hits = rule_hits[page_key]
+                violations = [h for h in hits if h.get("judgment") == "위반"]
+                cautions   = [h for h in hits if h.get("judgment") == "주의"]
+                hint_lines = [f"⚠️ [{pg['page']}페이지 텍스트 추출 탐지 결과 — 반드시 위반으로 판정할 것]"]
+                for h in violations:
+                    hint_lines.append(f"  【위반 확정】{h.get('type','')}: \"{h.get('content','')}\" → 반드시 위반으로 출력하라")
+                for h in cautions:
+                    hint_lines.append(f"  【주의 확정】{h.get('type','')}: \"{h.get('content','')}\" → 반드시 주의 이상으로 출력하라")
+                hint_lines.append("위 항목들은 텍스트 추출로 이미 확인된 사실이므로 이미지에서 보이지 않더라도 반드시 위반으로 포함시켜라.")
+                content.append({
+                    "type": "text",
+                    "text": "\n".join(hint_lines)
+                })
+
             content.append({
                 "type": "image",
                 "source": {
@@ -238,7 +269,7 @@ class ClaudeVisionJudge:
 
         content.append({
             "type": "text",
-            "text": f"페이지 {start_page}~{end_page}을 블라인드 검증하고 JSON만 반환하라."
+            "text": f"페이지 {start_page}~{end_page}을 블라인드 검증하고 JSON만 반환하라. 텍스트 탐지에서 위반이 확인된 페이지는 반드시 포함하라."
         })
 
         try:
