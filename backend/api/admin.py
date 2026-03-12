@@ -129,12 +129,13 @@ def delete_item(group: str, subcategory: str, item: str):
 def get_config():
     import core.config as cfg
     return JSONResponse({
-        "auto_delete_minutes": cfg.AUTO_DELETE_MIN,
-        "max_file_size_mb":    cfg.MAX_FILE_SIZE_MB,
-        "ocr_enabled":         cfg.OCR_ENABLED,
-        "claude_enabled":      cfg.CLAUDE_ENABLED,
-        "claude_model":        cfg.CLAUDE_MODEL,
-        "allowed_formats":     ["PDF"],
+        "auto_delete_minutes":      cfg.AUTO_DELETE_MIN,
+        "max_file_size_mb":         cfg.MAX_FILE_SIZE_MB,
+        "ocr_enabled":              cfg.OCR_ENABLED,
+        "claude_enabled":           cfg.CLAUDE_ENABLED,
+        "claude_model":             cfg.CLAUDE_MODEL,
+        "google_vision_configured": bool(cfg.get_google_vision_key()),
+        "allowed_formats":          ["PDF"],
     })
 
 

@@ -369,9 +369,9 @@ async def scan_text(file: UploadFile = File(...)):
         rules = get_rule_detector()
         gv_key = get_google_vision_key()
 
-        # ── 페이지별 텍스트/이미지 수집 ──────────────────────────
-        text_pages: dict[int, str] = {}   # 텍스트 레이어 존재 페이지
-        scan_pages: dict[int, bytes] = {} # 스캔 페이지 (OCR 필요)
+        # ── 1단계: 텍스트 레이어 있는 페이지 먼저 추출 ──────────────
+        text_pages: dict[int, str] = {}
+        scan_page_indices: list[int] = []  # 스캔 페이지 인덱스 목록만 수집
 
         for i in range(total_pages):
             page: PageData = svc.extract_page(i)
@@ -379,85 +379,129 @@ async def scan_text(file: UploadFile = File(...)):
             if txt:
                 text_pages[page.page_number] = txt
             else:
-                # 이미지 렌더링 (1× 배율 — 속도 우선, Google Vision은 저해상도도 충분)
-                doc = fitz.open(str(tmp_path))
-                pix = doc[i].get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
-                doc.close()
-                scan_pages[page.page_number] = pix.tobytes("jpeg")
+                scan_page_indices.append(i)  # 렌더링은 배치 처리 시 수행
 
         svc.close()
 
-        # ── OCR: Google Vision 배치 병렬 전송 ────────────────────
+        # ── 2단계: OCR — 배치 스트리밍 방식 (메모리 절약) ────────────
+        # 전체를 한 번에 메모리에 적재하지 않고 GV_BATCH(16) 단위로 렌더→OCR→버리기 반복
         ocr_results: dict[int, tuple[str, str]] = {}  # page_num → (text, engine)
+        GV_BATCH = 16
 
-        if scan_pages:
+        def render_page_jpeg(page_idx: int) -> bytes:
+            """단일 페이지를 JPEG bytes로 렌더링"""
+            doc = fitz.open(str(tmp_path))
+            pix = doc[page_idx].get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
+            doc.close()
+            return pix.tobytes("jpeg")
+
+        def gv_batch_request_direct(batch_items: list) -> dict:
+            """Google Vision 배치 요청 — [(page_num, jpeg_bytes), ...] 직접 수신"""
+            requests_payload = []
+            for _, jpeg_bytes in batch_items:
+                b64 = _b64.b64encode(jpeg_bytes).decode()
+                requests_payload.append({
+                    "image": {"content": b64},
+                    "features": [{"type": "TEXT_DETECTION"}]
+                })
+            body = _json.dumps({"requests": requests_payload}).encode()
+            req = _ur.Request(
+                f"https://vision.googleapis.com/v1/images:annotate?key={gv_key}",
+                data=body,
+                headers={"Content-Type": "application/json"}
+            )
+            with _ur.urlopen(req, timeout=60) as resp:
+                return _json.loads(resp.read())
+
+        if scan_page_indices:
+            loop = asyncio.get_event_loop()
+            # 배치 단위로 분할 (page_idx 기준)
+            idx_batches = [
+                scan_page_indices[s:s+GV_BATCH]
+                for s in range(0, len(scan_page_indices), GV_BATCH)
+            ]
+            tesseract_page_nums: list[int] = []
+
             if gv_key:
-                # Google Vision: 최대 16장 배치 병렬 전송
-                GV_BATCH = 16
-                page_nums = list(scan_pages.keys())
-                batches = [page_nums[i:i+GV_BATCH] for i in range(0, len(page_nums), GV_BATCH)]
+                # ── Google Vision: 배치별 순차 처리 (메모리 peak 최소화) ──
+                # 병렬 전송 원할 시 max_workers를 늘릴 수 있으나 메모리 트레이드오프 존재
+                with ThreadPoolExecutor(max_workers=min(3, len(idx_batches))) as pool:
+                    # 각 배치를 (page_num, jpeg_bytes) 쌍 리스트로 렌더링 후 즉시 전송
+                    async def process_gv_batch(idx_list: list[int]):
+                        """렌더링 + GV 전송을 하나의 배치로 처리"""
+                        # 렌더링 (스레드 풀)
+                        render_tasks = [
+                            loop.run_in_executor(pool, render_page_jpeg, idx)
+                            for idx in idx_list
+                        ]
+                        jpeg_list = await asyncio.gather(*render_tasks, return_exceptions=True)
 
-                def gv_batch_request(batch_pnums: list) -> dict:
-                    """Google Vision 배치 요청 (동기, 스레드 실행)"""
-                    requests_payload = []
-                    for pnum in batch_pnums:
-                        b64 = _b64.b64encode(scan_pages[pnum]).decode()
-                        requests_payload.append({
-                            "image": {"content": b64},
-                            "features": [{"type": "TEXT_DETECTION"}]
-                        })
-                    body = _json.dumps({"requests": requests_payload}).encode()
-                    req = _ur.Request(
-                        f"https://vision.googleapis.com/v1/images:annotate?key={gv_key}",
-                        data=body,
-                        headers={"Content-Type": "application/json"}
-                    )
-                    with _ur.urlopen(req, timeout=30) as resp:
-                        return _json.loads(resp.read())
+                        # page_num = idx + 1 (1-based)
+                        batch_items = []
+                        fallback = []
+                        for idx, jpeg in zip(idx_list, jpeg_list):
+                            pnum = idx + 1
+                            if isinstance(jpeg, Exception):
+                                logger.warning(f"렌더링 실패 p{pnum}: {jpeg}")
+                                fallback.append(pnum)
+                            else:
+                                batch_items.append((pnum, jpeg))
 
-                loop = asyncio.get_event_loop()
-                gv_failed_pages: list[int] = []
+                        if not batch_items:
+                            return fallback
 
-                with ThreadPoolExecutor(max_workers=min(4, len(batches))) as pool:
-                    tasks = [
-                        loop.run_in_executor(pool, gv_batch_request, batch)
-                        for batch in batches
-                    ]
-                    try:
-                        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-                    except Exception:
-                        batch_results = []
+                        # Google Vision 전송 (스레드 풀)
+                        try:
+                            result = await loop.run_in_executor(
+                                pool, gv_batch_request_direct, batch_items
+                            )
+                        except Exception as e:
+                            logger.warning(f"Google Vision 배치 실패: {e}")
+                            return [pnum for pnum, _ in batch_items] + fallback
 
-                for batch_idx, (batch_pnums, result) in enumerate(zip(batches, batch_results)):
-                    if isinstance(result, Exception):
-                        logger.warning(f"Google Vision 배치 {batch_idx} 실패: {result}")
-                        gv_failed_pages.extend(batch_pnums)
-                        continue
-                    for pnum, resp in zip(batch_pnums, result.get("responses", [])):
-                        err = resp.get("error")
-                        if err:
-                            logger.warning(f"Google Vision p{pnum} 오류: {err}")
-                            gv_failed_pages.append(pnum)
-                            continue
-                        txt = resp.get("fullTextAnnotation", {}).get("text", "")
-                        if txt.strip():
-                            ocr_results[pnum] = (txt, "google_vision")
-                        else:
-                            gv_failed_pages.append(pnum)
+                        failed = list(fallback)
+                        for (pnum, _), resp in zip(batch_items, result.get("responses", [])):
+                            err = resp.get("error")
+                            if err:
+                                logger.warning(f"Google Vision p{pnum} 오류: {err}")
+                                failed.append(pnum)
+                                continue
+                            txt = resp.get("fullTextAnnotation", {}).get("text", "")
+                            if txt.strip():
+                                ocr_results[pnum] = (txt, "google_vision")
+                            else:
+                                failed.append(pnum)
+                        return failed
 
-                # Google Vision 실패/빈 페이지 → Tesseract 폴백 병렬 처리
-                tesseract_pages = [p for p in gv_failed_pages if p not in ocr_results]
+                    # 배치를 병렬로 실행 (동시 최대 3배치 = 48페이지)
+                    batch_tasks = [process_gv_batch(batch) for batch in idx_batches]
+                    batch_failed_lists = await asyncio.gather(*batch_tasks)
+                    for failed_list in batch_failed_lists:
+                        tesseract_page_nums.extend(failed_list)
             else:
                 # Google Vision 키 없음 → 전체 Tesseract
-                tesseract_pages = list(scan_pages.keys())
+                tesseract_page_nums = [idx + 1 for idx in scan_page_indices]
 
-            if tesseract_pages:
+            # ── Tesseract 폴백 ─────────────────────────────────────────
+            if tesseract_page_nums:
+                # Tesseract는 이미지가 필요하므로 해당 페이지만 렌더링
+                scan_pages_tess: dict[int, bytes] = {}
+                with ThreadPoolExecutor(max_workers=min(4, len(tesseract_page_nums))) as pool:
+                    render_tasks = [
+                        loop.run_in_executor(pool, render_page_jpeg, pnum - 1)
+                        for pnum in tesseract_page_nums
+                    ]
+                    rendered = await asyncio.gather(*render_tasks, return_exceptions=True)
+                for pnum, jpeg in zip(tesseract_page_nums, rendered):
+                    if not isinstance(jpeg, Exception):
+                        scan_pages_tess[pnum] = jpeg
+
                 def tesseract_ocr(pnum: int) -> tuple[int, str]:
                     try:
                         import pytesseract
                         from PIL import Image
                         import io as _io2
-                        img = Image.open(_io2.BytesIO(scan_pages[pnum]))
+                        img = Image.open(_io2.BytesIO(scan_pages_tess[pnum]))
                         txt = pytesseract.image_to_string(img, lang="kor+eng")
                         return pnum, txt
                     except Exception as e:
@@ -465,12 +509,10 @@ async def scan_text(file: UploadFile = File(...)):
                         return pnum, ""
 
                 loop = asyncio.get_event_loop()
-                # CPU 코어 수에 맞춰 병렬 처리 (최대 4)
-                max_workers = min(4, len(tesseract_pages))
-                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                with ThreadPoolExecutor(max_workers=min(4, len(scan_pages_tess))) as pool:
                     tess_tasks = [
                         loop.run_in_executor(pool, tesseract_ocr, pnum)
-                        for pnum in tesseract_pages
+                        for pnum in scan_pages_tess
                     ]
                     tess_results = await asyncio.gather(*tess_tasks)
 
