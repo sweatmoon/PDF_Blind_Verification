@@ -1,27 +1,17 @@
 {
   "direct_identifiers": {
-    "company_names": [
-      "한국ICT솔루션"
-    ],
+    "company_names": [],
     "english_names": [],
     "abbreviations": [],
-    "representative_names": [
-      "김철수"
-    ],
-    "personnel_names": [
-      "홍길동"
-    ],
+    "representative_names": [],
+    "personnel_names": [],
     "emails": [],
     "urls": [],
     "domains": [],
     "brand_names": []
   },
   "indirect_identifiers": {
-    "color_names": [
-      "ActivoRED",
-      "Samsung Blue",
-      "SK Red"
-    ],
+    "color_names": [],
     "solution_names": [],
     "slogans": [],
     "org_names": [],

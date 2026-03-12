@@ -1683,23 +1683,23 @@ async function addDictItem(group, subkey) {
   await addDictItems(group, subkey, terms);
 }
 
-// 실제 API 호출 (배열 처리)
+// 실제 API 호출 - terms 배열을 단일 요청으로 한 번에 전송 (race condition 방지)
 async function addDictItems(group, subkey, terms) {
   try {
-    // 병렬 전송
-    const results = await Promise.allSettled(
-      terms.map(term =>
-        fetch(`/api/admin/dictionary/${group}/${subkey}`, {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({term})
-        })
-      )
-    );
-    const ok    = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
-    const fail  = results.length - ok;
-    if (ok > 0)   showToast(`${ok}개 추가됨` + (fail ? ` (${fail}개 실패)` : ''), ok === results.length ? 'success' : 'info');
-    else          showToast('추가 실패', 'error');
+    const res = await fetch(`/api/admin/dictionary/${group}/${subkey}/batch`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({terms})
+    });
+    if (res.ok) {
+      const data = await res.json();
+      showToast(`${data.added}개 추가됨` + (data.skipped ? ` (${data.skipped}개 중복 건너뜀)` : ''), 'success');
+    } else {
+      showToast('추가 실패', 'error');
+    }
+    loadAdminData();
+  } catch(e) { showToast('오류: '+e.message, 'error'); }
+}
     loadAdminData();
   } catch(e) { showToast('오류: '+e.message, 'error'); }
 }

@@ -72,6 +72,40 @@ def add_item(group: str, subcategory: str, body: dict):
         group=group, subcategory=subcategory, items=[item], action="add"))
 
 
+# ── 배치 항목 추가 (다중 입력, race condition 없음) ────────────
+@router.post("/dictionary/{group}/{subcategory}/batch")
+def add_items_batch(group: str, subcategory: str, body: dict):
+    terms = body.get("terms", [])
+    if not terms or not isinstance(terms, list):
+        raise HTTPException(400, "terms 배열 필요")
+    clean = [str(t).strip() for t in terms if str(t).strip()]
+    if not clean:
+        raise HTTPException(400, "유효한 항목 없음")
+
+    valid_groups = {"direct_identifiers", "indirect_identifiers", "allowed_terms"}
+    if group not in valid_groups:
+        raise HTTPException(400, f"유효하지 않은 그룹: {group}")
+
+    data  = load_dict()
+    grp   = data.setdefault(group, {})
+    grp.setdefault(subcategory, [])
+    existing = set(grp[subcategory])
+
+    added = 0
+    for item in clean:
+        if item not in existing:
+            grp[subcategory].append(item)
+            existing.add(item)
+            added += 1
+
+    skipped = len(clean) - added
+    if not save_dict(data):
+        raise HTTPException(500, "사전 저장 실패")
+    get_rule_detector().reload()
+    return JSONResponse({"success": True, "added": added, "skipped": skipped,
+                         "total": len(grp[subcategory])})
+
+
 # ── 단일 항목 삭제 ────────────────────────────────────────────
 @router.delete("/dictionary/{group}/{subcategory}/{item:path}")
 def delete_item(group: str, subcategory: str, item: str):
