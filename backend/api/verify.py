@@ -374,19 +374,33 @@ async def scan_text(file: UploadFile = File(...)):
         rules = get_rule_detector()
         gv_key = get_google_vision_key()
 
+        # Google Vision 키 유무에 따라 OCR 처리 가능 페이지 수 결정
+        # Vision: ~0.7초/페이지 × 100p = ~70초, 타임아웃 여유
+        # Tesseract: ~10초/페이지 → 30페이지 제한
+        MAX_SCAN_PAGES = 100 if gv_key else 30
+
         # ── 1단계: 텍스트 레이어 있는 페이지 먼저 추출 ──────────────
+        # fitz 직접 사용 (PDFService 래퍼 반복 오버헤드 제거)
         text_pages: dict[int, str] = {}
-        scan_page_indices: list[int] = []  # 스캔 페이지 인덱스 목록만 수집
+        scan_page_indices: list[int] = []
 
+        fitz_doc = fitz.open(str(tmp_path))
         for i in range(total_pages):
-            page: PageData = svc.extract_page(i)
-            txt = page.text.strip()
+            txt = fitz_doc[i].get_text("text").strip()
             if txt:
-                text_pages[page.page_number] = txt
+                text_pages[i + 1] = txt  # page_num = 1-based
             else:
-                scan_page_indices.append(i)  # 렌더링은 배치 처리 시 수행
-
+                if len(scan_page_indices) < MAX_SCAN_PAGES:
+                    scan_page_indices.append(i)
+        fitz_doc.close()
         svc.close()
+
+        # 스캔 페이지 중 제한 초과분 계산
+        total_scan = sum(1 for i in range(total_pages)
+                         if not text_pages.get(i + 1))
+        ocr_skipped = max(0, total_scan - len(scan_page_indices))
+        if ocr_skipped > 0:
+            logger.warning(f"스캔 페이지 {total_scan}p 중 앞 {MAX_SCAN_PAGES}p만 OCR (나머지 {ocr_skipped}p 스킵)")
 
         # ── 2단계: OCR — 배치 스트리밍 방식 (메모리 절약) ────────────
         # 전체를 한 번에 메모리에 적재하지 않고 GV_BATCH(16) 단위로 렌더→OCR→버리기 반복
@@ -578,8 +592,9 @@ async def scan_text(file: UploadFile = File(...)):
         return JSONResponse({
             "success":      True,
             "total_pages":  total_pages,
-            "is_scanned":   bool(scan_pages),
+            "is_scanned":   bool(scan_page_indices) or bool(ocr_results),
             "ocr_used":     ocr_used,
+            "ocr_skipped":  ocr_skipped,
             "ocr_engine":   list(ocr_engines)[0] if len(ocr_engines) == 1 else list(ocr_engines),
             "hits_by_page": hits_by_page,
         })
