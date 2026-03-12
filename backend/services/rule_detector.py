@@ -79,20 +79,9 @@ class RuleDetector:
         return out
 
     # ── URL/도메인 ────────────────────────────────────────────
+    # 자동 검출 없음: URL/도메인 모두 사전 등록된 것만 검출 (_from_dict에서 처리)
     def _urls(self, text: str, page: int) -> list:
-        out, seen = [], set()
-        for m in list(_P["url"].finditer(text)) + list(_P["domain"].finditer(text)):
-            v = m.group().strip()
-            if v in seen or len(v) < 6: continue
-            seen.add(v)
-            if self._is_allowed(v): continue
-            out.append(DetectionResult(
-                page_number=page, detection_type=DetectionType.URL,
-                detected_text=v, verdict=VerdictType.VIOLATION,
-                reason="URL/도메인 노출 – 회사 웹사이트로 직접 식별 가능",
-                recommendation="URL·도메인 삭제 또는 마스킹",
-                confidence=0.93, source="rule"))
-        return out
+        return []
 
     # ── 사업자번호 ────────────────────────────────────────────
     def _biz_numbers(self, text: str, page: int) -> list:
