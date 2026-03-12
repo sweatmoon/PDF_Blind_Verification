@@ -26,7 +26,7 @@ def _load_key_file(path: Path) -> str:
         return ""
 
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "") or _load_key_file(_CLAUDE_KEY_FILE)
-MAX_FILE_SIZE_MB   = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
+MAX_FILE_SIZE_MB   = int(os.getenv("MAX_FILE_SIZE_MB", "300"))
 AUTO_DELETE_MIN    = int(os.getenv("AUTO_DELETE_MIN", "30"))
 OCR_ENABLED        = os.getenv("OCR_ENABLED", "true").lower() == "true"
 CLAUDE_ENABLED     = bool(ANTHROPIC_API_KEY)

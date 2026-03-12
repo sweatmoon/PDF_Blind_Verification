@@ -30,8 +30,12 @@ _thumb_cache: dict[str, dict] = {}
 router = APIRouter()
 logger = get_logger("verify_api")
 
-MAX_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024  # 1MB 청크
+
+def _max_bytes() -> int:
+    """런타임에 config 값을 읽어 반환 (관리자 변경 즉시 반영)"""
+    from core.config import MAX_FILE_SIZE_MB as _MB
+    return _MB * 1024 * 1024
 
 
 # ── 업로드 & 검증 시작 ─────────────────────────────────────────
@@ -59,8 +63,9 @@ async def upload_and_verify(request: Request,
             if not chunk:
                 break
             total_size += len(chunk)
-            if total_size > MAX_BYTES:
-                raise HTTPException(413, f"파일 크기 초과 (최대 {MAX_FILE_SIZE_MB}MB)")
+            if total_size > _max_bytes():
+                from core.config import MAX_FILE_SIZE_MB as _MB
+                raise HTTPException(413, f"파일 크기 초과 (최대 {_MB}MB)")
             chunks.append(chunk)
             await asyncio.sleep(0)  # 이벤트루프 양보
         

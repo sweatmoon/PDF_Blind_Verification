@@ -23,7 +23,7 @@ module.exports = {
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
         CLAUDE_MODEL: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
         AUTO_DELETE_MIN: process.env.AUTO_DELETE_MIN || '30',
-        MAX_FILE_SIZE_MB: process.env.MAX_FILE_SIZE_MB || '100',
+        MAX_FILE_SIZE_MB: process.env.MAX_FILE_SIZE_MB || '300',
         OCR_ENABLED: process.env.OCR_ENABLED || 'true',
       },
       watch: false,
