@@ -123,76 +123,57 @@
           </div>
         </div>
 
-        <!-- Claude AI 설정 -->
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="font-semibold text-slate-700 flex items-center gap-2 text-sm">
-              <i class="fas fa-robot text-indigo-500"></i> Claude AI 심층 분석
-              <span id="claudeModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">비활성</span>
-            </h2>
-            <button onclick="toggleApiKeySection()" class="text-xs text-indigo-600 hover:underline">
-              <i id="apiKeyArrow" class="fas fa-chevron-down mr-1 transition-transform"></i>API 키 설정
-            </button>
+        <!-- 분석 모드 토글 (간소화) -->
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fas fa-robot text-indigo-500 text-sm"></i>
+            <span class="text-sm font-medium text-slate-700">Claude AI 심층 분석</span>
+            <span id="claudeModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">비활성</span>
           </div>
-
-          <!-- 설명 -->
-          <p class="text-xs text-slate-500 mb-3">
-            Claude <code class="bg-slate-100 px-1 rounded">claude-sonnet-4-20250514</code> Vision 모델이
-            PDF 페이지 이미지를 직접 분석합니다. 텍스트+이미지 통합 판정으로 정확도가 크게 향상됩니다.
-          </p>
-
-          <!-- API 키 입력 (접이식) -->
-          <div id="apiKeySection" class="hidden">
-            <div class="flex gap-2 mb-2">
-              <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..."
-                     class="flex-1 text-sm border border-slate-200 rounded px-3 py-2 focus:outline-none focus:border-indigo-400"
-                     oninput="updateApiKeyStatus()" onkeydown="if(event.key==='Enter') applyApiKey()" />
-              <button onclick="applyApiKey()" id="applyKeyBtn"
-                      class="text-xs bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition flex items-center gap-1">
-                <i class="fas fa-check"></i> 적용
+          <div class="flex items-center gap-2">
+            <div class="flex gap-1">
+              <button id="modeBtn-vision" onclick="setAnalysisMode('vision')"
+                      class="text-xs px-3 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition">
+                <i class="fas fa-eye mr-1"></i>Vision AI
+              </button>
+              <button id="modeBtn-rule" onclick="setAnalysisMode('rule')"
+                      class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 transition">
+                <i class="fas fa-list-check mr-1"></i>규칙만
               </button>
             </div>
-            <p id="apiKeyStatus" class="text-xs text-slate-400"></p>
-          </div>
-
-          <!-- 분석 모드 토글 -->
-          <div id="claudeModeSelect" class="mt-3 flex gap-2">
-            <button id="modeBtn-vision" onclick="setAnalysisMode('vision')"
-                    class="flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition">
-              <i class="fas fa-eye mr-1"></i>Vision AI (권장)
-            </button>
-            <button id="modeBtn-rule" onclick="setAnalysisMode('rule')"
-                    class="flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition">
-              <i class="fas fa-list-check mr-1"></i>규칙 기반만
+            <button onclick="showPage('admin')" class="text-xs text-indigo-600 hover:underline flex items-center gap-1">
+              <i class="fas fa-cog"></i> API 설정
             </button>
           </div>
         </div>
 
-        <!-- 로고 레퍼런스 이미지 -->
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <h2 class="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm">
-            <i class="fas fa-image text-amber-500"></i> 로고 레퍼런스 이미지
-            <span class="text-xs font-normal text-slate-400">(선택사항)</span>
-          </h2>
-          <p class="text-xs text-slate-500 mb-3">제안사의 공식 로고 이미지를 업로드하면 Claude가 문서 내 동일/유사 로고를 더 정확하게 탐지합니다.</p>
-
-          <div id="logoDropZone" class="logo-upload-zone"
-               onclick="document.getElementById('logoInput').click()"
-               ondrop="handleLogoDrop(event)" ondragover="e=>{e.preventDefault()}" >
-            <div id="logoPreviewArea">
-              <i class="fas fa-image text-2xl text-slate-300 mb-2"></i>
-              <p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>
+        <!-- 로고 레퍼런스 이미지 (간소화) -->
+        <div id="logoCardUpload" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <i class="fas fa-image text-amber-500 text-sm"></i>
+              <span class="text-sm font-medium text-slate-700">로고 레퍼런스</span>
+              <span class="text-xs text-slate-400">(선택사항)</span>
             </div>
-            <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.webp" class="hidden" onchange="handleLogoSelect(event)">
+            <div class="flex items-center gap-2">
+              <div id="logoInfo" class="hidden items-center gap-2 text-xs text-slate-500">
+                <i class="fas fa-check-circle text-green-500"></i>
+                <span id="logoFileName">-</span>
+                <button onclick="removeLogo()" class="text-red-400 hover:text-red-600 transition">
+                  <i class="fas fa-trash-alt"></i>
+                </button>
+              </div>
+              <button onclick="document.getElementById('logoInput').click()"
+                      class="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1.5 rounded-lg hover:bg-amber-100 transition">
+                <i class="fas fa-upload mr-1"></i>업로드
+              </button>
+            </div>
           </div>
-
-          <div id="logoInfo" class="hidden mt-2 flex items-center gap-2 text-xs text-slate-500">
-            <i class="fas fa-check-circle text-green-500"></i>
-            <span id="logoFileName">-</span>
-            <button onclick="removeLogo()" class="ml-auto text-red-400 hover:text-red-600 transition">
-              <i class="fas fa-trash-alt mr-1"></i>제거
-            </button>
+          <div id="logoPreviewArea" class="hidden mt-2 flex justify-center">
+            <!-- 미리보기 이미지가 여기 들어감 -->
           </div>
+          <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.webp" class="hidden" onchange="handleLogoSelect(event)">
+          <div id="logoDropZone" class="hidden"></div>
         </div>
 
         <!-- 검증 시작 버튼 -->
@@ -429,9 +410,105 @@
       <button onclick="showPage('upload')" class="text-slate-400 hover:text-slate-600 transition">
         <i class="fas fa-arrow-left"></i>
       </button>
-      <h2 class="font-bold text-slate-700">관리자 – 사전 관리</h2>
+      <h2 class="font-bold text-slate-700">관리자 설정</h2>
     </div>
 
+    <!-- ── API 키 설정 ────────────────────────────────────────── -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+
+      <!-- Claude AI API 키 -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <h3 class="font-semibold text-slate-700 mb-3 text-sm flex items-center gap-2">
+          <i class="fas fa-robot text-indigo-500"></i> Claude AI API 키
+          <span id="claudeModeBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">비활성</span>
+        </h3>
+        <p class="text-xs text-slate-500 mb-3">
+          Claude <code class="bg-slate-100 px-1 rounded">claude-sonnet-4-20250514</code> Vision 모델로
+          PDF 페이지를 직접 분석합니다. 정확도가 크게 향상됩니다.
+        </p>
+        <div class="flex gap-2 mb-2">
+          <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..."
+                 class="flex-1 text-sm border border-slate-200 rounded px-3 py-2 focus:outline-none focus:border-indigo-400"
+                 oninput="updateApiKeyStatus()" onkeydown="if(event.key==='Enter') applyApiKey()" />
+          <button onclick="applyApiKey()" id="applyKeyBtn"
+                  class="text-xs bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 transition flex items-center gap-1 whitespace-nowrap">
+            <i class="fas fa-check"></i> 적용
+          </button>
+        </div>
+        <p id="apiKeyStatus" class="text-xs text-slate-400"></p>
+        <!-- 분석 모드 토글 -->
+        <div class="mt-3 flex gap-2">
+          <button id="modeBtn-vision-admin" onclick="setAnalysisMode('vision')"
+                  class="flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition">
+            <i class="fas fa-eye mr-1"></i>Vision AI (권장)
+          </button>
+          <button id="modeBtn-rule-admin" onclick="setAnalysisMode('rule')"
+                  class="flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition">
+            <i class="fas fa-list-check mr-1"></i>규칙 기반만
+          </button>
+        </div>
+      </div>
+
+      <!-- Google Vision API 키 (OCR 가속) -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+        <h3 class="font-semibold text-slate-700 mb-3 text-sm flex items-center gap-2">
+          <i class="fab fa-google text-blue-500"></i> Google Vision API 키
+          <span id="visionKeyBadge" class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal">미설정</span>
+        </h3>
+        <p class="text-xs text-slate-500 mb-3">
+          이미지 스캔 PDF의 OCR 속도를 <strong>~11초 → ~1.5초/페이지</strong>로 단축합니다.
+          월 1,000페이지 무료 (이후 $1.5/1,000페이지).
+        </p>
+        <div class="flex gap-2 mb-2">
+          <input type="password" id="visionKeyInput" placeholder="AIzaSy..."
+                 class="flex-1 text-sm border border-slate-200 rounded px-3 py-2 focus:outline-none focus:border-blue-400"
+                 onkeydown="if(event.key==='Enter') applyVisionKey()" />
+          <button onclick="applyVisionKey()" id="applyVisionKeyBtn"
+                  class="text-xs bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition flex items-center gap-1 whitespace-nowrap">
+            <i class="fas fa-check"></i> 적용
+          </button>
+        </div>
+        <p id="visionKeyStatus" class="text-xs text-slate-400"></p>
+        <p class="text-xs text-slate-400 mt-2">
+          <i class="fas fa-info-circle mr-1"></i>
+          <a href="https://console.cloud.google.com/apis/api/vision.googleapis.com" target="_blank" class="text-blue-500 hover:underline">Google Cloud Console</a>
+          에서 Vision API 활성화 후 키 발급
+        </p>
+      </div>
+
+    </div>
+
+    <!-- ── 로고 레퍼런스 이미지 ────────────────────────────────── -->
+    <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-4">
+      <h3 class="font-semibold text-slate-700 mb-3 text-sm flex items-center gap-2">
+        <i class="fas fa-image text-amber-500"></i> 로고 레퍼런스 이미지
+        <span class="text-xs font-normal text-slate-400">(선택사항)</span>
+      </h3>
+      <p class="text-xs text-slate-500 mb-3">제안사의 공식 로고 이미지를 업로드하면 Claude가 문서 내 동일/유사 로고를 더 정확하게 탐지합니다.</p>
+      <div class="flex items-start gap-4">
+        <div id="logoDropZone" class="logo-upload-zone flex-shrink-0 w-48"
+             onclick="document.getElementById('logoInputAdmin').click()"
+             ondrop="handleLogoDrop(event)" ondragover="e=>{e.preventDefault()}" >
+          <div id="logoPreviewArea">
+            <i class="fas fa-image text-2xl text-slate-300 mb-2"></i>
+            <p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>
+          </div>
+          <input type="file" id="logoInputAdmin" accept=".png,.jpg,.jpeg,.webp" class="hidden" onchange="handleLogoSelectAdmin(event)">
+        </div>
+        <div class="flex-1">
+          <div id="logoInfoAdmin" class="hidden flex items-center gap-2 text-xs text-slate-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+            <i class="fas fa-check-circle text-green-500"></i>
+            <span id="logoFileNameAdmin">-</span>
+            <button onclick="removeLogo()" class="ml-auto text-red-400 hover:text-red-600 transition">
+              <i class="fas fa-trash-alt mr-1"></i>제거
+            </button>
+          </div>
+          <p class="text-xs text-slate-400 mt-2">업로드된 로고는 현재 세션에서만 유지됩니다.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 사전 관리 ─────────────────────────────────────────── -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
         <h3 class="font-semibold text-red-600 mb-3 text-sm flex items-center gap-2">
@@ -598,6 +675,10 @@ function handleLogoSelect(e) {
   const file = e.target.files[0];
   if (file) uploadLogo(file);
 }
+function handleLogoSelectAdmin(e) {
+  const file = e.target.files[0];
+  if (file) uploadLogo(file);
+}
 
 async function uploadLogo(file) {
   if (file.size > 2 * 1024 * 1024) {
@@ -636,25 +717,55 @@ async function uploadLogo(file) {
 }
 
 function _renderLogoPreview(dataUrl, filename, sizeStr) {
-  document.getElementById('logoPreviewArea').innerHTML =
-    `<img src="${dataUrl}" class="logo-preview mx-auto mb-1" />
+  // 업로드 페이지 로고 카드 (간소화)
+  const uploadPreview = document.getElementById('logoPreviewArea');
+  if (uploadPreview) {
+    uploadPreview.innerHTML = `<img src="${dataUrl}" style="max-height:60px;max-width:140px;object-fit:contain;" />`;
+    uploadPreview.classList.remove('hidden');
+  }
+  const logoInfo = document.getElementById('logoInfo');
+  if (logoInfo) {
+    logoInfo.classList.remove('hidden');
+    logoInfo.style.display = 'flex';
+  }
+  const logoFileName = document.getElementById('logoFileName');
+  if (logoFileName) logoFileName.textContent = filename + (sizeStr ? ' (' + sizeStr + ')' : '');
+
+  // 관리자 페이지 로고 카드
+  const adminPreview = document.getElementById('logoPreviewArea');
+  if (adminPreview && adminPreview !== uploadPreview) {
+    adminPreview.innerHTML = `<img src="${dataUrl}" class="logo-preview mx-auto mb-1" />
      <p class="text-xs text-green-600 font-medium">로고 준비됨</p>`;
-  document.getElementById('logoInfo').classList.remove('hidden');
-  document.getElementById('logoFileName').textContent = filename + (sizeStr ? ' (' + sizeStr + ')' : '');
+  }
+  const logoInfoAdmin = document.getElementById('logoInfoAdmin');
+  if (logoInfoAdmin) {
+    logoInfoAdmin.classList.remove('hidden');
+    logoInfoAdmin.style.display = 'flex';
+  }
+  const logoFileNameAdmin = document.getElementById('logoFileNameAdmin');
+  if (logoFileNameAdmin) logoFileNameAdmin.textContent = filename + (sizeStr ? ' (' + sizeStr + ')' : '');
 }
 
 function removeLogo() {
   state.logoId = null;
   state.logoB64 = null;
   state.logoFileName = null;
-  // ✅ localStorage에서도 제거
   localStorage.removeItem('logoDataUrl');
   localStorage.removeItem('logoFileName');
-  document.getElementById('logoPreviewArea').innerHTML =
-    `<i class="fas fa-image text-2xl text-slate-300 mb-2"></i>
-     <p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>`;
-  document.getElementById('logoInfo').classList.add('hidden');
-  document.getElementById('logoInput').value = '';
+  // 관리자 페이지 로고 영역 초기화
+  const pa = document.getElementById('logoPreviewArea');
+  if (pa) pa.innerHTML = `<i class="fas fa-image text-2xl text-slate-300 mb-2"></i><p class="text-xs text-slate-400">PNG/JPEG · 최대 2MB</p>`;
+  // 업로드 페이지 로고 카드 초기화
+  const lp = document.getElementById('logoPreviewArea');
+  if (lp) { lp.innerHTML = ''; lp.classList.add('hidden'); }
+  const li = document.getElementById('logoInfo');
+  if (li) li.classList.add('hidden');
+  const lia = document.getElementById('logoInfoAdmin');
+  if (lia) lia.classList.add('hidden');
+  const inp = document.getElementById('logoInput');
+  if (inp) inp.value = '';
+  const inpa = document.getElementById('logoInputAdmin');
+  if (inpa) inpa.value = '';
   showToast('로고 레퍼런스가 제거되었습니다.', 'info');
 }
 
@@ -663,15 +774,23 @@ function removeLogo() {
 // ─────────────────────────────────────────────────────────────
 function setAnalysisMode(mode) {
   state.analysisMode = mode;
-  const vision = document.getElementById('modeBtn-vision');
-  const rule   = document.getElementById('modeBtn-rule');
-  if (mode === 'vision') {
-    vision.className = 'flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition';
-    rule.className   = 'flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition';
-  } else {
-    rule.className   = 'flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition';
-    vision.className = 'flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition';
-  }
+  // 업로드 페이지 버튼
+  const vision  = document.getElementById('modeBtn-vision');
+  const rule    = document.getElementById('modeBtn-rule');
+  // 관리자 페이지 버튼
+  const visionA = document.getElementById('modeBtn-vision-admin');
+  const ruleA   = document.getElementById('modeBtn-rule-admin');
+
+  const activeClass  = 'text-xs px-3 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition';
+  const inactiveClass= 'text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 transition';
+  const activeFull   = 'flex-1 text-xs py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 font-medium transition';
+  const inactiveFull = 'flex-1 text-xs py-2 rounded-lg border border-slate-200 bg-white text-slate-500 transition';
+
+  if (vision)  vision.className  = mode === 'vision' ? activeClass  : inactiveClass;
+  if (rule)    rule.className    = mode === 'rule'   ? activeClass  : inactiveClass;
+  if (visionA) visionA.className = mode === 'vision' ? activeFull   : inactiveFull;
+  if (ruleA)   ruleA.className   = mode === 'rule'   ? activeFull   : inactiveFull;
+
   if (state.totalPages > 0) showCostEstimate(state.totalPages);
 }
 
@@ -679,10 +798,9 @@ function setAnalysisMode(mode) {
 // Claude API 키
 // ─────────────────────────────────────────────────────────────
 function toggleApiKeySection() {
+  // 구버전 호환 (아직 참조될 수 있음)
   const s = document.getElementById('apiKeySection');
-  const arrow = document.getElementById('apiKeyArrow');
-  s.classList.toggle('hidden');
-  arrow.style.transform = s.classList.contains('hidden') ? '' : 'rotate(180deg)';
+  if (s) s.classList.toggle('hidden');
 }
 function updateApiKeyStatus() {
   const val = document.getElementById('apiKeyInput').value.trim();
@@ -708,18 +826,51 @@ async function applyApiKey() {
     });
     if (res.ok) {
       state.apiKeyApplied = true;
-      // ✅ localStorage에 영구 저장
       localStorage.setItem('claudeApiKey', key);
       document.getElementById('apiKeyStatus').textContent = '✓ 적용됨 – Claude Vision AI 활성화';
       document.getElementById('apiKeyStatus').className = 'text-xs text-green-600 font-medium';
-      document.getElementById('claudeModeBadge').textContent = '활성';
-      document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
+      ['claudeModeBadge'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.textContent = '활성'; el.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
+      });
       document.getElementById('claudeStatusBadge').classList.remove('hidden');
       document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
       showToast('Claude AI가 활성화되었습니다. (저장됨)', 'success');
     } else {
       const err = await res.json();
       showToast('API 키 오류: ' + (err.detail || ''), 'error');
+    }
+  } catch(e) {
+    showToast('서버 연결 오류: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-check"></i> 적용';
+  }
+}
+
+// ─── Google Vision API 키 ─────────────────────────────────────
+async function applyVisionKey() {
+  const key = document.getElementById('visionKeyInput').value.trim();
+  if (!key) { showToast('Google Vision API 키를 입력하세요.', 'error'); return; }
+  const btn = document.getElementById('applyVisionKeyBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner spinner"></i>';
+  try {
+    const res = await fetch('/api/admin/vision-key', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({api_key: key})
+    });
+    if (res.ok) {
+      localStorage.setItem('googleVisionKey', key);
+      const badge = document.getElementById('visionKeyBadge');
+      if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-normal'; }
+      document.getElementById('visionKeyStatus').textContent = '✓ 적용됨 – OCR 가속 활성화 (~1.5초/페이지)';
+      document.getElementById('visionKeyStatus').className = 'text-xs text-blue-600 font-medium';
+      showToast('Google Vision API 키가 적용되었습니다. OCR이 가속됩니다.', 'success');
+    } else {
+      const err = await res.json();
+      showToast('Vision 키 오류: ' + (err.detail || ''), 'error');
     }
   } catch(e) {
     showToast('서버 연결 오류: ' + e.message, 'error');
@@ -1658,12 +1809,33 @@ ${costLine}<b>검증일:</b> ${String(r.created_at||'').slice(0,19)}</p>
 // ─────────────────────────────────────────────────────────────
 async function loadAdminData() {
   try {
-    const [dictRes, cfgRes] = await Promise.all([
+    const [dictRes, cfgRes, visionKeyRes] = await Promise.all([
       fetch('/api/admin/dictionary'),
       fetch('/api/admin/config'),
+      fetch('/api/admin/vision-key'),
     ]);
-    const dict = await dictRes.json();
-    const cfg  = await cfgRes.json();
+    const dict     = await dictRes.json();
+    const cfg      = await cfgRes.json();
+    const vkStatus = visionKeyRes.ok ? await visionKeyRes.json() : {configured: false};
+
+    // Vision 키 상태 표시
+    const vkBadge = document.getElementById('visionKeyBadge');
+    const vkStatusEl = document.getElementById('visionKeyStatus');
+    const vkInput = document.getElementById('visionKeyInput');
+    if (vkBadge) {
+      if (vkStatus.configured) {
+        vkBadge.textContent = '활성';
+        vkBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-normal';
+        if (vkStatusEl) { vkStatusEl.textContent = `✓ 설정됨 (${vkStatus.masked || '***'}) – OCR 가속 활성화`; vkStatusEl.className = 'text-xs text-blue-600'; }
+        if (vkInput) vkInput.placeholder = '현재 설정됨 (변경하려면 새 키 입력)';
+      }
+    }
+
+    // localStorage에 저장된 Vision 키 자동 복원
+    const savedVisionKey = localStorage.getItem('googleVisionKey');
+    if (savedVisionKey && !vkStatus.configured) {
+      _autoReapplyVisionKey(savedVisionKey);
+    }
 
     renderDictGroup('directDictContent', dict.direct_identifiers, 'direct_identifiers', [
       ['company_names',        '업체명'],
@@ -1697,10 +1869,12 @@ async function loadAdminData() {
       ['최대 파일크기', `${cfg.max_file_size_mb}MB`],
       ['OCR',         cfg.ocr_enabled ? '활성' : '비활성'],
       ['Claude AI',   cfg.claude_enabled ? `활성 (${cfg.claude_model})` : '비활성'],
+      ['Google Vision OCR', vkStatus.configured ? '가속 활성' : 'Tesseract (기본)'],
     ];
     const sysColors = [null, null,
-      cfg.ocr_enabled   ? 'text-green-600' : 'text-slate-400',
+      cfg.ocr_enabled    ? 'text-green-600' : 'text-slate-400',
       cfg.claude_enabled ? 'text-green-600' : 'text-slate-400',
+      vkStatus.configured ? 'text-blue-600'  : 'text-slate-400',
     ];
     sysItems.forEach(([k, v], i) => {
       const d = document.createElement('div');
@@ -1714,6 +1888,22 @@ async function loadAdminData() {
       sysEl.appendChild(d);
     });
   } catch(e) { showToast('관리자 데이터 로드 실패', 'error'); }
+}
+
+async function _autoReapplyVisionKey(key) {
+  try {
+    const res = await fetch('/api/admin/vision-key', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({api_key: key})
+    });
+    if (res.ok) {
+      const badge = document.getElementById('visionKeyBadge');
+      if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-normal'; }
+      const statusEl = document.getElementById('visionKeyStatus');
+      if (statusEl) { statusEl.textContent = '✓ 저장된 키 자동 적용됨 – OCR 가속 활성화'; statusEl.className = 'text-xs text-blue-600'; }
+    }
+  } catch(e) { console.warn('Vision 키 자동 재적용 실패:', e); }
 }
 
 function esc(str) {
@@ -2058,18 +2248,29 @@ document.addEventListener('DOMContentLoaded', async () => {
       const cfg = await res.json();
       if (cfg.claude_enabled) {
         state.apiKeyApplied = true;
-        document.getElementById('claudeModeBadge').textContent = '활성';
-        document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
+        const badge = document.getElementById('claudeModeBadge');
+        if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
         document.getElementById('claudeStatusBadge').classList.remove('hidden');
         document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
-        document.getElementById('apiKeyStatus').textContent = '✓ Claude AI 이미 활성화됨';
-        document.getElementById('apiKeyStatus').className = 'text-xs text-green-600';
+        const apiKeyStatusEl = document.getElementById('apiKeyStatus');
+        if (apiKeyStatusEl) { apiKeyStatusEl.textContent = '✓ Claude AI 이미 활성화됨'; apiKeyStatusEl.className = 'text-xs text-green-600'; }
       } else if (savedKey) {
-        // 서버엔 비활성이지만 저장된 키가 있으면 자동 재적용
         _autoReapplyKey(savedKey);
       }
     }
   } catch(e) {}
+
+  // 저장된 Google Vision 키 자동 복원
+  const savedVisionKey = localStorage.getItem('googleVisionKey');
+  if (savedVisionKey) {
+    try {
+      const vkRes = await fetch('/api/admin/vision-key');
+      const vkStatus = vkRes.ok ? await vkRes.json() : {configured: false};
+      if (!vkStatus.configured) {
+        _autoReapplyVisionKey(savedVisionKey);
+      }
+    } catch(e) {}
+  }
 });
 
 // 저장된 키 자동 재적용 (서버 재시작 후)
@@ -2082,12 +2283,12 @@ async function _autoReapplyKey(key) {
     });
     if (res.ok) {
       state.apiKeyApplied = true;
-      document.getElementById('claudeModeBadge').textContent = '활성';
-      document.getElementById('claudeModeBadge').className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal';
+      const badge = document.getElementById('claudeModeBadge');
+      if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
       document.getElementById('claudeStatusBadge').classList.remove('hidden');
       document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
-      document.getElementById('apiKeyStatus').textContent = '✓ 저장된 키 자동 적용됨';
-      document.getElementById('apiKeyStatus').className = 'text-xs text-green-600';
+      const apiKeyStatusEl = document.getElementById('apiKeyStatus');
+      if (apiKeyStatusEl) { apiKeyStatusEl.textContent = '✓ 저장된 키 자동 적용됨'; apiKeyStatusEl.className = 'text-xs text-green-600'; }
       showToast('저장된 Claude API 키가 자동으로 적용되었습니다.', 'success');
     }
   } catch(e) {

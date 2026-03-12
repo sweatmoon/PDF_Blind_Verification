@@ -335,14 +335,18 @@ async def scan_text(file: UploadFile = File(...)):
     """
     Vision 모드 전용.
     PDF를 받아 PyMuPDF로 텍스트 추출 + 사전/규칙 탐지 결과를 반환.
-    텍스트 레이어가 없는 이미지 스캔 PDF는 Tesseract OCR로 폴백.
+    텍스트 레이어가 없는 이미지 스캔 PDF:
+      1순위: Google Vision API (빠름, ~0.7초/페이지, 배치 병렬 전송)
+      2순위: Tesseract OCR 폴백 (CPU 병렬, ~7초/페이지 → 동시처리로 단축)
     Claude Vision 결과와 합산하여 보수적 판정에 사용.
     """
-    import io
+    import io, fitz, base64 as _b64, json as _json, asyncio, time
+    import urllib.request as _ur
+    from concurrent.futures import ThreadPoolExecutor
     from services.pdf_service import PDFService, PageData
     from services.rule_detector import get_rule_detector
     from pathlib import Path
-    import tempfile, os
+    import tempfile
 
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(400, "PDF 파일만 지원합니다.")
@@ -351,7 +355,6 @@ async def scan_text(file: UploadFile = File(...)):
     if len(data) < 100 or not data[:5].startswith(b"%PDF-"):
         raise HTTPException(400, "유효하지 않은 PDF입니다.")
 
-    # 임시 파일로 저장 후 PyMuPDF 파싱
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -362,68 +365,176 @@ async def scan_text(file: UploadFile = File(...)):
         if not svc.open():
             raise HTTPException(500, "PDF 파싱 실패")
 
+        total_pages = svc.total_pages
         rules = get_rule_detector()
-        hits_by_page: dict[int, list] = {}
-        ocr_used = False
+        gv_key = _cfg.get_google_vision_key()
 
-        for i in range(svc.total_pages):
+        # ── 페이지별 텍스트/이미지 수집 ──────────────────────────
+        text_pages: dict[int, str] = {}   # 텍스트 레이어 존재 페이지
+        scan_pages: dict[int, bytes] = {} # 스캔 페이지 (OCR 필요)
+
+        for i in range(total_pages):
             page: PageData = svc.extract_page(i)
-            page_text = page.text.strip()
+            txt = page.text.strip()
+            if txt:
+                text_pages[page.page_number] = txt
+            else:
+                # 이미지 렌더링 (1× 배율 — 속도 우선, Google Vision은 저해상도도 충분)
+                doc = fitz.open(str(tmp_path))
+                pix = doc[i].get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
+                doc.close()
+                scan_pages[page.page_number] = pix.tobytes("jpeg")
 
-            # ── 텍스트 레이어가 없는 이미지 스캔 페이지 → Tesseract OCR 폴백 ──
-            if not page_text:
-                try:
-                    import fitz
-                    import pytesseract
-                    from PIL import Image
-                    import io as _io
+        svc.close()
 
-                    doc = fitz.open(str(tmp_path))
-                    pg  = doc[i]
-                    # 2배율 렌더링 (300dpi 수준)
-                    pix = pg.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                    img = Image.open(_io.BytesIO(pix.tobytes("png")))
-                    doc.close()
+        # ── OCR: Google Vision 배치 병렬 전송 ────────────────────
+        ocr_results: dict[int, tuple[str, str]] = {}  # page_num → (text, engine)
 
-                    page_text = pytesseract.image_to_string(img, lang="kor+eng")
-                    if page_text.strip():
-                        ocr_used = True
-                        logger.info(f"OCR 폴백: {page.page_number}p → {len(page_text)}자 추출")
-                except Exception as ocr_err:
-                    logger.warning(f"OCR 폴백 실패 p{page.page_number}: {ocr_err}")
+        if scan_pages:
+            if gv_key:
+                # Google Vision: 최대 16장 배치 병렬 전송
+                GV_BATCH = 16
+                page_nums = list(scan_pages.keys())
+                batches = [page_nums[i:i+GV_BATCH] for i in range(0, len(page_nums), GV_BATCH)]
 
-            if not page_text.strip():
-                continue
+                def gv_batch_request(batch_pnums: list) -> dict:
+                    """Google Vision 배치 요청 (동기, 스레드 실행)"""
+                    requests_payload = []
+                    for pnum in batch_pnums:
+                        b64 = _b64.b64encode(scan_pages[pnum]).decode()
+                        requests_payload.append({
+                            "image": {"content": b64},
+                            "features": [{"type": "TEXT_DETECTION"}]
+                        })
+                    body = _json.dumps({"requests": requests_payload}).encode()
+                    req = _ur.Request(
+                        f"https://vision.googleapis.com/v1/images:annotate?key={gv_key}",
+                        data=body,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with _ur.urlopen(req, timeout=30) as resp:
+                        return _json.loads(resp.read())
 
-            detections = rules.detect(page_text, page.page_number)
-            # 위반/주의만 포함 (허용 제외)
+                loop = asyncio.get_event_loop()
+                gv_failed_pages: list[int] = []
+
+                with ThreadPoolExecutor(max_workers=min(4, len(batches))) as pool:
+                    tasks = [
+                        loop.run_in_executor(pool, gv_batch_request, batch)
+                        for batch in batches
+                    ]
+                    try:
+                        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                    except Exception:
+                        batch_results = []
+
+                for batch_idx, (batch_pnums, result) in enumerate(zip(batches, batch_results)):
+                    if isinstance(result, Exception):
+                        logger.warning(f"Google Vision 배치 {batch_idx} 실패: {result}")
+                        gv_failed_pages.extend(batch_pnums)
+                        continue
+                    for pnum, resp in zip(batch_pnums, result.get("responses", [])):
+                        err = resp.get("error")
+                        if err:
+                            logger.warning(f"Google Vision p{pnum} 오류: {err}")
+                            gv_failed_pages.append(pnum)
+                            continue
+                        txt = resp.get("fullTextAnnotation", {}).get("text", "")
+                        if txt.strip():
+                            ocr_results[pnum] = (txt, "google_vision")
+                        else:
+                            gv_failed_pages.append(pnum)
+
+                # Google Vision 실패/빈 페이지 → Tesseract 폴백 병렬 처리
+                tesseract_pages = [p for p in gv_failed_pages if p not in ocr_results]
+            else:
+                # Google Vision 키 없음 → 전체 Tesseract
+                tesseract_pages = list(scan_pages.keys())
+
+            if tesseract_pages:
+                def tesseract_ocr(pnum: int) -> tuple[int, str]:
+                    try:
+                        import pytesseract
+                        from PIL import Image
+                        import io as _io2
+                        img = Image.open(_io2.BytesIO(scan_pages[pnum]))
+                        txt = pytesseract.image_to_string(img, lang="kor+eng")
+                        return pnum, txt
+                    except Exception as e:
+                        logger.warning(f"Tesseract p{pnum} 실패: {e}")
+                        return pnum, ""
+
+                loop = asyncio.get_event_loop()
+                # CPU 코어 수에 맞춰 병렬 처리 (최대 4)
+                max_workers = min(4, len(tesseract_pages))
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    tess_tasks = [
+                        loop.run_in_executor(pool, tesseract_ocr, pnum)
+                        for pnum in tesseract_pages
+                    ]
+                    tess_results = await asyncio.gather(*tess_tasks)
+
+                for pnum, txt in tess_results:
+                    if txt.strip():
+                        ocr_results[pnum] = (txt, "tesseract")
+
+        # ── 규칙 탐지 ─────────────────────────────────────────────
+        hits_by_page: dict[int, list] = {}
+        ocr_used   = bool(ocr_results)
+        ocr_engines = set(eng for _, eng in ocr_results.values())
+
+        # 텍스트 레이어 페이지
+        for pnum, txt in text_pages.items():
+            detections = rules.detect(txt, pnum)
             filtered = [
                 {
                     "page":           d.page_number,
                     "type":           d.detection_type.value,
                     "content":        d.detected_text,
-                    "judgment":       d.verdict.value,   # "위반" | "주의" | "허용"
-                    "reason":         d.reason + (" [OCR]" if ocr_used else ""),
+                    "judgment":       d.verdict.value,
+                    "reason":         d.reason,
                     "recommendation": d.recommendation,
                     "confidence":     d.confidence,
-                    "source":         "ocr_rule" if ocr_used else "rule",
+                    "source":         "rule",
                 }
-                for d in detections
-                if d.verdict.value in ("위반", "주의")
+                for d in detections if d.verdict.value in ("위반", "주의")
             ]
             if filtered:
-                hits_by_page[page.page_number] = filtered
+                hits_by_page[pnum] = filtered
 
-        svc.close()
+        # OCR 페이지
+        for pnum, (txt, engine) in ocr_results.items():
+            detections = rules.detect(txt, pnum)
+            tag = f" [{engine}]"
+            filtered = [
+                {
+                    "page":           d.page_number,
+                    "type":           d.detection_type.value,
+                    "content":        d.detected_text,
+                    "judgment":       d.verdict.value,
+                    "reason":         d.reason + tag,
+                    "recommendation": d.recommendation,
+                    "confidence":     d.confidence,
+                    "source":         f"ocr_rule_{engine}",
+                }
+                for d in detections if d.verdict.value in ("위반", "주의")
+            ]
+            if filtered:
+                hits_by_page[pnum] = filtered
+
         total_hits = sum(len(v) for v in hits_by_page.values())
-        logger.info(f"scan-text: {svc.total_pages}p (ocr={ocr_used}) → 위반/주의 {total_hits}건")
+        logger.info(
+            f"scan-text: {total_pages}p (ocr={ocr_used}, engines={ocr_engines}) "
+            f"→ 위반/주의 {total_hits}건"
+        )
 
         return JSONResponse({
             "success":      True,
-            "total_pages":  svc.total_pages,
-            "is_scanned":   svc.is_scanned,
+            "total_pages":  total_pages,
+            "is_scanned":   bool(scan_pages),
             "ocr_used":     ocr_used,
-            "hits_by_page": hits_by_page,   # { "1": [...], "5": [...] }
+            "ocr_engine":   list(ocr_engines)[0] if len(ocr_engines) == 1 else list(ocr_engines),
+            "hits_by_page": hits_by_page,
         })
 
     except HTTPException:

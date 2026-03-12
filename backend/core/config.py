@@ -22,6 +22,16 @@ OCR_ENABLED        = os.getenv("OCR_ENABLED", "true").lower() == "true"
 CLAUDE_ENABLED     = bool(ANTHROPIC_API_KEY)
 CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
+# ── Google Vision API (런타임 설정 가능) ───────────────────────
+GOOGLE_VISION_API_KEY: str = os.getenv("GOOGLE_VISION_API_KEY", "")
+
+def set_google_vision_key(key: str):
+    global GOOGLE_VISION_API_KEY
+    GOOGLE_VISION_API_KEY = key.strip()
+
+def get_google_vision_key() -> str:
+    return GOOGLE_VISION_API_KEY
+
 # ── 로거 팩토리 ────────────────────────────────────────────────
 def get_logger(name: str) -> logging.Logger:
     lg = logging.getLogger(name)

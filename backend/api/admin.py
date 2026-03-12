@@ -169,6 +169,30 @@ def set_claude_key(req: ClaudeKeyRequest):
         raise HTTPException(500, f"Claude 초기화 실패: {e}")
 
 
+# ── Google Vision API 키 런타임 설정 ──────────────────────────
+class VisionKeyRequest(BaseModel):
+    api_key: str
+
+@router.post("/vision-key")
+def set_vision_key(req: VisionKeyRequest):
+    import core.config as cfg
+
+    api_key = req.api_key.strip()
+    if not api_key:
+        raise HTTPException(400, "API 키 필요")
+
+    cfg.set_google_vision_key(api_key)
+    logger.info("Google Vision API 키 런타임 업데이트 완료")
+    return JSONResponse({"success": True, "vision_enabled": True})
+
+@router.get("/vision-key")
+def get_vision_key_status():
+    import core.config as cfg
+    key = cfg.get_google_vision_key()
+    masked = (key[:8] + "…" + key[-4:]) if len(key) > 12 else ("설정됨" if key else "")
+    return JSONResponse({"configured": bool(key), "masked": masked})
+
+
 # ── 저장소 통계 ───────────────────────────────────────────────
 @router.get("/stats")
 def get_stats():
