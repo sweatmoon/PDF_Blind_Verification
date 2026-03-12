@@ -1,0 +1,53 @@
+{
+  "direct_identifiers": {
+    "company_names": [
+      "한국ICT솔루션"
+    ],
+    "english_names": [],
+    "abbreviations": [],
+    "representative_names": [
+      "김철수"
+    ],
+    "personnel_names": [
+      "홍길동"
+    ],
+    "emails": [],
+    "urls": [],
+    "domains": [],
+    "brand_names": []
+  },
+  "indirect_identifiers": {
+    "color_names": [
+      "ActivoRED",
+      "Samsung Blue",
+      "SK Red"
+    ],
+    "solution_names": [],
+    "slogans": [],
+    "org_names": [],
+    "service_names": []
+  },
+  "allowed_terms": {
+    "client_names": [],
+    "client_abbreviations": [],
+    "project_names": [],
+    "official_institutions": [
+      "행정안전부",
+      "과학기술정보통신부",
+      "기획재정부",
+      "국방부",
+      "교육부",
+      "국토교통부",
+      "보건복지부",
+      "환경부",
+      "고용노동부",
+      "한국도로공사",
+      "한국전력공사",
+      "한국수자원공사",
+      "한국토지주택공사",
+      "건강보험심사평가원",
+      "국민건강보험공단",
+      "국민연금공단"
+    ]
+  }
+}

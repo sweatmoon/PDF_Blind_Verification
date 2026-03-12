@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>입찰 제안서 블라인드 검증 서비스</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css"/>
+<style>
+  :root {
+    --primary: #1e40af;
+    --danger:  #dc2626;
+    --warn:    #d97706;
+    --ok:      #059669;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; background:#f1f5f9; }
+  .badge-violation { background:#fee2e2; color:#dc2626; border:1px solid #fca5a5; }
+  .badge-caution   { background:#fef3c7; color:#d97706; border:1px solid #fcd34d; }
+  .badge-allowed   { background:#d1fae5; color:#059669; border:1px solid #6ee7b7; }
+  .badge-high    { background:#dc2626; color:#fff; }
+  .badge-medium  { background:#d97706; color:#fff; }
+  .badge-low     { background:#059669; color:#fff; }
+  .card { background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .drop-zone {
+    border: 2px dashed #93c5fd;
+    border-radius: 16px;
+    transition: all .2s;
+    cursor: pointer;
+  }
+  .drop-zone.over { border-color: #1e40af; background:#eff6ff; }
+  .progress-bar { transition: width .4s ease; }
+  .tab-btn { transition: all .15s; border-bottom: 3px solid transparent; }
+  .tab-btn.active { border-color: #1e40af; color: #1e40af; font-weight:700; }
+  .det-row { border-left:4px solid transparent; }
+  .det-row.violation { border-color: #dc2626; }
+  .det-row.caution   { border-color: #d97706; }
+  .det-row.allowed   { border-color: #059669; }
+  .thumb-img { max-width:100%; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.15); }
+  .spinner { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .fade-in { animation: fadeIn .3s ease; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .sidebar { width:280px; min-width:280px; }
+  @media(max-width:768px){ .sidebar{width:100%;min-width:unset;} }
+  .dict-tag {
+    display:inline-flex; align-items:center; gap:4px;
+    background:#e0e7ff; color:#3730a3;
+    padding:3px 10px; border-radius:20px; font-size:12px; margin:3px;
+  }
+  .dict-tag button { background:none;border:none;cursor:pointer;color:#6366f1;font-size:11px;padding:0 2px; }
+  .dict-tag button:hover { color:#dc2626; }
+  #toast {
+    position:fixed; bottom:24px; right:24px; z-index:9999;
+    background:#1e293b; color:#fff; padding:12px 20px;
+    border-radius:10px; font-size:14px; display:none;
+    box-shadow:0 4px 12px rgba(0,0,0,.3);
+  }
+</style>
+</head>
+<body>
+
+<!-- 토스트 알림 -->
+<div id="toast"></div>
+
+<!-- 앱 컨테이너 -->
+<div id="app" class="min-h-screen">
+
+  <!-- 헤더 -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 bg-blue-700 rounded-lg flex items-center justify-center">
+          <i class="fas fa-shield-halved text-white text-sm"></i>
+        </div>
+        <div>
+          <h1 class="text-base font-bold text-slate-800 leading-tight">블라인드 검증 서비스</h1>
+          <p class="text-xs text-slate-500">공공입찰 제안서 블라인드 자동 검수</p>
+        </div>
+      </div>
+      <nav class="flex gap-1">
+        <button onclick="showPage('upload')" id="nav-upload"
+          class="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition">
+          <i class="fas fa-upload mr-1"></i>검증하기
+        </button>
+        <button onclick="showPage('admin')" id="nav-admin"
+          class="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition">
+          <i class="fas fa-cog mr-1"></i>사전 관리
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════
+       페이지 1: 업로드
+  ══════════════════════════════════════════════════ -->
+  <div id="page-upload" class="page max-w-2xl mx-auto px-4 py-12">
+    <div class="text-center mb-8">
+      <h2 class="text-2xl font-bold text-slate-800 mb-2">제안서 블라인드 검증</h2>
+      <p class="text-slate-500 text-sm">PDF를 업로드하면 Claude AI가 블라인드 위반 요소를 자동으로 검출합니다</p>
+    </div>
+
+    <!-- 업로드 존 -->
+    <div id="drop-zone" class="drop-zone card p-12 text-center mb-4"
+         ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)"
+         onclick="document.getElementById('file-input').click()">
+      <input type="file" id="file-input" accept=".pdf" class="hidden" onchange="onFileSelect(event)"/>
+      <div id="drop-idle">
+        <div class="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-file-pdf text-blue-500 text-2xl"></i>
+        </div>
+        <p class="font-semibold text-slate-700 mb-1">PDF 파일을 끌어다 놓거나 클릭하여 업로드</p>
+        <p class="text-sm text-slate-400">최대 100MB · PDF 전용</p>
+      </div>
+      <div id="drop-selected" class="hidden">
+        <i class="fas fa-file-pdf text-blue-600 text-3xl mb-3"></i>
+        <p id="selected-name" class="font-semibold text-slate-800"></p>
+        <p id="selected-size" class="text-sm text-slate-500"></p>
+      </div>
+    </div>
+
+    <!-- 보안 안내 -->
+    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex gap-3">
+      <i class="fas fa-lock text-amber-500 mt-0.5 flex-shrink-0"></i>
+      <div class="text-sm text-amber-800">
+        <p class="font-semibold mb-1">보안 정책 안내</p>
+        <ul class="space-y-0.5 text-amber-700 list-disc list-inside text-xs">
+          <li>업로드된 파일은 검증 완료 즉시 자동 삭제됩니다</li>
+          <li>OCR 이미지, 캐시, 분석 결과 모두 즉시 삭제됩니다</li>
+          <li>결과 리포트에 원본 문서 전문이 저장되지 않습니다</li>
+          <li>30분 후 자동 만료 삭제가 적용됩니다</li>
+        </ul>
+      </div>
+    </div>
+
+    <button id="btn-verify" onclick="startVerify()"
+      class="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3.5 rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed"
+      disabled>
+      <i class="fas fa-search mr-2"></i>블라인드 검증 시작
+    </button>
+
+    <!-- 진행 중 상태 -->
+    <div id="progress-panel" class="hidden card p-6 mt-6">
+      <div class="flex items-center gap-3 mb-4">
+        <i class="fas fa-circle-notch spinner text-blue-600 text-lg"></i>
+        <span class="font-semibold text-slate-700">검증 진행 중…</span>
+        <span id="progress-pct" class="ml-auto text-blue-600 font-bold text-lg">0%</span>
+      </div>
+      <div class="bg-slate-100 rounded-full h-3 mb-3">
+        <div id="progress-bar" class="progress-bar bg-blue-600 h-3 rounded-full" style="width:0%"></div>
+      </div>
+      <p id="progress-msg" class="text-sm text-slate-500 text-center"></p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       페이지 2: 결과 대시보드
+  ══════════════════════════════════════════════════ -->
+  <div id="page-result" class="page hidden max-w-7xl mx-auto px-4 py-6">
+
+    <!-- 상단 요약 -->
+    <div class="flex flex-wrap items-start justify-between gap-4 mb-6">
+      <div>
+        <div class="flex items-center gap-3 mb-1">
+          <span id="risk-badge" class="px-4 py-1.5 rounded-full text-sm font-bold"></span>
+          <h2 id="result-filename" class="font-bold text-slate-800 text-lg"></h2>
+        </div>
+        <p id="result-meta" class="text-sm text-slate-500"></p>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="downloadReport('json')"
+          class="border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">
+          <i class="fas fa-download mr-1"></i>JSON 다운로드
+        </button>
+        <button onclick="downloadReport('html')"
+          class="border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">
+          <i class="fas fa-file-code mr-1"></i>HTML 리포트
+        </button>
+        <button onclick="showPage('upload')"
+          class="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+          <i class="fas fa-upload mr-1"></i>새 파일 검증
+        </button>
+      </div>
+    </div>
+
+    <!-- 통계 카드 -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="card p-5 text-center">
+        <div id="stat-violation" class="text-4xl font-black text-red-600">0</div>
+        <div class="text-sm text-slate-500 mt-1 font-medium">
+          <i class="fas fa-xmark-circle mr-1 text-red-400"></i>위반
+        </div>
+      </div>
+      <div class="card p-5 text-center">
+        <div id="stat-caution" class="text-4xl font-black text-amber-500">0</div>
+        <div class="text-sm text-slate-500 mt-1 font-medium">
+          <i class="fas fa-triangle-exclamation mr-1 text-amber-400"></i>주의
+        </div>
+      </div>
+      <div class="card p-5 text-center">
+        <div id="stat-allowed" class="text-4xl font-black text-emerald-600">0</div>
+        <div class="text-sm text-slate-500 mt-1 font-medium">
+          <i class="fas fa-check-circle mr-1 text-emerald-400"></i>허용
+        </div>
+      </div>
+      <div class="card p-5 text-center">
+        <div id="stat-pages" class="text-4xl font-black text-blue-600">0</div>
+        <div class="text-sm text-slate-500 mt-1 font-medium">
+          <i class="fas fa-file-lines mr-1 text-blue-400"></i>총 페이지
+        </div>
+      </div>
+    </div>
+
+    <!-- 요약 -->
+    <div id="summary-box" class="card p-5 mb-6">
+      <h3 class="font-bold text-slate-700 mb-3"><i class="fas fa-clipboard-list mr-2 text-blue-500"></i>문서 전체 판정 요약</h3>
+      <ul id="summary-notes" class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm"></ul>
+    </div>
+
+    <!-- 2컬럼: 사이드바(페이지목록) + 메인(상세) -->
+    <div class="flex gap-5 flex-wrap md:flex-nowrap">
+
+      <!-- 사이드바: 페이지 목록 -->
+      <div class="sidebar">
+        <div class="card p-4 mb-4">
+          <h3 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-filter mr-1 text-slate-400"></i>필터
+          </h3>
+          <div class="space-y-2">
+            <div>
+              <label class="text-xs text-slate-500 block mb-1">판정 필터</label>
+              <select id="filter-verdict" onchange="renderPageList()"
+                class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
+                <option value="">전체</option>
+                <option value="위반">위반만</option>
+                <option value="주의">주의만</option>
+                <option value="허용">허용만</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-slate-500 block mb-1">검출 유형</label>
+              <select id="filter-type" onchange="renderPageList()"
+                class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
+                <option value="">전체 유형</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-slate-500 block mb-1">검색</label>
+              <input id="filter-search" type="text" placeholder="텍스트 검색…"
+                oninput="renderPageList()"
+                class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm"/>
+            </div>
+          </div>
+        </div>
+
+        <div id="page-list" class="space-y-2 max-h-[60vh] overflow-y-auto pr-1"></div>
+      </div>
+
+      <!-- 메인: 상세 패널 -->
+      <div class="flex-1 min-w-0">
+        <div id="detail-panel" class="card p-6">
+          <div class="text-center py-12 text-slate-400">
+            <i class="fas fa-hand-point-left text-4xl mb-3 block"></i>
+            <p class="text-sm">왼쪽 페이지를 클릭하면 상세 정보가 표시됩니다</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       페이지 3: 관리자 사전 관리
+  ══════════════════════════════════════════════════ -->
+  <div id="page-admin" class="page hidden max-w-5xl mx-auto px-4 py-8">
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h2 class="text-xl font-bold text-slate-800">사전 관리</h2>
+        <p class="text-sm text-slate-500">금칙어·허용어 사전을 관리합니다. 변경사항은 즉시 검증에 반영됩니다.</p>
+      </div>
+      <div id="admin-status" class="text-xs text-slate-400"></div>
+    </div>
+
+    <!-- 탭 -->
+    <div class="flex gap-0 border-b border-slate-200 mb-6">
+      <button onclick="adminTab('direct')"   id="tab-direct"   class="tab-btn px-5 py-2.5 text-sm text-slate-600 active">직접 식별어</button>
+      <button onclick="adminTab('indirect')" id="tab-indirect" class="tab-btn px-5 py-2.5 text-sm text-slate-600">간접 식별어</button>
+      <button onclick="adminTab('allowed')"  id="tab-allowed"  class="tab-btn px-5 py-2.5 text-sm text-slate-600">허용어</button>
+      <button onclick="adminTab('config')"   id="tab-config"   class="tab-btn px-5 py-2.5 text-sm text-slate-600">시스템 설정</button>
+    </div>
+
+    <!-- 직접 식별어 탭 -->
+    <div id="admin-direct" class="admin-tab-content">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <!-- 회사명 -->
+        <div class="card p-5" id="dict-direct-company_names" data-group="direct_identifiers" data-subcat="company_names">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-building mr-1 text-red-400"></i>업체명 / 회사명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-company_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="업체명 입력 후 Enter"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','company_names',this)"/>
+            <button onclick="addDictItem('direct_identifiers','company_names',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <!-- 영문명 -->
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-globe mr-1 text-red-400"></i>영문사명 / 약칭
+          </h4>
+          <div class="dict-tags mb-3" id="tags-english_names"></div>
+          <div class="flex gap-2 mb-2">
+            <input type="text" placeholder="영문사명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','english_names',this)"/>
+            <button onclick="addDictItem('direct_identifiers','english_names',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+          <div class="dict-tags mb-3" id="tags-abbreviations"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="약칭 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','abbreviations',this)"/>
+            <button onclick="addDictItem('direct_identifiers','abbreviations',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <!-- 대표자 -->
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-user-tie mr-1 text-red-400"></i>대표자명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-representative_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="대표자 성명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','representative_names',this)"/>
+            <button onclick="addDictItem('direct_identifiers','representative_names',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <!-- 참여인력 -->
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-users mr-1 text-red-400"></i>참여인력 성명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-personnel_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="인력 성명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','personnel_names',this)"/>
+            <button onclick="addDictItem('direct_identifiers','personnel_names',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <!-- 이메일/URL -->
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-envelope mr-1 text-red-400"></i>이메일 / URL / 도메인
+          </h4>
+          <p class="text-xs text-slate-400 mb-2">이메일</p>
+          <div class="dict-tags mb-2" id="tags-emails"></div>
+          <div class="flex gap-2 mb-3">
+            <input type="text" placeholder="이메일 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','emails',this)"/>
+            <button onclick="addDictItem('direct_identifiers','emails',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+          <p class="text-xs text-slate-400 mb-2">도메인</p>
+          <div class="dict-tags mb-2" id="tags-domains"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="도메인 입력 (예: company.co.kr)"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','domains',this)"/>
+            <button onclick="addDictItem('direct_identifiers','domains',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <!-- 브랜드 -->
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-tag mr-1 text-red-400"></i>브랜드명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-brand_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="브랜드명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('direct_identifiers','brand_names',this)"/>
+            <button onclick="addDictItem('direct_identifiers','brand_names',this.previousElementSibling)"
+              class="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 간접 식별어 탭 -->
+    <div id="admin-indirect" class="admin-tab-content hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-palette mr-1 text-amber-500"></i>회사 고유 색상명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-color_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="예: ActivoRED, Samsung Blue"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('indirect_identifiers','color_names',this)"/>
+            <button onclick="addDictItem('indirect_identifiers','color_names',this.previousElementSibling)"
+              class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-cube mr-1 text-amber-500"></i>내부 솔루션명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-solution_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="솔루션명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('indirect_identifiers','solution_names',this)"/>
+            <button onclick="addDictItem('indirect_identifiers','solution_names',this.previousElementSibling)"
+              class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-quote-right mr-1 text-amber-500"></i>슬로건 / 고유 표현
+          </h4>
+          <div class="dict-tags mb-3" id="tags-slogans"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="고유 슬로건 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('indirect_identifiers','slogans',this)"/>
+            <button onclick="addDictItem('indirect_identifiers','slogans',this.previousElementSibling)"
+              class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-sitemap mr-1 text-amber-500"></i>내부 조직명 / 서비스명
+          </h4>
+          <div class="dict-tags mb-2" id="tags-org_names"></div>
+          <div class="flex gap-2 mb-3">
+            <input type="text" placeholder="조직명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('indirect_identifiers','org_names',this)"/>
+            <button onclick="addDictItem('indirect_identifiers','org_names',this.previousElementSibling)"
+              class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+          <div class="dict-tags mb-2" id="tags-service_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="서비스명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('indirect_identifiers','service_names',this)"/>
+            <button onclick="addDictItem('indirect_identifiers','service_names',this.previousElementSibling)"
+              class="bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 허용어 탭 -->
+    <div id="admin-allowed" class="admin-tab-content hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-landmark mr-1 text-emerald-500"></i>발주기관명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-client_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="발주기관명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('allowed_terms','client_names',this)"/>
+            <button onclick="addDictItem('allowed_terms','client_names',this.previousElementSibling)"
+              class="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-hashtag mr-1 text-emerald-500"></i>발주기관 약칭
+          </h4>
+          <div class="dict-tags mb-3" id="tags-client_abbreviations"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="약칭 입력 (예: KOEN, KEPCO)"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('allowed_terms','client_abbreviations',this)"/>
+            <button onclick="addDictItem('allowed_terms','client_abbreviations',this.previousElementSibling)"
+              class="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-folder-open mr-1 text-emerald-500"></i>대상사업명
+          </h4>
+          <div class="dict-tags mb-3" id="tags-project_names"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="사업명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('allowed_terms','project_names',this)"/>
+            <button onclick="addDictItem('allowed_terms','project_names',this.previousElementSibling)"
+              class="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+        <div class="card p-5">
+          <h4 class="font-bold text-slate-700 mb-3 text-sm">
+            <i class="fas fa-university mr-1 text-emerald-500"></i>공공기관 공식명칭 (기본 등록)
+          </h4>
+          <div class="dict-tags mb-3" id="tags-official_institutions"></div>
+          <div class="flex gap-2">
+            <input type="text" placeholder="공공기관명 입력"
+              class="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+              onkeydown="if(event.key==='Enter')addDictItem('allowed_terms','official_institutions',this)"/>
+            <button onclick="addDictItem('allowed_terms','official_institutions',this.previousElementSibling)"
+              class="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-2 rounded-lg text-sm">추가</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 시스템 설정 탭 -->
+    <div id="admin-config" class="admin-tab-content hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div class="card p-5 col-span-full">
+          <h4 class="font-bold text-slate-700 mb-4">
+            <i class="fas fa-server mr-2 text-blue-500"></i>시스템 설정
+          </h4>
+          <div id="config-content" class="space-y-3"></div>
+        </div>
+        <div class="card p-5 col-span-full">
+          <h4 class="font-bold text-slate-700 mb-4">
+            <i class="fas fa-chart-bar mr-2 text-blue-500"></i>시스템 통계
+          </h4>
+          <div id="stats-content" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
+        </div>
+        <div class="card p-5 col-span-full">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="font-bold text-slate-700">
+              <i class="fas fa-scroll mr-2 text-slate-400"></i>최근 로그
+            </h4>
+            <button onclick="loadLogs()"
+              class="text-xs border border-slate-200 px-3 py-1 rounded hover:bg-slate-50">
+              새로고침
+            </button>
+          </div>
+          <pre id="log-content" class="text-xs bg-slate-900 text-green-400 p-4 rounded-lg overflow-auto max-h-64 font-mono"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<script>
+// ═══════════════════════════════════════════════════════
+// 전역 상태
+// ═══════════════════════════════════════════════════════
+let _state = {
+  currentPage: 'upload',
+  jobId:       null,
+  report:      null,
+  pollTimer:   null,
+  selectedFile:null,
+  dictData:    null,
+  selectedPageNum: null,
+};
+
+const API = '';   // 같은 origin
+
+// ═══════════════════════════════════════════════════════
+// 라우팅
+// ═══════════════════════════════════════════════════════
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(el => el.classList.add('hidden'));
+  document.getElementById('page-' + name).classList.remove('hidden');
+  _state.currentPage = name;
+
+  // 네비 활성화
+  document.querySelectorAll('[id^="nav-"]').forEach(el =>
+    el.classList.remove('bg-blue-50','text-blue-700','font-semibold'));
+  const navEl = document.getElementById('nav-' + name);
+  if (navEl) navEl.classList.add('bg-blue-50','text-blue-700','font-semibold');
+
+  if (name === 'admin') loadAdminData();
+}
+
+// ═══════════════════════════════════════════════════════
+// 업로드
+// ═══════════════════════════════════════════════════════
+function onDragOver(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.add('over');
+}
+function onDragLeave()  { document.getElementById('drop-zone').classList.remove('over'); }
+function onDrop(e) {
+  e.preventDefault();
+  onDragLeave();
+  const f = e.dataTransfer.files[0];
+  if (f) selectFile(f);
+}
+function onFileSelect(e) {
+  const f = e.target.files[0];
+  if (f) selectFile(f);
+}
+function selectFile(f) {
+  if (!f.name.toLowerCase().endsWith('.pdf')) {
+    toast('PDF 파일만 업로드 가능합니다.', 'error'); return;
+  }
+  _state.selectedFile = f;
+  document.getElementById('drop-idle').classList.add('hidden');
+  document.getElementById('drop-selected').classList.remove('hidden');
+  document.getElementById('selected-name').textContent = f.name;
+  document.getElementById('selected-size').textContent = formatSize(f.size);
+  document.getElementById('btn-verify').disabled = false;
+}
+
+async function startVerify() {
+  if (!_state.selectedFile) return;
+  const f = _state.selectedFile;
+
+  document.getElementById('btn-verify').disabled = true;
+  document.getElementById('progress-panel').classList.remove('hidden');
+  updateProgress(0, '파일 업로드 중…');
+
+  const fd = new FormData();
+  fd.append('file', f);
+
+  try {
+    const res = await fetch(`${API}/api/verify/upload`, { method:'POST', body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    _state.jobId = data.job_id;
+    pollStatus();
+  } catch (e) {
+    toast(`업로드 실패: ${e.message}`, 'error');
+    document.getElementById('btn-verify').disabled = false;
+    document.getElementById('progress-panel').classList.add('hidden');
+  }
+}
+
+function pollStatus() {
+  clearInterval(_state.pollTimer);
+  _state.pollTimer = setInterval(async () => {
+    try {
+      const res  = await fetch(`${API}/api/verify/status/${_state.jobId}`);
+      const data = await res.json();
+
+      updateProgress(data.progress || 0, data.message || '');
+
+      if (data.status === 'completed' && data.report) {
+        clearInterval(_state.pollTimer);
+        _state.report = data.report;
+        renderResult(data.report);
+        showPage('result');
+      } else if (data.status === 'failed') {
+        clearInterval(_state.pollTimer);
+        toast(`검증 실패: ${data.error || '알 수 없는 오류'}`, 'error');
+        document.getElementById('btn-verify').disabled = false;
+        document.getElementById('progress-panel').classList.add('hidden');
+      }
+    } catch (e) {
+      console.error('폴링 오류:', e);
+    }
+  }, 1500);
+}
+
+function updateProgress(pct, msg) {
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent  = pct + '%';
+  document.getElementById('progress-msg').textContent  = msg;
+}
+
+// ═══════════════════════════════════════════════════════
+// 결과 렌더링
+// ═══════════════════════════════════════════════════════
+function renderResult(r) {
+  // 배지
+  const badge = document.getElementById('risk-badge');
+  badge.className = `px-4 py-1.5 rounded-full text-sm font-bold badge-${r.risk_level.toLowerCase()}`;
+  badge.textContent = `블라인드 위험도: ${r.risk_level}`;
+
+  document.getElementById('result-filename').textContent = r.filename;
+  document.getElementById('result-meta').textContent =
+    `총 ${r.total_pages}페이지 · 검증일: ${(r.created_at||'').slice(0,19).replace('T',' ')} · 소요: ${r.processing_time_seconds}초`;
+
+  document.getElementById('stat-violation').textContent = r.violation_count;
+  document.getElementById('stat-caution').textContent   = r.caution_count;
+  document.getElementById('stat-allowed').textContent   = r.allowed_count;
+  document.getElementById('stat-pages').textContent     = r.total_pages;
+
+  // 요약 노트
+  const notesEl = document.getElementById('summary-notes');
+  notesEl.innerHTML = (r.summary?.notes || []).map(n => {
+    const ok = n.includes('없음') || n.includes('없음');
+    const cls = ok ? 'text-emerald-700' : 'text-red-700';
+    const icon = ok ? 'fa-check text-emerald-500' : 'fa-xmark text-red-400';
+    return `<li class="flex items-center gap-2 ${cls} text-sm">
+      <i class="fas ${icon} w-4"></i>${n}
+    </li>`;
+  }).join('');
+
+  // 유형 필터 옵션
+  const types = new Set();
+  (r.page_results || []).forEach(pg =>
+    (pg.detections || []).forEach(d => types.add(d.detection_type)));
+  const sel = document.getElementById('filter-type');
+  sel.innerHTML = '<option value="">전체 유형</option>' +
+    [...types].map(t => `<option value="${t}">${t}</option>`).join('');
+
+  renderPageList();
+}
+
+function renderPageList() {
+  const r       = _state.report;
+  if (!r) return;
+  const verdict = document.getElementById('filter-verdict').value;
+  const type    = document.getElementById('filter-type').value;
+  const search  = document.getElementById('filter-search').value.toLowerCase();
+
+  const list = document.getElementById('page-list');
+  list.innerHTML = '';
+
+  (r.page_results || []).forEach(pg => {
+    // 필터 적용
+    let dets = pg.detections || [];
+    if (verdict) dets = dets.filter(d => d.verdict === verdict);
+    if (type)    dets = dets.filter(d => d.detection_type === type);
+    if (search)  dets = dets.filter(d =>
+      (d.detected_text||'').toLowerCase().includes(search) ||
+      (d.reason||'').toLowerCase().includes(search));
+    if (!dets.length && (verdict||type||search)) return;
+
+    const label   = pg.page_number === 0 ? '메타데이터' : `${pg.page_number}페이지`;
+    const hasViol = dets.some(d => d.verdict === '위반');
+    const hasCaut = dets.some(d => d.verdict === '주의');
+    const dot     = hasViol ? 'bg-red-500' : hasCaut ? 'bg-amber-400' : 'bg-emerald-400';
+
+    const el = document.createElement('div');
+    el.className = `card p-3 cursor-pointer hover:border-blue-300 border-2 transition fade-in ${
+      _state.selectedPageNum === pg.page_number ? 'border-blue-500' : 'border-transparent'}`;
+    el.onclick = () => showDetail(pg.page_number);
+    el.innerHTML = `
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full ${dot} flex-shrink-0"></span>
+          <span class="font-semibold text-slate-700 text-sm">${label}</span>
+        </div>
+        <div class="flex gap-1">
+          ${dets.filter(d=>d.verdict==='위반').length ?
+            `<span class="text-xs px-1.5 py-0.5 rounded badge-violation">${dets.filter(d=>d.verdict==='위반').length}</span>`:''}
+          ${dets.filter(d=>d.verdict==='주의').length ?
+            `<span class="text-xs px-1.5 py-0.5 rounded badge-caution">${dets.filter(d=>d.verdict==='주의').length}</span>`:''}
+        </div>
+      </div>
+      <p class="text-xs text-slate-400 mt-1 ml-4">${dets.length}건 감지</p>`;
+    list.appendChild(el);
+  });
+
+  if (!list.children.length) {
+    list.innerHTML = '<p class="text-center text-slate-400 text-sm py-6">해당 조건의 결과 없음</p>';
+  }
+}
+
+function showDetail(pageNum) {
+  _state.selectedPageNum = pageNum;
+  renderPageList();   // 선택 표시 갱신
+
+  const r  = _state.report;
+  const pg = (r?.page_results || []).find(p => p.page_number === pageNum);
+  if (!pg) return;
+
+  const label = pageNum === 0 ? '메타데이터' : `${pageNum}페이지`;
+  const panel = document.getElementById('detail-panel');
+
+  // 썸네일
+  const thumbHTML = pg.thumbnail_b64
+    ? `<div class="mb-5">
+         <img src="data:image/jpeg;base64,${pg.thumbnail_b64}"
+              alt="페이지 썸네일" class="thumb-img max-w-full mx-auto block"/>
+       </div>`
+    : '';
+
+  // 탐지 목록
+  const detsHTML = (pg.detections || []).length
+    ? (pg.detections || []).map((d, i) => {
+        const vcls = d.verdict === '위반' ? 'violation' : d.verdict === '주의' ? 'caution' : 'allowed';
+        const badgeCls = `badge-${vcls}`;
+        const srcIcon = {rule:'fa-code', ocr:'fa-eye', claude:'fa-robot', image:'fa-image'}[d.source] || 'fa-circle';
+        return `<div class="det-row ${vcls} bg-white border border-slate-100 rounded-xl p-4 mb-3 fade-in">
+          <div class="flex items-start justify-between gap-3 mb-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs px-2 py-0.5 rounded-full ${badgeCls} font-bold">${d.verdict}</span>
+              <span class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">${d.detection_type}</span>
+              <span class="text-xs text-slate-400" title="탐지 소스">
+                <i class="fas ${srcIcon} mr-0.5"></i>${d.source}
+              </span>
+            </div>
+            <span class="text-xs text-slate-400">#${i+1}</span>
+          </div>
+          ${d.detected_text ? `
+            <div class="bg-slate-50 rounded-lg px-3 py-2 mb-2">
+              <span class="text-xs text-slate-400 block mb-0.5">검출 내용</span>
+              <span class="font-mono text-sm text-slate-800 break-all">${escHtml(d.detected_text)}</span>
+            </div>` : ''}
+          ${d.image_description ? `
+            <div class="bg-slate-50 rounded-lg px-3 py-2 mb-2">
+              <span class="text-xs text-slate-400 block mb-0.5">이미지 설명</span>
+              <span class="text-sm text-slate-700">${escHtml(d.image_description)}</span>
+            </div>` : ''}
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+            <div>
+              <p class="text-xs text-slate-400 mb-1"><i class="fas fa-info-circle mr-1"></i>판정 사유</p>
+              <p class="text-sm text-slate-700">${escHtml(d.reason)}</p>
+            </div>
+            <div class="bg-blue-50 rounded-lg p-3">
+              <p class="text-xs text-blue-500 mb-1"><i class="fas fa-pencil mr-1"></i>수정 권고안</p>
+              <p class="text-sm text-blue-800 font-medium">${escHtml(d.recommendation)}</p>
+            </div>
+          </div>
+          ${d.confidence < 1 ? `<p class="text-xs text-slate-300 mt-2 text-right">신뢰도 ${Math.round(d.confidence*100)}%</p>` : ''}
+        </div>`;
+      }).join('')
+    : '<p class="text-center text-slate-400 text-sm py-8"><i class="fas fa-check-circle text-emerald-400 mr-2"></i>이 페이지에서 탐지된 항목이 없습니다.</p>';
+
+  panel.innerHTML = `
+    <div class="fade-in">
+      <h3 class="font-bold text-slate-800 text-lg mb-4">
+        <i class="fas fa-file-lines mr-2 text-blue-500"></i>${label} 상세
+      </h3>
+      ${thumbHTML}
+      <div class="flex gap-3 mb-4 flex-wrap">
+        <span class="badge-violation text-xs px-3 py-1 rounded-full font-semibold">${pg.violation_count} 위반</span>
+        <span class="badge-caution text-xs px-3 py-1 rounded-full font-semibold">${pg.caution_count} 주의</span>
+        <span class="badge-allowed text-xs px-3 py-1 rounded-full font-semibold">${pg.allowed_count} 허용</span>
+      </div>
+      <div>${detsHTML}</div>
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// 다운로드
+// ═══════════════════════════════════════════════════════
+async function downloadReport(fmt) {
+  if (!_state.jobId) return;
+  try {
+    const res  = await fetch(`${API}/api/verify/report/${_state.jobId}/download?fmt=${fmt}`);
+    const data = await res.json();
+    if (fmt === 'html') {
+      const blob = new Blob([data.html], {type:'text/html;charset=utf-8'});
+      triggerDownload(blob, `report_${_state.jobId.slice(0,8)}.html`);
+    } else {
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+      triggerDownload(blob, `report_${_state.jobId.slice(0,8)}.json`);
+    }
+    toast('리포트 다운로드 완료');
+  } catch (e) {
+    toast('다운로드 실패: ' + e.message, 'error');
+  }
+}
+function triggerDownload(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ═══════════════════════════════════════════════════════
+// 관리자 사전
+// ═══════════════════════════════════════════════════════
+async function loadAdminData() {
+  try {
+    const res  = await fetch(`${API}/api/admin/dictionary`);
+    _state.dictData = await res.json();
+    renderAllTags();
+    loadConfig();
+  } catch (e) {
+    toast('사전 로드 실패: ' + e.message, 'error');
+  }
+}
+
+const TAG_MAP = {
+  // direct
+  company_names:        ['direct_identifiers','company_names'],
+  english_names:        ['direct_identifiers','english_names'],
+  abbreviations:        ['direct_identifiers','abbreviations'],
+  representative_names: ['direct_identifiers','representative_names'],
+  personnel_names:      ['direct_identifiers','personnel_names'],
+  emails:               ['direct_identifiers','emails'],
+  domains:              ['direct_identifiers','domains'],
+  brand_names:          ['direct_identifiers','brand_names'],
+  // indirect
+  color_names:          ['indirect_identifiers','color_names'],
+  solution_names:       ['indirect_identifiers','solution_names'],
+  slogans:              ['indirect_identifiers','slogans'],
+  org_names:            ['indirect_identifiers','org_names'],
+  service_names:        ['indirect_identifiers','service_names'],
+  // allowed
+  client_names:         ['allowed_terms','client_names'],
+  client_abbreviations: ['allowed_terms','client_abbreviations'],
+  project_names:        ['allowed_terms','project_names'],
+  official_institutions:['allowed_terms','official_institutions'],
+};
+
+function renderAllTags() {
+  const d = _state.dictData;
+  if (!d) return;
+  Object.entries(TAG_MAP).forEach(([subcat, [group, key]]) => {
+    const el = document.getElementById('tags-' + subcat);
+    if (!el) return;
+    const items = (d[group] || {})[key] || [];
+    el.innerHTML = items.map(item =>
+      `<span class="dict-tag">${escHtml(item)}
+        <button onclick="removeDictItem('${group}','${key}','${escAttr(item)}')" title="삭제">×</button>
+       </span>`
+    ).join('') || '<span class="text-xs text-slate-400">등록된 항목 없음</span>';
+  });
+}
+
+async function addDictItem(group, subcat, inputEl) {
+  const val = inputEl.value.trim();
+  if (!val) return;
+  try {
+    const res = await fetch(`${API}/api/admin/dictionary/${group}/${subcat}`, {
+      method: 'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item: val}),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+    inputEl.value = '';
+    toast(`'${val}' 추가됨`);
+    await loadAdminData();
+  } catch (e) {
+    toast('추가 실패: ' + e.message, 'error');
+  }
+}
+
+async function removeDictItem(group, subcat, item) {
+  try {
+    const res = await fetch(
+      `${API}/api/admin/dictionary/${group}/${subcat}/${encodeURIComponent(item)}`,
+      { method:'DELETE' });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Error');
+    toast(`'${item}' 삭제됨`);
+    await loadAdminData();
+  } catch (e) {
+    toast('삭제 실패: ' + e.message, 'error');
+  }
+}
+
+function adminTab(name) {
+  document.querySelectorAll('.admin-tab-content').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('admin-' + name).classList.remove('hidden');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'config') { loadConfig(); loadStats(); loadLogs(); }
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch(`${API}/api/admin/config`);
+    const d   = await res.json();
+    const el  = document.getElementById('config-content');
+    if (!el) return;
+    el.innerHTML = Object.entries(d).map(([k,v]) => `
+      <div class="flex items-center justify-between py-2 border-b border-slate-100">
+        <span class="text-sm text-slate-600 font-medium">${k}</span>
+        <span class="text-sm font-mono ${v === true ? 'text-emerald-600' : v === false ? 'text-red-500' : 'text-slate-800'}">${v}</span>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+async function loadStats() {
+  try {
+    const res = await fetch(`${API}/api/admin/stats`);
+    const d   = await res.json();
+    const el  = document.getElementById('stats-content');
+    if (!el) return;
+    const items = [
+      ['pending_jobs', d.storage?.pending_jobs, 'fa-hourglass', 'text-blue-600'],
+      ['tmp_files',    d.storage?.tmp_files,    'fa-file',      'text-slate-600'],
+      ['tmp_size_mb',  (d.storage?.tmp_size_mb||0)+' MB', 'fa-database', 'text-slate-600'],
+      ['completed',    d.jobs?.completed,       'fa-check',     'text-emerald-600'],
+    ];
+    el.innerHTML = items.map(([k,v,ic,tc]) => `
+      <div class="bg-slate-50 rounded-xl p-4 text-center">
+        <i class="fas ${ic} ${tc} text-xl mb-2 block"></i>
+        <div class="text-xl font-bold ${tc}">${v ?? '-'}</div>
+        <div class="text-xs text-slate-400">${k}</div>
+      </div>`).join('');
+  } catch(e) {}
+}
+
+async function loadLogs() {
+  try {
+    const res  = await fetch(`${API}/api/admin/logs?lines=100`);
+    const d    = await res.json();
+    const el   = document.getElementById('log-content');
+    if (el) el.textContent = (d.logs || []).join('\n') || '로그 없음';
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════
+// 유틸
+// ═══════════════════════════════════════════════════════
+function formatSize(bytes) {
+  if (bytes < 1024)       return bytes + ' B';
+  if (bytes < 1024*1024)  return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1024/1024).toFixed(2) + ' MB';
+}
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) {
+  return String(s||'').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+}
+
+let _toastTimer;
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent  = msg;
+  el.style.background = type === 'error' ? '#dc2626' : '#1e293b';
+  el.style.display = 'block';
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.style.display = 'none', 3000);
+}
+
+// ═══════════════════════════════════════════════════════
+// 초기화
+// ═══════════════════════════════════════════════════════
+showPage('upload');
+</script>
+</body>
+</html>

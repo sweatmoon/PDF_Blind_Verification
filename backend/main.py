@@ -1,0 +1,86 @@
+"""
+FastAPI 진입점
+"""
+import asyncio
+from pathlib import Path
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, Response, JSONResponse
+
+from api.verify import router as verify_router
+from api.admin  import router as admin_router
+from services.file_manager import cleanup_scheduler
+from core.config import get_logger, CLAUDE_ENABLED, CLAUDE_MODEL
+
+logger = get_logger("main")
+
+FRONTEND = Path(__file__).parent.parent / "frontend" / "public"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(cleanup_scheduler())
+    logger.info(f"서버 시작 | Claude={'활성 ' + CLAUDE_MODEL if CLAUDE_ENABLED else '비활성(규칙 기반)'}")
+    yield
+    task.cancel()
+    try: await task
+    except asyncio.CancelledError: pass
+    logger.info("서버 종료")
+
+
+app = FastAPI(
+    title="입찰 제안서 블라인드 검증 서비스",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url=None,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
+)
+
+app.include_router(verify_router, prefix="/api/verify", tags=["검증"])
+app.include_router(admin_router,  prefix="/api/admin",  tags=["관리자"])
+
+
+# ── 정적 파일 & SPA 폴백 ──────────────────────────────────────
+MIME = {
+    ".html": "text/html", ".js": "application/javascript",
+    ".css": "text/css",   ".json": "application/json",
+    ".png": "image/png",  ".jpg": "image/jpeg",
+    ".ico": "image/x-icon", ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+}
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa(full_path: str, request: Request):
+    # API 경로는 제외
+    if full_path.startswith("api/"):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+    # 정적 파일 우선
+    candidate = FRONTEND / full_path
+    if candidate.is_file():
+        mt = MIME.get(candidate.suffix.lower(), "application/octet-stream")
+        return Response(content=candidate.read_bytes(), media_type=mt)
+
+    # SPA index.html 폴백
+    index = FRONTEND / "index.html"
+    if index.exists():
+        return HTMLResponse(index.read_text("utf-8"))
+    return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
+
+
+@app.exception_handler(Exception)
+async def _err(req: Request, exc: Exception):
+    logger.error(f"미처리 예외: {exc}", exc_info=True)
+    return JSONResponse({"detail": "서버 내부 오류"}, status_code=500)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
