@@ -66,12 +66,25 @@ async def spa(full_path: str, request: Request):
     candidate = FRONTEND / full_path
     if candidate.is_file():
         mt = MIME.get(candidate.suffix.lower(), "application/octet-stream")
+        # index.html은 캐시 금지
+        if candidate.suffix.lower() == ".html":
+            return Response(
+                content=candidate.read_bytes(), media_type=mt,
+                headers={"Cache-Control": "no-cache, no-store, must-revalidate",
+                         "Pragma": "no-cache", "Expires": "0"})
         return Response(content=candidate.read_bytes(), media_type=mt)
 
     # SPA index.html 폴백
     index = FRONTEND / "index.html"
     if index.exists():
-        return HTMLResponse(index.read_text("utf-8"))
+        return HTMLResponse(
+            content=index.read_text("utf-8"),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
 
 
