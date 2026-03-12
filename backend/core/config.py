@@ -77,14 +77,70 @@ def get_job_tmp_dir(job_id: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-# ── 인메모리 Job 스토어 ────────────────────────────────────────
+# ── Job 스토어 (인메모리 + 파일 영구 저장) ───────────────────────
+REPORTS_DIR = DATA_DIR / "reports"
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
 _jobs: dict[str, dict] = {}
 
-def set_job(job_id: str, data: dict):           _jobs[job_id] = data
-def get_job(job_id: str) -> dict | None:        return _jobs.get(job_id)
+def _job_file(job_id: str) -> Path:
+    return REPORTS_DIR / f"{job_id}.json"
+
+def _save_job_file(job_id: str, data: dict):
+    """완료/실패 job을 파일로 영구 저장 (report 포함)"""
+    try:
+        _job_file(job_id).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, default=str), "utf-8")
+    except Exception as e:
+        logger.warning(f"job 파일 저장 실패 {job_id}: {e}")
+
+def _load_saved_jobs():
+    """서버 시작 시 저장된 job 목록 복원 (report 제외, 메타만)"""
+    loaded = 0
+    for f in sorted(REPORTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:200]:
+        try:
+            data = json.loads(f.read_text("utf-8"))
+            jid = data.get("job_id")
+            if jid and jid not in _jobs:
+                # 메모리엔 report 제외한 요약만 저장 (메모리 절약)
+                summary = {k: v for k, v in data.items() if k != "report"}
+                summary["has_report"] = data.get("report") is not None
+                _jobs[jid] = summary
+                loaded += 1
+        except Exception:
+            pass
+    if loaded:
+        logger.info(f"저장된 job {loaded}개 복원")
+
+def set_job(job_id: str, data: dict):
+    _jobs[job_id] = data
+
+def get_job(job_id: str) -> dict | None:
+    job = _jobs.get(job_id)
+    if job and job.get("has_report") and job.get("report") is None:
+        # 파일에서 report 로드
+        try:
+            data = json.loads(_job_file(job_id).read_text("utf-8"))
+            job["report"] = data.get("report")
+            job["has_report"] = True
+        except Exception:
+            pass
+    return job
+
 def update_job(job_id: str, **kw):
-    if job_id in _jobs: _jobs[job_id].update(kw)
-def list_jobs() -> list:                        return list(_jobs.values())
+    if job_id in _jobs:
+        _jobs[job_id].update(kw)
+        # 완료/실패 시 파일로 영구 저장
+        status = _jobs[job_id].get("status", "")
+        if status in ("completed", "failed"):
+            _save_job_file(job_id, _jobs[job_id])
+
+def delete_job(job_id: str):
+    _jobs.pop(job_id, None)
+    _job_file(job_id).unlink(missing_ok=True)
+
+def list_jobs() -> list:
+    return list(_jobs.values())
 
 # ── 사전 파일 ─────────────────────────────────────────────────
 DICT_FILE = DATA_DIR / "dictionary.json"

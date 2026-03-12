@@ -640,7 +640,17 @@ async def upload_logo_reference(file: UploadFile = File(...)):
     
     logo_id = generate_job_id()[:8]
     _logo_store[logo_id] = b64
-    
+
+    # 서버 파이프라인용 영구 저장 (data/logo_reference.png)
+    try:
+        from core.config import DATA_DIR
+        import base64 as _b64
+        logo_bytes = _b64.b64decode(b64)
+        (DATA_DIR / "logo_reference.png").write_bytes(logo_bytes)
+        logger.info(f"로고 레퍼런스 파일 저장: data/logo_reference.png")
+    except Exception as _e:
+        logger.warning(f"로고 파일 저장 실패: {_e}")
+
     # 최대 10개 유지
     if len(_logo_store) > 10:
         oldest = next(iter(_logo_store))

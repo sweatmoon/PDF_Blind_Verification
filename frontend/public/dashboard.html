@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>블라인드 검증 대시보드</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    body { font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; background: #f1f5f9; }
+    .drop-zone { border: 2px dashed #94a3b8; transition: all .2s; }
+    .drop-zone.drag-over { border-color: #6366f1; background: #eef2ff; }
+    .job-card { transition: box-shadow .15s; }
+    .job-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.10); }
+    .risk-HIGH   { background:#fef2f2; color:#dc2626; border-color:#fca5a5; }
+    .risk-MEDIUM { background:#fffbeb; color:#d97706; border-color:#fcd34d; }
+    .risk-LOW    { background:#f0fdf4; color:#16a34a; border-color:#86efac; }
+    .progress-bar { transition: width .4s ease; }
+    .status-processing { animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .verdict-위반 { background:#fef2f2; border-color:#fca5a5; color:#991b1b; }
+    .verdict-주의 { background:#fffbeb; border-color:#fde68a; color:#92400e; }
+    .verdict-허용 { background:#f0fdf4; border-color:#bbf7d0; color:#166534; }
+    .tab-btn.active { border-bottom: 2px solid #6366f1; color: #6366f1; font-weight:600; }
+    .detail-panel { display:none; }
+    .detail-panel.open { display:block; }
+    ::-webkit-scrollbar { width:6px; } ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- 헤더 -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+  <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl">🛡️</span>
+      <div>
+        <h1 class="text-base font-bold text-slate-800">블라인드 검증 대시보드</h1>
+        <p class="text-xs text-slate-400">브라우저를 닫아도 서버에서 계속 처리됩니다</p>
+      </div>
+    </div>
+    <a href="/" class="text-xs text-indigo-600 hover:underline flex items-center gap-1">
+      <i class="fas fa-arrow-left text-xs"></i> 기존 검증 모드
+    </a>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- 업로드 영역 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+    <h2 class="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
+      <i class="fas fa-cloud-upload-alt text-indigo-500"></i> PDF 업로드
+    </h2>
+    <div id="dropZone" class="drop-zone rounded-xl p-8 text-center cursor-pointer"
+         onclick="document.getElementById('fileInput').click()"
+         ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+      <i class="fas fa-file-pdf text-4xl text-slate-300 mb-3"></i>
+      <p class="text-sm text-slate-500">클릭하거나 PDF를 여기에 드래그하세요</p>
+      <p class="text-xs text-slate-400 mt-1">최대 300MB · 브라우저 종료 후에도 서버에서 처리 완료</p>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf" class="hidden" onchange="onFileSelect(event)">
+
+    <!-- 업로드 진행 -->
+    <div id="uploadProgress" class="hidden mt-4">
+      <div class="flex items-center justify-between text-xs text-slate-500 mb-1">
+        <span id="uploadFilename"></span>
+        <span id="uploadPct">0%</span>
+      </div>
+      <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+        <div id="uploadBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 작업 목록 -->
+  <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-sm font-semibold text-slate-700 flex items-center gap-2">
+        <i class="fas fa-list-check text-indigo-500"></i> 검증 작업
+        <span id="jobCount" class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">0</span>
+      </h2>
+      <button onclick="loadJobs()" class="text-xs text-slate-400 hover:text-indigo-500">
+        <i class="fas fa-rotate-right"></i> 새로고침
+      </button>
+    </div>
+
+    <div id="jobList" class="space-y-3">
+      <p class="text-center text-slate-400 text-sm py-8">
+        <i class="fas fa-inbox text-2xl mb-2 block"></i>
+        작업이 없습니다. PDF를 업로드해주세요.
+      </p>
+    </div>
+  </div>
+
+</main>
+
+<!-- 결과 모달 -->
+<div id="reportModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-start justify-center pt-8 px-4 pb-4">
+  <div class="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+    <!-- 모달 헤더 -->
+    <div class="flex items-center justify-between p-4 border-b border-slate-100">
+      <div>
+        <h2 id="modalTitle" class="font-bold text-slate-800"></h2>
+        <p id="modalMeta" class="text-xs text-slate-400 mt-0.5"></p>
+      </div>
+      <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 text-xl">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <!-- 요약 카드 -->
+    <div id="modalSummary" class="p-4 border-b border-slate-100 flex gap-3 flex-wrap"></div>
+    <!-- 탭 -->
+    <div class="flex border-b border-slate-100 px-4">
+      <button class="tab-btn active text-sm px-4 py-2" onclick="switchTab('pages')">페이지별 결과</button>
+      <button class="tab-btn text-sm px-4 py-2 text-slate-500" onclick="switchTab('all')">전체 검출 목록</button>
+    </div>
+    <!-- 탭 콘텐츠 -->
+    <div class="overflow-y-auto flex-1 p-4">
+      <div id="tabPages" class="detail-panel open">
+        <div id="pageFilterBar" class="flex gap-2 mb-3 flex-wrap">
+          <button class="filter-btn active text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium" onclick="filterPages('all',this)">전체</button>
+          <button class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600" onclick="filterPages('violation',this)">위반만</button>
+          <button class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600" onclick="filterPages('caution',this)">주의만</button>
+          <button class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600" onclick="filterPages('clean',this)">이상없음</button>
+        </div>
+        <div id="modalPageList" class="space-y-2"></div>
+      </div>
+      <div id="tabAll" class="detail-panel">
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs border-collapse">
+            <thead>
+              <tr class="bg-slate-50 text-slate-500">
+                <th class="px-3 py-2 text-left border-b">페이지</th>
+                <th class="px-3 py-2 text-left border-b">유형</th>
+                <th class="px-3 py-2 text-left border-b">검출 내용</th>
+                <th class="px-3 py-2 text-left border-b">판정</th>
+                <th class="px-3 py-2 text-left border-b">사유</th>
+                <th class="px-3 py-2 text-left border-b">권고</th>
+              </tr>
+            </thead>
+            <tbody id="modalAllTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 상태 ────────────────────────────────────────────────────────
+let _activeSSEs = {};   // job_id → EventSource
+let _currentReport = null;
+let _currentFilter = 'all';
+
+// ── 초기화 ──────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadJobs();
+  setInterval(loadJobs, 15000);  // 15초마다 자동 갱신
+});
+
+// ── 드래그&드롭 ─────────────────────────────────────────────────
+function onDragOver(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.add('drag-over');
+}
+function onDragLeave(e) {
+  document.getElementById('dropZone').classList.remove('drag-over');
+}
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) uploadFile(file);
+}
+function onFileSelect(e) {
+  const file = e.target.files[0];
+  if (file) uploadFile(file);
+  e.target.value = '';
+}
+
+// ── 파일 업로드 ─────────────────────────────────────────────────
+async function uploadFile(file) {
+  if (!file.name.toLowerCase().endsWith('.pdf')) {
+    alert('PDF 파일만 업로드 가능합니다.'); return;
+  }
+
+  const prog = document.getElementById('uploadProgress');
+  const bar  = document.getElementById('uploadBar');
+  const pct  = document.getElementById('uploadPct');
+  const fn   = document.getElementById('uploadFilename');
+
+  fn.textContent  = file.name;
+  bar.style.width = '0%';
+  pct.textContent = '0%';
+  prog.classList.remove('hidden');
+
+  // XHR로 업로드 진행률 표시
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/jobs/upload');
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+          const p = Math.round(e.loaded / e.total * 100);
+          bar.style.width = p + '%';
+          pct.textContent = p + '%';
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+        else reject(new Error(JSON.parse(xhr.responseText).detail || `HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('네트워크 오류'));
+      xhr.send(formData);
+    });
+
+    bar.style.width  = '100%';
+    pct.textContent  = '완료';
+    setTimeout(() => prog.classList.add('hidden'), 1500);
+
+    // 즉시 목록 갱신 + SSE 연결
+    await loadJobs();
+    attachSSE(result.job_id);
+
+  } catch(e) {
+    prog.classList.add('hidden');
+    alert('업로드 실패: ' + e.message);
+  }
+}
+
+// ── SSE 연결 ────────────────────────────────────────────────────
+function attachSSE(jobId) {
+  if (_activeSSEs[jobId]) return;
+  const es = new EventSource(`/api/jobs/${jobId}/progress`);
+  _activeSSEs[jobId] = es;
+
+  es.onmessage = e => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.error) { es.close(); delete _activeSSEs[jobId]; return; }
+      updateJobCard(jobId, data);
+      if (data.status === 'completed' || data.status === 'failed') {
+        es.close();
+        delete _activeSSEs[jobId];
+        loadJobs();  // 최종 목록 갱신
+      }
+    } catch {}
+  };
+  es.onerror = () => { es.close(); delete _activeSSEs[jobId]; };
+}
+
+// ── Job 목록 로드 ────────────────────────────────────────────────
+async function loadJobs() {
+  try {
+    const res  = await fetch('/api/jobs/list');
+    const jobs = await res.json();
+
+    document.getElementById('jobCount').textContent = jobs.length;
+
+    if (jobs.length === 0) {
+      document.getElementById('jobList').innerHTML = `
+        <p class="text-center text-slate-400 text-sm py-8">
+          <i class="fas fa-inbox text-2xl mb-2 block"></i>
+          작업이 없습니다. PDF를 업로드해주세요.
+        </p>`;
+      return;
+    }
+
+    // 진행 중 / 완료·실패 분리
+    const running  = jobs.filter(j => ['pending','processing'].includes(j.status));
+    const finished = jobs.filter(j => !['pending','processing'].includes(j.status));
+
+    let html = '';
+
+    if (running.length > 0) {
+      html += `<p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">⏳ 진행 중 (${running.length})</p>`;
+      html += running.map(j => renderJobCard(j)).join('');
+    }
+    if (finished.length > 0) {
+      if (running.length > 0) html += `<div class="border-t border-slate-100 my-3"></div>`;
+      html += `<p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">✅ 완료된 검증 (${finished.length})</p>`;
+      html += finished.map(j => renderJobCard(j)).join('');
+    }
+
+    document.getElementById('jobList').innerHTML = html;
+
+    // 진행 중 항목에 SSE 연결
+    for (const j of running) attachSSE(j.job_id);
+
+  } catch(e) {
+    console.error('목록 로드 실패:', e);
+  }
+}
+
+// ── Job 카드 렌더링 ──────────────────────────────────────────────
+function renderJobCard(j) {
+  const status   = j.status;
+  const isRunning = ['pending','processing'].includes(status);
+  const isFailed  = status === 'failed';
+  const isDone    = status === 'completed';
+
+  const riskCls  = isDone ? (j.risk_level ? `risk-${j.risk_level}` : 'risk-LOW') : '';
+  const riskLabel= isDone ? (j.risk_level === 'HIGH' ? '🔴 고위험' : j.risk_level === 'MEDIUM' ? '🟡 중위험' : '🟢 저위험') : '';
+  const cardBg   = isFailed ? 'bg-red-50 border-red-100' : isDone ? 'bg-white border-slate-100' : 'bg-indigo-50 border-indigo-100';
+
+  const filesize = j.file_size ? `${(j.file_size/1024/1024).toFixed(1)}MB` : '';
+  const created  = j.created_at ? j.created_at.slice(0,16).replace('T',' ') : '';
+
+  // 진행바
+  const progressHtml = isRunning ? `
+    <div class="mt-2.5">
+      <div class="flex justify-between text-xs text-slate-400 mb-1">
+        <span id="msg-${j.job_id}" class="truncate">${j.message || '처리 중…'}</span>
+        <span id="pct-${j.job_id}">${j.progress || 0}%</span>
+      </div>
+      <div class="h-1.5 bg-white/70 rounded-full overflow-hidden">
+        <div id="bar-${j.job_id}" class="progress-bar h-full bg-indigo-500 rounded-full status-processing"
+             style="width:${j.progress||0}%"></div>
+      </div>
+    </div>` : '';
+
+  // 통계
+  const statsHtml = isDone ? `
+    <div class="flex gap-3 mt-2.5 text-xs">
+      <span class="text-red-600 font-medium">위반 ${j.violation_count ?? 0}건</span>
+      <span class="text-amber-600">주의 ${j.caution_count ?? 0}건</span>
+    </div>` : '';
+
+  // 실패 메시지
+  const errorHtml = isFailed ? `
+    <p class="text-xs text-red-500 mt-2 truncate">${j.error || '알 수 없는 오류'}</p>` : '';
+
+  // 버튼
+  const btnsHtml = isDone ? `
+    <div class="flex gap-2 mt-3">
+      <button onclick="showReport('${j.job_id}')"
+        class="flex-1 text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-lg hover:bg-indigo-700 font-medium">
+        <i class="fas fa-chart-bar mr-1"></i> 결과 보기
+      </button>
+      <button onclick="deleteJob('${j.job_id}')"
+        class="text-xs bg-slate-100 text-slate-500 px-3 py-1.5 rounded-lg hover:bg-red-50 hover:text-red-500">
+        <i class="fas fa-trash"></i>
+      </button>
+    </div>` : isFailed ? `
+    <div class="flex gap-2 mt-3">
+      <button onclick="deleteJob('${j.job_id}')"
+        class="text-xs bg-red-100 text-red-500 px-3 py-1.5 rounded-lg hover:bg-red-200">
+        <i class="fas fa-trash mr-1"></i> 삭제
+      </button>
+    </div>` : '';
+
+  return `
+    <div id="card-${j.job_id}" class="job-card border rounded-xl p-4 ${cardBg}">
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex items-start gap-2.5 min-w-0 flex-1">
+          <span class="text-lg mt-0.5">${isRunning ? '⏳' : isFailed ? '❌' : '📄'}</span>
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-slate-700 truncate" title="${j.filename}">${j.filename}</p>
+            <p class="text-xs text-slate-400">${filesize} · ${created}</p>
+          </div>
+        </div>
+        ${isDone && j.risk_level ? `<span class="text-xs px-2 py-1 rounded-lg border font-medium flex-shrink-0 ${riskCls}">${riskLabel}</span>` : ''}
+      </div>
+      ${progressHtml}
+      ${statsHtml}
+      ${errorHtml}
+      ${btnsHtml}
+    </div>`;
+}
+
+// ── SSE로 카드 실시간 업데이트 ──────────────────────────────────
+function updateJobCard(jobId, data) {
+  const msgEl = document.getElementById(`msg-${jobId}`);
+  const pctEl = document.getElementById(`pct-${jobId}`);
+  const barEl = document.getElementById(`bar-${jobId}`);
+  if (msgEl) msgEl.textContent = data.message || '';
+  if (pctEl) pctEl.textContent = (data.progress || 0) + '%';
+  if (barEl) barEl.style.width = (data.progress || 0) + '%';
+}
+
+// ── Job 삭제 ────────────────────────────────────────────────────
+async function deleteJob(jobId) {
+  if (!confirm('이 작업을 삭제하시겠습니까?')) return;
+  try {
+    await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    loadJobs();
+  } catch(e) {
+    alert('삭제 실패: ' + e.message);
+  }
+}
+
+// ── 결과 모달 ────────────────────────────────────────────────────
+async function showReport(jobId) {
+  try {
+    const res    = await fetch(`/api/jobs/${jobId}/report`);
+    if (!res.ok) { alert('리포트를 불러올 수 없습니다.'); return; }
+    const report = await res.json();
+    _currentReport = report;
+    _currentFilter = 'all';
+
+    // 제목·메타
+    document.getElementById('modalTitle').textContent = report.filename || '검증 결과';
+    document.getElementById('modalMeta').textContent  =
+      `${report.total_pages}페이지 · ${report.processing_time_seconds}s · ${(report.created_at||'').slice(0,16).replace('T',' ')}`;
+
+    // 요약
+    const riskCls = `risk-${report.risk_level}`;
+    const riskLbl = report.risk_level === 'HIGH' ? '🔴 고위험' : report.risk_level === 'MEDIUM' ? '🟡 중위험' : '🟢 저위험';
+    document.getElementById('modalSummary').innerHTML = `
+      <div class="px-3 py-2 rounded-lg border text-xs font-semibold ${riskCls}">${riskLbl}</div>
+      <div class="px-3 py-2 rounded-lg bg-red-50 border border-red-100 text-xs">
+        <span class="text-red-600 font-bold text-base">${report.violation_count}</span>
+        <span class="text-red-500 ml-1">위반</span>
+      </div>
+      <div class="px-3 py-2 rounded-lg bg-amber-50 border border-amber-100 text-xs">
+        <span class="text-amber-600 font-bold text-base">${report.caution_count}</span>
+        <span class="text-amber-500 ml-1">주의</span>
+      </div>
+      <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 text-xs">
+        <span class="text-slate-600 font-bold text-base">${report.allowed_count}</span>
+        <span class="text-slate-500 ml-1">허용</span>
+      </div>
+      ${(report.summary?.notes||[]).map(n=>`<div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 text-xs text-slate-600">${n}</div>`).join('')}
+    `;
+
+    renderModalPages(report.page_results, 'all');
+    renderModalAll(report.page_results);
+
+    // 탭 초기화
+    switchTab('pages');
+    document.querySelectorAll('.filter-btn').forEach(b => {
+      b.className = 'filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600';
+    });
+    document.querySelector('.filter-btn').className =
+      'filter-btn active text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium';
+
+    document.getElementById('reportModal').classList.remove('hidden');
+  } catch(e) {
+    alert('오류: ' + e.message);
+  }
+}
+
+function closeModal() {
+  document.getElementById('reportModal').classList.add('hidden');
+  _currentReport = null;
+}
+
+// 모달 바깥 클릭 시 닫기
+document.getElementById('reportModal').addEventListener('click', e => {
+  if (e.target === document.getElementById('reportModal')) closeModal();
+});
+
+// ── 탭 전환 ─────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.getElementById('tabPages').classList.toggle('open', tab === 'pages');
+  document.getElementById('tabAll').classList.toggle('open', tab === 'all');
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    const isActive = (i === 0 && tab === 'pages') || (i === 1 && tab === 'all');
+    b.className = isActive
+      ? 'tab-btn active text-sm px-4 py-2'
+      : 'tab-btn text-sm px-4 py-2 text-slate-500';
+  });
+}
+
+// ── 페이지 필터 ─────────────────────────────────────────────────
+function filterPages(f, btn) {
+  _currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    b.className = 'filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600';
+  });
+  btn.className = 'filter-btn active text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium';
+  if (_currentReport) renderModalPages(_currentReport.page_results, f);
+}
+
+// ── 페이지별 결과 렌더링 ─────────────────────────────────────────
+function renderModalPages(pages, filter) {
+  const VERDICT_ORDER = { '위반': 0, '주의': 1, '허용': 2 };
+  let filtered = (pages || []).filter(p => p.page_number > 0);
+  if (filter === 'violation') filtered = filtered.filter(p => p.violation_count > 0);
+  else if (filter === 'caution') filtered = filtered.filter(p => p.caution_count > 0 && p.violation_count === 0);
+  else if (filter === 'clean') filtered = filtered.filter(p => p.violation_count === 0 && p.caution_count === 0);
+
+  if (filtered.length === 0) {
+    document.getElementById('modalPageList').innerHTML =
+      '<p class="text-center text-slate-400 text-sm py-8">해당 조건의 페이지가 없습니다.</p>';
+    return;
+  }
+
+  document.getElementById('modalPageList').innerHTML = filtered.map(page => {
+    const v = page.violation_count || 0;
+    const c = page.caution_count   || 0;
+    const statusColor = v > 0 ? 'border-red-200 bg-red-50' : c > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50';
+    const statusIcon  = v > 0 ? '🔴' : c > 0 ? '🟡' : '🟢';
+
+    // 유형별 그룹
+    const typeMap = {};
+    for (const d of (page.detections || [])) {
+      const key = d.detection_type || '기타';
+      if (!typeMap[key]) typeMap[key] = [];
+      typeMap[key].push(d);
+    }
+    const groups = Object.entries(typeMap).map(([type, items]) => {
+      items.sort((a,b) => (VERDICT_ORDER[a.verdict]||9)-(VERDICT_ORDER[b.verdict]||9));
+      return { type, items, worst: items[0]?.verdict || '허용' };
+    }).sort((a,b) => (VERDICT_ORDER[a.worst]||9)-(VERDICT_ORDER[b.worst]||9));
+
+    const detHtml = groups.map(({ type, items, worst }) => {
+      const hCls = worst==='위반' ? 'bg-red-100 text-red-700 border-red-200'
+                 : worst==='주의' ? 'bg-amber-100 text-amber-700 border-amber-200'
+                 :                  'bg-green-100 text-green-700 border-green-200';
+      const hIcon = worst==='위반' ? '🔴' : worst==='주의' ? '🟡' : '🟢';
+      const cnt   = items.length > 1 ? ` <span class="font-normal opacity-70">(${items.length}건)</span>` : '';
+      const iHtml = items.map(d => {
+        const vcls = `verdict-${d.verdict}`;
+        return `<div class="text-xs px-2.5 py-2 rounded border ${vcls} mb-1">
+          <div class="flex items-center justify-between gap-2 mb-0.5">
+            <span class="font-mono break-all">${d.detected_text ? `"${d.detected_text.slice(0,150)}"` : (d.image_description ? `[이미지] ${d.image_description}` : '—')}</span>
+            <span class="flex-shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${vcls}">${d.verdict}</span>
+          </div>
+          ${d.reason ? `<p class="opacity-70 mt-0.5">${d.reason}</p>` : ''}
+          ${d.recommendation ? `<p class="text-indigo-700 font-medium mt-0.5">→ ${d.recommendation}</p>` : ''}
+        </div>`;
+      }).join('');
+      return `<div class="mb-2">
+        <div class="flex items-center gap-1.5 px-2 py-1 rounded-t border ${hCls} text-xs font-semibold">
+          <span>${hIcon}</span><span>${type}</span>${cnt}
+        </div>
+        <div class="border border-t-0 rounded-b border-slate-200 px-2 py-1.5 bg-white">${iHtml}</div>
+      </div>`;
+    }).join('');
+
+    return `<div class="border rounded-xl overflow-hidden ${statusColor}">
+      <button class="w-full flex items-center gap-3 p-3 text-left" onclick="toggleDetail(this)">
+        <span class="text-lg">${statusIcon}</span>
+        <div class="flex-1">
+          <span class="font-semibold text-slate-700 text-sm">${page.page_number}페이지</span>
+          ${v > 0 ? `<span class="ml-2 text-xs text-red-600">${v}건 위반</span>` : ''}
+          ${c > 0 ? `<span class="ml-1 text-xs text-amber-600">${c}건 주의</span>` : ''}
+          ${v===0&&c===0 ? '<span class="ml-2 text-xs text-green-600">이상 없음</span>' : ''}
+        </div>
+        <i class="fas fa-chevron-down text-slate-400 text-xs toggle-icon transition-transform"></i>
+      </button>
+      <div class="page-detail hidden px-3 pb-3 pt-1">
+        ${detHtml || '<p class="text-xs text-green-600 text-center py-2">검출된 항목이 없습니다.</p>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleDetail(btn) {
+  const detail = btn.parentElement.querySelector('.page-detail');
+  const icon   = btn.querySelector('.toggle-icon');
+  detail.classList.toggle('hidden');
+  icon.style.transform = detail.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+
+// ── 전체 검출 목록 ───────────────────────────────────────────────
+function renderModalAll(pages) {
+  const ORDER = {'위반':0,'주의':1,'허용':2};
+  const all = [];
+  (pages||[]).forEach(p => {
+    (p.detections||[]).forEach(d => all.push({...d, pLabel: p.page_number===0?'메타':`${p.page_number}p`}));
+  });
+  all.sort((a,b) => (ORDER[a.verdict]||9)-(ORDER[b.verdict]||9));
+  if (all.length === 0) {
+    document.getElementById('modalAllTable').innerHTML =
+      '<tr><td colspan="6" class="text-center py-8 text-slate-400">검출된 항목이 없습니다.</td></tr>';
+    return;
+  }
+  document.getElementById('modalAllTable').innerHTML = all.map(d => {
+    const vcls = `verdict-${d.verdict}`;
+    return `<tr class="border-b border-slate-50 hover:bg-slate-50">
+      <td class="px-3 py-2 text-slate-500">${d.pLabel}</td>
+      <td class="px-3 py-2">${d.detection_type||''}</td>
+      <td class="px-3 py-2 max-w-xs"><span class="font-mono break-all text-xs">${(d.detected_text||d.image_description||'').slice(0,80)}</span></td>
+      <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-medium ${vcls}">${d.verdict}</span></td>
+      <td class="px-3 py-2 text-slate-500 max-w-xs text-xs">${(d.reason||'').slice(0,100)}</td>
+      <td class="px-3 py-2 text-indigo-600 max-w-xs text-xs">${(d.recommendation||'').slice(0,80)}</td>
+    </tr>`;
+  }).join('');
+}
+</script>
+</body>
+</html>

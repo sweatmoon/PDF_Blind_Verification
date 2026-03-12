@@ -12,8 +12,9 @@ from fastapi.responses import HTMLResponse, Response, JSONResponse
 
 from api.verify import router as verify_router
 from api.admin  import router as admin_router
+from api.jobs   import router as jobs_router
 from services.file_manager import cleanup_scheduler
-from core.config import get_logger, CLAUDE_ENABLED, CLAUDE_MODEL
+from core.config import get_logger, CLAUDE_ENABLED, CLAUDE_MODEL, _load_saved_jobs
 
 logger = get_logger("main")
 
@@ -22,6 +23,7 @@ FRONTEND = Path(__file__).parent.parent / "frontend" / "public"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _load_saved_jobs()   # 서버 재시작 시 저장된 결과 복원
     task = asyncio.create_task(cleanup_scheduler())
     logger.info(f"서버 시작 | Claude={'활성 ' + CLAUDE_MODEL if CLAUDE_ENABLED else '비활성(규칙 기반)'}")
     yield
@@ -47,6 +49,7 @@ app.add_middleware(
 
 app.include_router(verify_router, prefix="/api/verify", tags=["검증"])
 app.include_router(admin_router,  prefix="/api/admin",  tags=["관리자"])
+app.include_router(jobs_router,   prefix="/api/jobs",   tags=["대시보드"])
 
 
 # ── 정적 파일 & SPA 폴백 ──────────────────────────────────────
