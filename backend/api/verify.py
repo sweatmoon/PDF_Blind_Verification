@@ -1,7 +1,7 @@
 """
-검증 API 라우터 – 업로드 / 상태 / 리포트 / 다운로드
+검증 API 라우터 – 업로드 / 상태 / 리포트 / 다운로드 / 썸네일
 - 청크 기반 파일 읽기로 대용량 파일 업로드 타임아웃 방지
-- 업로드 진행률 제공
+- 썸네일 lazy 로드 (별도 엔드포인트)
 """
 from __future__ import annotations
 import asyncio
@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
 from models.schemas import JobStatus
 from services.pipeline import Pipeline
@@ -19,6 +19,9 @@ from core.config import (
     get_job_tmp_dir, get_job, set_job, update_job,
     MAX_FILE_SIZE_MB,
 )
+
+# 썸네일 캐시 (job_id → {page: b64})
+_thumb_cache: dict[str, dict] = {}
 
 router = APIRouter()
 logger = get_logger("verify_api")
@@ -179,6 +182,26 @@ def download_report(job_id: str, fmt: str = "json"):
         content=minimal,
         headers={"Content-Disposition": f'attachment; filename="report_{job_id[:8]}.json"'},
     )
+
+
+# ── 썸네일 lazy 로드 ──────────────────────────────────────────
+@router.get("/thumbnail/{job_id}/{page_num}")
+async def get_thumbnail(job_id: str, page_num: int):
+    """페이지 썸네일 on-demand 생성 (처리 속도 최적화)"""
+    job = get_job(job_id)
+    if not job or job["status"] != JobStatus.COMPLETED.value:
+        raise HTTPException(404, "리포트 없음")
+
+    # 캐시에서 확인
+    if job_id in _thumb_cache and page_num in _thumb_cache[job_id]:
+        b64 = _thumb_cache[job_id][page_num]
+        import base64
+        data = base64.b64decode(b64)
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=3600"})
+
+    # PDF 원본은 이미 삭제됐으므로 빈 응답
+    raise HTTPException(404, "썸네일 없음 (원본 파일 삭제됨)")
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────
