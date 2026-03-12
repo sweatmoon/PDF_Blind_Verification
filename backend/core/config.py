@@ -15,19 +15,33 @@ for _d in (TMP_DIR, LOGS_DIR, DATA_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── 환경 변수 ──────────────────────────────────────────────────
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+# 키 파일 경로 (환경변수보다 먼저 정의)
+_VISION_KEY_FILE = DATA_DIR / "vision_api_key.txt"
+_CLAUDE_KEY_FILE = DATA_DIR / "claude_api_key.txt"
+
+def _load_key_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+    except Exception:
+        return ""
+
+ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "") or _load_key_file(_CLAUDE_KEY_FILE)
 MAX_FILE_SIZE_MB   = int(os.getenv("MAX_FILE_SIZE_MB", "100"))
 AUTO_DELETE_MIN    = int(os.getenv("AUTO_DELETE_MIN", "30"))
 OCR_ENABLED        = os.getenv("OCR_ENABLED", "true").lower() == "true"
 CLAUDE_ENABLED     = bool(ANTHROPIC_API_KEY)
 CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
-# ── Google Vision API (런타임 설정 가능) ───────────────────────
-GOOGLE_VISION_API_KEY: str = os.getenv("GOOGLE_VISION_API_KEY", "")
+# ── Google Vision API (런타임 설정 가능 + 파일 영구 저장) ────────
+GOOGLE_VISION_API_KEY: str = os.getenv("GOOGLE_VISION_API_KEY", "") or _load_key_file(_VISION_KEY_FILE)
 
 def set_google_vision_key(key: str):
     global GOOGLE_VISION_API_KEY
     GOOGLE_VISION_API_KEY = key.strip()
+    try:
+        _VISION_KEY_FILE.write_text(key.strip(), encoding="utf-8")
+    except Exception:
+        pass
 
 def get_google_vision_key() -> str:
     return GOOGLE_VISION_API_KEY

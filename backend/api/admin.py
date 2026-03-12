@@ -157,6 +157,12 @@ def set_claude_key(req: ClaudeKeyRequest):
     cfg.ANTHROPIC_API_KEY = api_key
     cfg.CLAUDE_ENABLED = True
 
+    # 파일에 영구 저장 (서버 재시작 후 자동 복원)
+    try:
+        cfg._CLAUDE_KEY_FILE.write_text(api_key, encoding="utf-8")
+    except Exception:
+        pass
+
     # Claude 클라이언트 재초기화
     try:
         import os
