@@ -18,6 +18,8 @@
     .page-card { transition: all 0.2s ease; }
     .page-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
     .progress-bar { transition: width 0.5s ease; }
+    .job-card { cursor:pointer; transition: box-shadow .15s, border-color .15s; }
+    .job-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.07); border-color: #a5b4fc !important; }
     .tab-active { border-bottom: 2px solid #6366f1; color: #6366f1; font-weight: 600; }
     .spinner { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -29,6 +31,8 @@
     .verdict-위반 { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
     .verdict-주의 { background: #fef3c7; color: #d97706; border: 1px solid #fcd34d; }
     .verdict-허용 { background: #d1fae5; color: #059669; border: 1px solid #6ee7b7; }
+    .status-processing { animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
     .step-done { color: #059669 !important; }
     .step-active { color: #6366f1 !important; font-weight: 600; }
     .batch-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
@@ -67,9 +71,10 @@
       <button onclick="showPage('admin')" class="text-xs text-slate-500 hover:text-indigo-600 px-3 py-1.5 rounded hover:bg-slate-100 transition">
         <i class="fas fa-cog mr-1"></i>관리자
       </button>
-      <a href="/dashboard.html" class="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700 transition font-medium">
+      <button onclick="showPage('dashboard')" id="dashboardBtn" class="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700 transition font-medium">
         <i class="fas fa-grid-2 mr-1"></i>대시보드
-      </a>
+        <span id="dashboardBadge" class="hidden ml-1 bg-white text-indigo-700 rounded-full px-1.5 py-0.5 text-xs font-bold"></span>
+      </button>
     </div>
   </div>
 </header>
@@ -407,6 +412,177 @@
     </div>
   </div>
 
+  <!-- ═══════════════ 대시보드 화면 ═══════════════ -->
+  <div id="page-dashboard" class="hidden fade-in">
+    <div class="flex gap-5 items-start">
+
+      <!-- ── 좌측: 작업 카드 목록 ── -->
+      <div class="w-72 flex-shrink-0 space-y-2">
+        <div class="flex items-center justify-between mb-1">
+          <h2 class="font-semibold text-slate-700 text-sm flex items-center gap-2">
+            <i class="fas fa-folder-open text-indigo-500"></i> 검증 작업 목록
+          </h2>
+          <button onclick="clearAllSavedReports()"
+                  id="db-clearAllBtn"
+                  class="hidden text-xs text-slate-400 hover:text-red-500 transition">
+            <i class="fas fa-trash mr-1"></i>전체 삭제
+          </button>
+        </div>
+
+        <!-- 진행 중 섹션 -->
+        <div id="db-runningSection" class="hidden">
+          <p class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5 px-1">진행 중</p>
+          <div id="db-runningList" class="space-y-2"></div>
+        </div>
+
+        <!-- 완료 섹션 -->
+        <div id="db-doneSection">
+          <p id="db-doneLabel" class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5 px-1">완료된 검증</p>
+          <div id="db-doneList" class="space-y-2">
+            <div id="db-empty" class="bg-white rounded-xl border border-slate-100 p-8 text-center text-slate-400">
+              <i class="fas fa-inbox text-3xl mb-2 block text-slate-300"></i>
+              <p class="text-xs">아직 검증 결과가 없습니다</p>
+              <button onclick="showPage('upload')"
+                      class="mt-2 text-xs text-indigo-500 hover:underline">새 검증 시작</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 우측: 상세 패널 ── -->
+      <div class="flex-1 min-w-0">
+
+        <!-- 빈 상태 -->
+        <div id="db-detailEmpty" class="bg-white rounded-xl border border-slate-100 p-16 text-center text-slate-400">
+          <i class="fas fa-hand-pointer text-4xl mb-4 block text-slate-200"></i>
+          <p class="font-medium">좌측 카드를 클릭하면<br>상세 결과가 여기에 표시됩니다</p>
+        </div>
+
+        <!-- 진행 중 상세 (메인 processing UI 복제) -->
+        <div id="db-detailRunning" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+          <div class="text-center mb-6">
+            <div class="relative inline-flex mb-4">
+              <div class="w-16 h-16 rounded-full border-4 border-indigo-100 flex items-center justify-center">
+                <i class="fas fa-shield-halved text-2xl text-indigo-500 spinner"></i>
+              </div>
+            </div>
+            <h2 class="text-lg font-bold text-slate-800">블라인드 검증 진행 중</h2>
+            <p id="db-procFileName" class="text-sm text-slate-400 mt-1 truncate px-4"></p>
+          </div>
+          <div class="mb-5">
+            <div class="flex justify-between text-xs text-slate-500 mb-1.5">
+              <span id="db-procMsg">처리 중…</span>
+              <span id="db-procPct" class="font-semibold text-indigo-600">0%</span>
+            </div>
+            <div class="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+              <div id="db-procBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 text-center mt-4">
+            <i class="fas fa-info-circle mr-1"></i>
+            브라우저에서 직접 처리 중입니다. 이 페이지를 닫지 마세요.
+          </p>
+        </div>
+
+        <!-- 완료 결과 상세 (renderResult 결과를 여기에 표시) -->
+        <div id="db-detailDone" class="hidden space-y-4">
+          <!-- 요약 카드 -->
+          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+            <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
+              <div>
+                <div class="flex items-center gap-3 mb-1.5">
+                  <span id="db-riskBadge" class="px-3 py-1 rounded-full text-white text-sm font-bold"></span>
+                  <h2 id="db-resultFileName" class="font-semibold text-slate-700 text-sm truncate max-w-xs"></h2>
+                </div>
+                <p class="text-xs text-slate-500">
+                  <span id="db-resultPages">-</span>페이지 분석 &nbsp;·&nbsp;
+                  처리시간 <span id="db-resultTime">-</span> &nbsp;·&nbsp;
+                  <span id="db-resultDate">-</span>
+                </p>
+                <div id="db-resultSummaryNotes" class="mt-2 flex flex-wrap gap-1.5"></div>
+              </div>
+              <div class="flex gap-3 items-start">
+                <div class="flex gap-2">
+                  <div class="text-center bg-red-50 rounded-xl px-4 py-2 min-w-[56px]">
+                    <div id="db-totalViolation" class="text-xl font-bold text-red-600">0</div>
+                    <div class="text-xs text-slate-500 mt-0.5">위반</div>
+                  </div>
+                  <div class="text-center bg-amber-50 rounded-xl px-4 py-2 min-w-[56px]">
+                    <div id="db-totalCaution" class="text-xl font-bold text-amber-500">0</div>
+                    <div class="text-xs text-slate-500 mt-0.5">주의</div>
+                  </div>
+                  <div class="text-center bg-green-50 rounded-xl px-4 py-2 min-w-[56px]">
+                    <div id="db-totalAllowed" class="text-xl font-bold text-green-600">0</div>
+                    <div class="text-xs text-slate-500 mt-0.5">허용</div>
+                  </div>
+                </div>
+                <button id="db-deleteBtn" class="text-xs text-slate-400 hover:text-red-500 px-2 py-1.5 rounded hover:bg-red-50 transition">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+            </div>
+            <!-- 액션 버튼 -->
+            <div class="flex flex-wrap gap-2 pt-4 border-t border-slate-100">
+              <button id="db-dlHtml" class="text-xs bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition flex items-center gap-1.5">
+                <i class="fas fa-download"></i> HTML 리포트
+              </button>
+              <button id="db-dlJson" class="text-xs bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 transition flex items-center gap-1.5">
+                <i class="fas fa-code"></i> JSON 다운로드
+              </button>
+            </div>
+          </div>
+          <!-- 탭 -->
+          <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="flex border-b border-slate-100 px-4">
+              <button onclick="dbSwitchTab('pages', this)" class="db-tab-btn px-4 py-3 text-sm font-medium text-indigo-600 border-b-2 border-indigo-500">
+                <i class="fas fa-file-lines mr-1.5"></i>페이지별 결과
+              </button>
+              <button onclick="dbSwitchTab('meta', this)" class="db-tab-btn px-4 py-3 text-sm font-medium text-slate-500">
+                <i class="fas fa-database mr-1.5"></i>메타데이터
+              </button>
+              <button onclick="dbSwitchTab('all', this)" class="db-tab-btn px-4 py-3 text-sm font-medium text-slate-500">
+                <i class="fas fa-list mr-1.5"></i>전체 목록
+              </button>
+            </div>
+            <!-- 페이지별 탭 -->
+            <div id="db-tab-pages" class="p-4">
+              <div class="flex gap-2 mb-4 flex-wrap">
+                <button onclick="dbFilterPages('all',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
+                <button onclick="dbFilterPages('violation',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
+                <button onclick="dbFilterPages('caution',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
+                <button onclick="dbFilterPages('clean',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
+              </div>
+              <div id="db-pageList" class="space-y-3"></div>
+            </div>
+            <!-- 메타데이터 탭 -->
+            <div id="db-tab-meta" class="hidden p-4">
+              <div id="db-metaContent" class="space-y-3"></div>
+            </div>
+            <!-- 전체 목록 탭 -->
+            <div id="db-tab-all" class="hidden p-4">
+              <div class="overflow-x-auto">
+                <table class="w-full text-xs">
+                  <thead>
+                    <tr class="bg-slate-50 text-slate-500">
+                      <th class="px-3 py-2 text-left font-medium">페이지</th>
+                      <th class="px-3 py-2 text-left font-medium">유형</th>
+                      <th class="px-3 py-2 text-left font-medium">내용</th>
+                      <th class="px-3 py-2 text-left font-medium">판정</th>
+                      <th class="px-3 py-2 text-left font-medium">사유</th>
+                      <th class="px-3 py-2 text-left font-medium">수정 권고</th>
+                    </tr>
+                  </thead>
+                  <tbody id="db-allTable" class="divide-y divide-slate-100"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <!-- ═══════════════ 관리자 화면 ═══════════════ -->
   <div id="page-admin" class="hidden fade-in">
     <div class="flex items-center gap-3 mb-5">
@@ -592,19 +768,23 @@ let state = {
   totalOutputTokens: 0,
   batchResults:   [],        // 배치별 결과 누적
   resultTimer:    null,       // showPage('result') setTimeout ID
+  // 대시보드 동기화용
+  currentProgress: 0,
+  currentMessage:  '',
 };
 
 // ─────────────────────────────────────────────────────────────
 // 페이지 라우팅
 // ─────────────────────────────────────────────────────────────
 function showPage(page) {
-  ['upload','processing','result','admin'].forEach(p => {
+  ['upload','processing','result','admin','dashboard'].forEach(p => {
     document.getElementById(`page-${p}`).classList.add('hidden');
   });
   document.getElementById(`page-${page}`).classList.remove('hidden');
   state.currentPage = page;
   if (page === 'admin') loadAdminData();
   if (page === 'upload') renderRecentJobs();
+  if (page === 'dashboard') renderDashboard();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1087,6 +1267,13 @@ async function startVisionAnalysis() {
   updateRecentJobStatus(jobId, 'completed');
   // ✅ 저장함에 저장
   saveReportToStorage(jobId, state.selectedFile?.name || report.filename || '', state.selectedFile?.size || 0, report);
+  // 대시보드가 열려있으면 해당 job 자동 선택하여 결과 표시
+  if (state.currentPage === 'dashboard') {
+    _dbSelectedId = jobId;
+    renderDashboard();
+    dbSelectDone(jobId);
+    return; // showPage('result') 대신 대시보드에서 표시
+  }
   state.resultTimer = setTimeout(() => showPage('result'), 600);
 }
 
@@ -1471,6 +1658,17 @@ function setProgress(pct, msg) {
   document.getElementById('progressBar').style.width = pct + '%';
   document.getElementById('progressPct').textContent = pct + '%';
   document.getElementById('progressMessage').textContent = msg || '';
+  // 대시보드 진행 중 패널 실시간 동기화
+  state.currentProgress = pct;
+  state.currentMessage  = msg || '';
+  if (state.currentPage === 'dashboard') {
+    const bar = document.getElementById('db-procBar');
+    const msgEl = document.getElementById('db-procMsg');
+    const pctEl = document.getElementById('db-procPct');
+    if (bar)   bar.style.width   = pct + '%';
+    if (msgEl) msgEl.textContent = msg || '';
+    if (pctEl) pctEl.textContent = pct + '%';
+  }
 }
 
 function setStep(id, state_, detail) {
@@ -2221,12 +2419,382 @@ function renderSavedReports() {
 }
 
 function openSavedReport(jobId) {
+  // 대시보드로 이동하여 해당 결과 표시
+  _dbSelectedId = jobId;
+  showPage('dashboard');
+  dbSelectDone(jobId);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 대시보드 로직
+// ─────────────────────────────────────────────────────────────
+let _dbSelectedId   = null;   // 현재 선택된 작업 ID
+let _dbCurrentReport= null;   // 현재 표시 중인 리포트
+let _dbFilter       = 'all';  // 페이지 필터
+
+function renderDashboard() {
+  const list      = getSavedReports();
+  const running   = state.recentJobs.filter(j => j.status === 'processing');
+  const total     = list.length + running.length;
+
+  // 헤더 배지
+  const badge = document.getElementById('dashboardBadge');
+  if (badge) {
+    badge.textContent = total;
+    badge.classList.toggle('hidden', total === 0);
+  }
+
+  // 삭제 버튼
+  const clearBtn = document.getElementById('db-clearAllBtn');
+  if (clearBtn) clearBtn.classList.toggle('hidden', list.length === 0);
+
+  // ── 진행 중 섹션 ──
+  const runningSection = document.getElementById('db-runningSection');
+  const runningList    = document.getElementById('db-runningList');
+  if (running.length > 0) {
+    runningSection.classList.remove('hidden');
+    runningList.innerHTML = '';
+    running.forEach(j => {
+      const card = document.createElement('div');
+      const isActive = j.jobId === _dbSelectedId;
+      card.className = `job-card bg-white rounded-xl border p-3 ${isActive ? 'border-indigo-400 shadow-md' : 'border-slate-100'}`;
+      card.onclick = () => dbSelectRunning(j.jobId, j.filename);
+      card.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span class="text-base status-processing">⏳</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-xs font-medium text-slate-700 truncate">${esc(j.filename)}</p>
+            <p class="text-xs text-indigo-500 mt-0.5">분석 진행 중…</p>
+          </div>
+        </div>`;
+      runningList.appendChild(card);
+    });
+  } else {
+    runningSection.classList.add('hidden');
+  }
+
+  // ── 완료 섹션 ──
+  const doneList  = document.getElementById('db-doneList');
+  const emptyEl   = document.getElementById('db-empty');
+  const doneLabel = document.getElementById('db-doneLabel');
+
+  // 기존 카드 제거 (empty 제외)
+  Array.from(doneList.children).forEach(c => { if (c.id !== 'db-empty') c.remove(); });
+
+  if (list.length === 0) {
+    if (emptyEl)   emptyEl.classList.remove('hidden');
+    if (doneLabel) doneLabel.classList.add('hidden');
+  } else {
+    if (emptyEl)   emptyEl.classList.add('hidden');
+    if (doneLabel) doneLabel.classList.remove('hidden');
+
+    list.forEach(entry => {
+      const riskColor = entry.risk_level === 'HIGH'   ? 'bg-red-100 text-red-700 border-red-200' :
+                        entry.risk_level === 'MEDIUM' ? 'bg-amber-100 text-amber-700 border-amber-200' :
+                                                        'bg-green-100 text-green-700 border-green-200';
+      const riskLabel = entry.risk_level === 'HIGH' ? '고위험' : entry.risk_level === 'MEDIUM' ? '중위험' : '저위험';
+      const isActive  = entry.jobId === _dbSelectedId;
+      const card = document.createElement('div');
+      card.className = `job-card group relative bg-white rounded-xl border p-3 ${isActive ? 'border-indigo-400 shadow-md' : 'border-slate-100'}`;
+      card.onclick = () => dbSelectDone(entry.jobId);
+      card.innerHTML = `
+        <div class="flex items-start gap-2">
+          <i class="fas fa-file-pdf text-red-400 mt-0.5 flex-shrink-0"></i>
+          <div class="flex-1 min-w-0">
+            <p class="text-xs font-semibold text-slate-700 truncate" title="${esc(entry.filename)}">${esc(entry.filename)}</p>
+            <p class="text-xs text-slate-400 mt-0.5">${entry.page_count || 0}p · ${formatSize(entry.fileSize)} · ${timeAgo(entry.savedAt)}</p>
+            <div class="flex items-center gap-1.5 mt-1.5">
+              <span class="text-xs px-1.5 py-0.5 rounded-full border font-medium ${riskColor}">${riskLabel}</span>
+              ${entry.violation_count ? `<span class="text-xs text-red-600">위반 ${entry.violation_count}</span>` : ''}
+              ${entry.caution_count   ? `<span class="text-xs text-amber-600">주의 ${entry.caution_count}</span>`  : ''}
+              ${!entry.violation_count && !entry.caution_count ? `<span class="text-xs text-green-600">이상 없음</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <button onclick="event.stopPropagation(); dbDeleteJob('${entry.jobId}')"
+          class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition text-xs">
+          <i class="fas fa-times"></i>
+        </button>`;
+      doneList.appendChild(card);
+    });
+  }
+
+  // 선택된 항목이 없으면 빈 상태 표시
+  if (!_dbSelectedId) dbShowEmpty();
+}
+
+function dbShowEmpty() {
+  document.getElementById('db-detailEmpty').classList.remove('hidden');
+  document.getElementById('db-detailRunning').classList.add('hidden');
+  document.getElementById('db-detailDone').classList.add('hidden');
+}
+
+// 진행 중 작업 선택 → processing UI 표시
+function dbSelectRunning(jobId, filename) {
+  _dbSelectedId    = jobId;
+  _dbCurrentReport = null;
+  renderDashboard(); // 카드 active 상태 갱신
+
+  document.getElementById('db-detailEmpty').classList.add('hidden');
+  document.getElementById('db-detailDone').classList.add('hidden');
+  document.getElementById('db-detailRunning').classList.remove('hidden');
+
+  document.getElementById('db-procFileName').textContent = filename || '';
+  // 현재 진행 중인 job이면 실시간 진행률 바인딩
+  if (jobId === state.currentJobId) {
+    const syncProgress = () => {
+      if (_dbSelectedId !== jobId) return;
+      const pct = state.currentProgress || 0;
+      const msg = state.currentMessage  || '처리 중…';
+      document.getElementById('db-procBar').style.width = pct + '%';
+      document.getElementById('db-procMsg').textContent  = msg;
+      document.getElementById('db-procPct').textContent  = pct + '%';
+      if (state.currentPage === 'dashboard' && state.recentJobs.find(j=>j.jobId===jobId && j.status==='processing')) {
+        requestAnimationFrame(syncProgress);
+      }
+    };
+    syncProgress();
+  }
+}
+
+// 완료 작업 선택 → result UI 표시
+function dbSelectDone(jobId) {
   const entry = getSavedReports().find(r => r.jobId === jobId);
   if (!entry || !entry.report) { showToast('저장된 결과를 찾을 수 없습니다.', 'error'); return; }
-  state.currentJobId  = jobId;
-  state.currentReport = entry.report;
-  renderResult(entry.report);
-  showPage('result');
+  _dbSelectedId    = jobId;
+  _dbCurrentReport = entry.report;
+  _dbFilter        = 'all';
+  renderDashboard(); // 카드 active 상태 갱신
+
+  document.getElementById('db-detailEmpty').classList.remove('hidden');
+  document.getElementById('db-detailRunning').classList.add('hidden');
+  document.getElementById('db-detailDone').classList.add('hidden');
+
+  dbRenderResult(entry.report, entry);
+
+  document.getElementById('db-detailEmpty').classList.add('hidden');
+  document.getElementById('db-detailDone').classList.remove('hidden');
+}
+
+function dbDeleteJob(jobId) {
+  deleteSavedReport(jobId);
+  if (_dbSelectedId === jobId) {
+    _dbSelectedId = null;
+    dbShowEmpty();
+  }
+  renderDashboard();
+}
+
+// 대시보드 결과 렌더링 (renderResult 대응)
+function dbRenderResult(report, entry) {
+  if (!report) return;
+  const riskColors = {HIGH:'#dc2626', MEDIUM:'#d97706', LOW:'#059669'};
+  const riskLabels = {HIGH:'고위험', MEDIUM:'중위험', LOW:'저위험'};
+  const risk = report.risk_level || 'LOW';
+
+  const badge = document.getElementById('db-riskBadge');
+  badge.textContent       = riskLabels[risk] || risk;
+  badge.style.background  = riskColors[risk] || '#6b7280';
+
+  document.getElementById('db-resultFileName').textContent = report.filename || (entry && entry.filename) || '';
+  document.getElementById('db-resultPages').textContent    = report.total_pages || 0;
+  document.getElementById('db-resultDate').textContent     = (report.created_at || '').toString().slice(0,19).replace('T',' ');
+
+  // 처리시간
+  const elapsed = report.elapsed_sec != null ? report.elapsed_sec :
+                  (report.processing_time_sec != null ? report.processing_time_sec : null);
+  document.getElementById('db-resultTime').textContent =
+    elapsed != null ? (elapsed < 60 ? `${Math.round(elapsed)}초` : `${Math.floor(elapsed/60)}분 ${Math.round(elapsed%60)}초`) : '-';
+
+  // 건수
+  document.getElementById('db-totalViolation').textContent = report.violation_count ?? 0;
+  document.getElementById('db-totalCaution').textContent   = report.caution_count   ?? 0;
+  document.getElementById('db-totalAllowed').textContent   = report.allowed_count   ?? 0;
+
+  // 요약 노트
+  const notesEl = document.getElementById('db-resultSummaryNotes');
+  notesEl.innerHTML = '';
+  (report.summary_notes || []).forEach(note => {
+    const span = document.createElement('span');
+    span.className = 'text-xs bg-yellow-50 border border-yellow-200 text-yellow-800 px-2 py-0.5 rounded-full';
+    span.textContent = note;
+    notesEl.appendChild(span);
+  });
+
+  // 다운로드 버튼
+  document.getElementById('db-dlHtml').onclick = () => {
+    state.currentReport = report;
+    downloadReport('html');
+  };
+  document.getElementById('db-dlJson').onclick = () => {
+    state.currentReport = report;
+    downloadReport('json');
+  };
+  document.getElementById('db-deleteBtn').onclick = () => dbDeleteJob(_dbSelectedId);
+
+  // 탭 초기화
+  dbSwitchTab('pages', document.querySelector('.db-tab-btn'));
+  dbRenderPages(report, 'all');
+  dbRenderMeta(report);
+  dbRenderAll(report);
+}
+
+function dbSwitchTab(tab, btn) {
+  ['pages','meta','all'].forEach(t => {
+    document.getElementById(`db-tab-${t}`).classList.toggle('hidden', t !== tab);
+  });
+  document.querySelectorAll('.db-tab-btn').forEach(b => {
+    b.classList.remove('text-indigo-600','border-b-2','border-indigo-500');
+    b.classList.add('text-slate-500');
+  });
+  if (btn) {
+    btn.classList.add('text-indigo-600','border-b-2','border-indigo-500');
+    btn.classList.remove('text-slate-500');
+  }
+}
+
+function dbFilterPages(f, btn) {
+  _dbFilter = f;
+  document.querySelectorAll('.db-filter').forEach(b => {
+    b.className = 'db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600';
+  });
+  if (btn) btn.className = 'db-filter text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium';
+  if (_dbCurrentReport) dbRenderPages(_dbCurrentReport, f);
+}
+
+function dbRenderPages(report, filter) {
+  const pageList = document.getElementById('db-pageList');
+  pageList.innerHTML = '';
+  if (!report) return;
+
+  // buildClientReport와 동일한 pageMap 구성
+  const pageMap = {};
+  (report.items || []).forEach(it => {
+    const p = String(it.page || 1);
+    if (!pageMap[p]) pageMap[p] = [];
+    pageMap[p].push(it);
+  });
+
+  const riskColors = {HIGH:'#dc2626', MEDIUM:'#d97706', LOW:'#059669'};
+  const verdictBg = { '위반':'verdict-위반','주의':'verdict-주의','허용':'verdict-허용' };
+
+  let pages = Object.entries(pageMap).map(([p, items]) => {
+    const vCount = items.filter(i=>i.judgment==='위반').length;
+    const cCount = items.filter(i=>i.judgment==='주의').length;
+    return { p: parseInt(p), items, vCount, cCount };
+  }).sort((a,b)=>a.p-b.p);
+
+  if (filter === 'violation') pages = pages.filter(p => p.vCount > 0);
+  else if (filter === 'caution')   pages = pages.filter(p => p.cCount > 0 && p.vCount === 0);
+  else if (filter === 'clean')     pages = pages.filter(p => p.vCount === 0 && p.cCount === 0);
+
+  if (pages.length === 0) {
+    pageList.innerHTML = '<p class="text-xs text-slate-400 text-center py-6">해당 페이지가 없습니다</p>';
+    return;
+  }
+
+  pages.forEach(({ p, items, vCount, cCount }) => {
+    const statusColor = vCount > 0 ? '#dc2626' : cCount > 0 ? '#d97706' : '#059669';
+    const statusIcon  = vCount > 0 ? 'fa-circle-xmark' : cCount > 0 ? 'fa-circle-exclamation' : 'fa-circle-check';
+
+    // 유형별 그룹화
+    const byType = {};
+    items.forEach(it => {
+      const t = it.type || '기타';
+      if (!byType[t]) byType[t] = [];
+      byType[t].push(it);
+    });
+    const sortedTypes = Object.entries(byType).sort(([,a],[,b]) => {
+      const score = it => it.judgment==='위반'?2:it.judgment==='주의'?1:0;
+      return Math.max(...b.map(score)) - Math.max(...a.map(score));
+    });
+
+    const typeHtml = sortedTypes.map(([type, its]) => {
+      const worstV = its.some(i=>i.judgment==='위반') ? '위반' : its.some(i=>i.judgment==='주의') ? '주의' : '허용';
+      const typeColor = worstV==='위반'?'text-red-600':worstV==='주의'?'text-amber-600':'text-green-600';
+      const typeBg    = worstV==='위반'?'bg-red-50 border-red-100':worstV==='주의'?'bg-amber-50 border-amber-100':'bg-green-50 border-green-100';
+      const typeIcon  = worstV==='위반'?'fa-circle-xmark':worstV==='주의'?'fa-circle-exclamation':'fa-circle-check';
+      const countBadge = its.length > 1 ? `<span class="ml-1 text-xs bg-white border rounded-full px-1.5 py-0.5 font-medium ${typeColor}">${its.length}건</span>` : '';
+      const itemsHtml = its.map(it => `
+        <div class="ml-4 pl-3 border-l-2 border-slate-200 mb-2 last:mb-0">
+          <div class="flex items-start gap-1.5 flex-wrap">
+            <span class="text-xs font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 break-all">${esc(it.content||'')}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded-full border ${(verdictBg[it.judgment]||'')}">${it.judgment}</span>
+          </div>
+          ${it.reason ? `<p class="text-xs text-slate-500 mt-1">${esc(it.reason)}</p>` : ''}
+          ${it.recommendation ? `<p class="text-xs text-indigo-600 mt-0.5">→ ${esc(it.recommendation)}</p>` : ''}
+        </div>`).join('');
+      return `<div class="border rounded-lg ${typeBg} p-2.5 mb-2 last:mb-0">
+        <div class="flex items-center gap-1.5 mb-1.5">
+          <i class="fas ${typeIcon} ${typeColor} text-xs"></i>
+          <span class="text-xs font-semibold ${typeColor}">${esc(type)}</span>
+          ${countBadge}
+        </div>
+        ${itemsHtml}
+      </div>`;
+    }).join('');
+
+    const card = document.createElement('div');
+    card.className = 'bg-white border border-slate-100 rounded-xl overflow-hidden';
+    card.innerHTML = `
+      <div class="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-100 cursor-pointer"
+           onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <div class="flex items-center gap-2">
+          <i class="fas ${statusIcon} text-sm" style="color:${statusColor}"></i>
+          <span class="text-sm font-semibold text-slate-700">${p}페이지</span>
+          ${vCount > 0 ? `<span class="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full">위반 ${vCount}</span>` : ''}
+          ${cCount > 0 ? `<span class="text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">주의 ${cCount}</span>` : ''}
+        </div>
+        <i class="fas fa-chevron-down text-xs text-slate-300"></i>
+      </div>
+      <div class="p-3">${typeHtml}</div>`;
+    pageList.appendChild(card);
+  });
+}
+
+function dbRenderMeta(report) {
+  const container = document.getElementById('db-metaContent');
+  container.innerHTML = '';
+  const meta = report.metadata_items || report.metadata || [];
+  if (!meta.length) {
+    container.innerHTML = '<p class="text-xs text-slate-400 text-center py-6">메타데이터 항목 없음</p>';
+    return;
+  }
+  meta.forEach(m => {
+    const verdictBg = m.judgment==='위반'?'bg-red-50 border-red-100':m.judgment==='주의'?'bg-amber-50 border-amber-100':'bg-green-50 border-green-100';
+    const verdictTxt= m.judgment==='위반'?'text-red-700':m.judgment==='주의'?'text-amber-700':'text-green-700';
+    container.insertAdjacentHTML('beforeend', `
+      <div class="border rounded-lg ${verdictBg} p-3">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs font-semibold text-slate-600">${esc(m.type||m.field||'')}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full ${verdictBg} ${verdictTxt} border font-medium">${m.judgment}</span>
+        </div>
+        <p class="text-xs font-mono text-slate-700">${esc(m.content||m.value||'')}</p>
+        ${m.reason ? `<p class="text-xs text-slate-500 mt-1">${esc(m.reason)}</p>` : ''}
+      </div>`);
+  });
+}
+
+function dbRenderAll(report) {
+  const tbody = document.getElementById('db-allTable');
+  tbody.innerHTML = '';
+  const items = report.items || [];
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-slate-400 py-6 text-xs">검출 항목 없음</td></tr>';
+    return;
+  }
+  const verdictCls = { '위반':'text-red-600','주의':'text-amber-600','허용':'text-green-600' };
+  items.forEach(it => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="px-3 py-2 text-slate-500">${it.page||1}</td>
+      <td class="px-3 py-2 text-slate-600">${esc(it.type||'')}</td>
+      <td class="px-3 py-2 font-mono text-slate-700 max-w-[160px] truncate" title="${esc(it.content||'')}">${esc(it.content||'')}</td>
+      <td class="px-3 py-2 font-semibold ${verdictCls[it.judgment]||''}">${it.judgment||''}</td>
+      <td class="px-3 py-2 text-slate-500 max-w-[180px] truncate" title="${esc(it.reason||'')}">${esc(it.reason||'')}</td>
+      <td class="px-3 py-2 text-indigo-600 max-w-[180px] truncate" title="${esc(it.recommendation||'')}">${esc(it.recommendation||'')}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 // ── 하위 호환용 래퍼 (기존 코드에서 호출) ──────────────────────
@@ -2296,6 +2864,12 @@ function showToast(msg, type='info') {
 // ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   renderRecentJobs();
+  // 대시보드 배지 초기화 (저장된 결과 건수 표시)
+  const savedCount = getSavedReports().length;
+  if (savedCount > 0) {
+    const badge = document.getElementById('dashboardBadge');
+    if (badge) { badge.textContent = savedCount; badge.classList.remove('hidden'); }
+  }
 
   // ✅ 저장된 API 키 복원
   const savedKey = localStorage.getItem('claudeApiKey');
