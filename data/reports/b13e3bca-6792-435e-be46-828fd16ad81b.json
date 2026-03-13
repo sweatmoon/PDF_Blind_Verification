@@ -1,0 +1,13 @@
+{
+  "job_id": "b13e3bca-6792-435e-be46-828fd16ad81b",
+  "mode": "server",
+  "status": "failed",
+  "progress": 0,
+  "message": "검증 실패: PDF 파일을 열 수 없습니다.",
+  "filename": "test_100mb.pdf",
+  "safe_name": "test_100mb.pdf",
+  "file_size": 104858627,
+  "created_at": "2026-03-13T00:30:18.448366",
+  "report": null,
+  "error": "PDF 파일을 열 수 없습니다."
+}

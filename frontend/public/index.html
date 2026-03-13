@@ -483,9 +483,32 @@
               <div id="db-procBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
             </div>
           </div>
-          <p class="text-xs text-slate-400 text-center mt-4">
-            <i class="fas fa-info-circle mr-1"></i>
-            브라우저에서 직접 처리 중입니다. 이 페이지를 닫지 마세요.
+          <!-- 단계 표시 -->
+          <div id="db-procSteps" class="space-y-1.5 mb-4 text-xs">
+            <div id="db-step-upload" class="flex items-center gap-2 text-slate-400">
+              <i class="fas fa-upload w-3 text-center"></i>
+              <span class="flex-1">PDF 업로드</span>
+              <span id="db-step-upload-label" class="text-slate-300">대기</span>
+            </div>
+            <div id="db-step-analyze" class="flex items-center gap-2 text-slate-400">
+              <i class="fas fa-magnifying-glass w-3 text-center"></i>
+              <span class="flex-1">텍스트 스캔 + 규칙 탐지</span>
+              <span id="db-step-analyze-label" class="text-slate-300">대기</span>
+            </div>
+            <div id="db-step-vision" class="flex items-center gap-2 text-slate-400">
+              <i class="fas fa-eye w-3 text-center"></i>
+              <span class="flex-1">Claude Vision AI 분석</span>
+              <span id="db-step-vision-label" class="text-slate-300">대기</span>
+            </div>
+            <div id="db-step-report" class="flex items-center gap-2 text-slate-400">
+              <i class="fas fa-file-lines w-3 text-center"></i>
+              <span class="flex-1">결과 생성</span>
+              <span id="db-step-report-label" class="text-slate-300">대기</span>
+            </div>
+          </div>
+          <p class="text-xs text-slate-400 text-center">
+            <i class="fas fa-server mr-1"></i>
+            서버에서 처리 중 — 브라우저를 닫아도 계속됩니다
           </p>
         </div>
 
@@ -1082,35 +1105,70 @@ async function startVerification() {
 
   // 처리 화면으로 전환
   document.getElementById('processingFileName').textContent = file.name;
-  setProgress(0, 'PDF 업로드 중…');
+  setProgress(0, 'PDF 업로드 준비 중…');
   showPage('processing');
+  setStep('upload', 'active');
 
   try {
-    // ── 1. PDF 서버 업로드 ─────────────────────────────────
-    setProgress(3, 'PDF 서버에 업로드 중…');
-    const fd = new FormData();
-    fd.append('file', file);
+    // ── 1. PDF 서버 업로드 (XHR로 진행률 표시) ────────────
+    const data = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const fd  = new FormData();
+      fd.append('file', file);
 
-    const res = await fetch('/api/jobs/upload', { method: 'POST', body: fd });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `업로드 실패 (HTTP ${res.status})`);
-    }
-    const data   = await res.json();
+      // 업로드 진행률
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct     = Math.round((e.loaded / e.total) * 30); // 0~30% 구간
+        const loaded  = (e.loaded / 1024 / 1024).toFixed(1);
+        const total   = (e.total  / 1024 / 1024).toFixed(1);
+        // 속도 계산
+        if (!xhr._startTime) xhr._startTime = Date.now();
+        const elapsed = (Date.now() - xhr._startTime) / 1000 || 0.001;
+        const speedMB = (e.loaded / 1024 / 1024 / elapsed).toFixed(1);
+        const remain  = elapsed > 0 && e.loaded > 0
+          ? Math.max(0, Math.round((e.total - e.loaded) / (e.loaded / elapsed)))
+          : 0;
+        const remainStr = remain > 0 ? ` · 잔여 ${remain < 60 ? remain+'초' : Math.round(remain/60)+'분'}` : '';
+        setProgress(pct, `업로드 중… ${loaded}/${total} MB (${speedMB} MB/s${remainStr})`);
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error('응답 파싱 오류')); }
+        } else {
+          try {
+            const e = JSON.parse(xhr.responseText);
+            reject(new Error(e.detail || `업로드 실패 (HTTP ${xhr.status})`));
+          } catch { reject(new Error(`업로드 실패 (HTTP ${xhr.status})`)); }
+        }
+      };
+      xhr.onerror   = () => reject(new Error('네트워크 오류: 서버에 연결할 수 없습니다.'));
+      xhr.ontimeout = () => reject(new Error('업로드 시간 초과'));
+      xhr.timeout   = 10 * 60 * 1000; // 10분
+
+      xhr._startTime = Date.now();
+      xhr.open('POST', '/api/jobs/upload');
+      xhr.send(fd);
+    });
+
+    setStep('upload', 'done');
     const jobId  = data.job_id;
     state.currentJobId = jobId;
     addRecentJob(jobId, file.name, file.size);
 
-    setProgress(5, '서버에서 검증을 시작합니다…');
-    showToast('서버에서 검증이 시작됐습니다. 브라우저를 닫아도 계속 처리됩니다.', 'success');
+    setProgress(32, '서버에서 검증을 시작합니다…');
+    showToast('업로드 완료! 서버에서 검증이 시작됐습니다. 브라우저를 닫아도 계속 처리됩니다.', 'success');
 
     // ── 2. 대시보드로 이동하여 실시간 진행률 표시 ───────────
     showPage('dashboard');
     _dbSelectedId = jobId;
     renderDashboard();
 
-    // 진행 중 카드 선택
+    // 진행 중 카드 선택 (업로드 완료 단계 표시)
     dbSelectRunning(jobId, file.name);
+    dbUpdateSteps(32, '서버에서 검증을 시작합니다…');
 
     // ── 3. SSE로 실시간 진행률 구독 ─────────────────────────
     const sse = new EventSource(`/api/jobs/${jobId}/progress`);
@@ -2260,6 +2318,52 @@ async function dbFetchServerJobs() {
 }
 
 // 서버 job SSE 구독
+// 단계 UI 업데이트 (진행률 기반)
+function dbUpdateSteps(pct, msg) {
+  // 업로드: 0~30%
+  // 스캔/규칙: 30~50%
+  // Vision AI: 50~90%
+  // 결과 생성: 90~100%
+  const setDbStep = (id, state) => {
+    const el    = document.getElementById(`db-step-${id}`);
+    const label = document.getElementById(`db-step-${id}-label`);
+    if (!el || !label) return;
+    el.className = `flex items-center gap-2 text-xs ${
+      state === 'done'    ? 'text-green-600' :
+      state === 'active'  ? 'text-indigo-600 font-medium' :
+                            'text-slate-400'
+    }`;
+    label.textContent = state === 'done' ? '✓' : state === 'active' ? '진행 중' : '대기';
+    label.className = `${
+      state === 'done'   ? 'text-green-500' :
+      state === 'active' ? 'text-indigo-500' :
+                           'text-slate-300'
+    }`;
+  };
+
+  if (pct <= 30) {
+    setDbStep('upload',  pct >= 30 ? 'done' : 'active');
+    setDbStep('analyze', 'pending');
+    setDbStep('vision',  'pending');
+    setDbStep('report',  'pending');
+  } else if (pct <= 50) {
+    setDbStep('upload',  'done');
+    setDbStep('analyze', pct >= 50 ? 'done' : 'active');
+    setDbStep('vision',  'pending');
+    setDbStep('report',  'pending');
+  } else if (pct <= 90) {
+    setDbStep('upload',  'done');
+    setDbStep('analyze', 'done');
+    setDbStep('vision',  pct >= 90 ? 'done' : 'active');
+    setDbStep('report',  'pending');
+  } else {
+    setDbStep('upload',  'done');
+    setDbStep('analyze', 'done');
+    setDbStep('vision',  'done');
+    setDbStep('report',  pct >= 100 ? 'done' : 'active');
+  }
+}
+
 function dbSubscribeSSE(jobId, filename, fileSize) {
   if (_dbSseMap[jobId]) return;
   const sse = new EventSource(`/api/jobs/${jobId}/progress`);
@@ -2279,12 +2383,14 @@ function dbSubscribeSSE(jobId, filename, fileSize) {
 
       // 선택된 job이면 진행률 패널 업데이트
       if (_dbSelectedId === jobId) {
+        const pct   = d.progress || 0;
         const bar   = document.getElementById('db-procBar');
         const msgEl = document.getElementById('db-procMsg');
         const pctEl = document.getElementById('db-procPct');
-        if (bar)   bar.style.width   = (d.progress || 0) + '%';
+        if (bar)   bar.style.width   = pct + '%';
         if (msgEl) msgEl.textContent = d.message || '';
-        if (pctEl) pctEl.textContent = (d.progress || 0) + '%';
+        if (pctEl) pctEl.textContent = pct + '%';
+        dbUpdateSteps(pct, d.message || '');
       }
 
       if (d.status === 'completed') {
@@ -2514,12 +2620,14 @@ function dbSelectRunning(jobId, filename, source) {
     // 현재 서버 job 진행률 즉시 표시
     const sj = _dbServerJobs.find(j => j.job_id === jobId);
     if (sj) {
+      const pct   = sj.progress || 0;
       const bar   = document.getElementById('db-procBar');
       const msgEl = document.getElementById('db-procMsg');
       const pctEl = document.getElementById('db-procPct');
-      if (bar)   bar.style.width   = (sj.progress || 0) + '%';
+      if (bar)   bar.style.width   = pct + '%';
       if (msgEl) msgEl.textContent = sj.message || '처리 중…';
-      if (pctEl) pctEl.textContent = (sj.progress || 0) + '%';
+      if (pctEl) pctEl.textContent = pct + '%';
+      dbUpdateSteps(pct, sj.message || '');
     }
     return;
   }
