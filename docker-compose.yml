@@ -1,0 +1,40 @@
+services:
+  app:
+    build: .
+    container_name: blind-verify
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-4-20250514}
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-300}
+      - AUTO_DELETE_MIN=${AUTO_DELETE_MIN:-30}
+      - OCR_ENABLED=${OCR_ENABLED:-true}
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    container_name: blind-verify-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - app
+
+volumes:
+  app_data:
+  app_logs:
+  nginx_logs:

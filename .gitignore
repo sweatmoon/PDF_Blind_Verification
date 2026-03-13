@@ -1,9 +1,17 @@
 node_modules/
 __pycache__/
 *.pyc
+*.pyo
 .env
 *.log
 tmp/
 .wrangler/
 dist/
 *.tar.gz
+*.zip
+.DS_Store
+data/reports/
+data/logo_reference.png
+data/vision_api_key.txt
+data/claude_api_key.txt
+logs/
