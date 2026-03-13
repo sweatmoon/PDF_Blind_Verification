@@ -21,7 +21,7 @@ logger = get_logger("server_pipeline")
 PAGES_PER_BATCH = 4    # Claude Vision 배치당 페이지 수
 RENDER_DPI      = 120  # 이미지 렌더링 DPI (120 = 속도/품질 균형)
 MAX_PAGES       = 200  # 최대 처리 페이지 수
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=8)
 
 
 def _render_page_to_b64(svc: PDFService, page_idx: int, dpi: int = RENDER_DPI) -> Optional[str]:
@@ -122,7 +122,7 @@ class ServerPipeline:
 
         prog(50, f"{len(page_images)}/{total}페이지 변환 완료 · Claude Vision 분석 시작…")
 
-        # ── 4. Claude Vision 배치 분석 ──────────────────────────
+        # ── 4. Claude Vision 배치 분석 (병렬) ──────────────────
         company_dict = load_dict()
         logo_b64     = _load_logo_b64()
 
@@ -131,32 +131,40 @@ class ServerPipeline:
                    for i in range(0, len(page_images), PAGES_PER_BATCH)]
         batch_count = len(batches)
 
-        for bi, batch in enumerate(batches):
-            pct = 50 + int((bi / batch_count) * 40)
-            prog(pct, f"Claude Vision 분석 중 ({bi+1}/{batch_count} 배치)…")
+        BATCH_CONCURRENCY = 5   # 동시 Claude API 호출 수
+        sem = asyncio.Semaphore(BATCH_CONCURRENCY)
+        completed = [0]
 
-            # 이 배치의 rule_hits 추출
-            batch_rule_hits = {}
-            for pg in batch:
-                key = str(pg["page"])
-                if key in rule_hits_by_page:
-                    batch_rule_hits[key] = rule_hits_by_page[key]
+        async def run_batch(bi: int, batch: list):
+            async with sem:
+                batch_rule_hits = {}
+                for pg in batch:
+                    key = str(pg["page"])
+                    if key in rule_hits_by_page:
+                        batch_rule_hits[key] = rule_hits_by_page[key]
+                try:
+                    items = await loop.run_in_executor(
+                        _executor,
+                        self.judge.judge_image_batch,
+                        batch,
+                        logo_b64,
+                        company_dict,
+                        batch_rule_hits or None,
+                    )
+                    logger.info(f"[{job_id}] 배치 {bi+1}/{batch_count}: {len(items)}건 검출")
+                    return items
+                except Exception as e:
+                    logger.error(f"[{job_id}] 배치 {bi+1} 오류: {e}")
+                    return []
+                finally:
+                    completed[0] += 1
+                    pct = 50 + int((completed[0] / batch_count) * 40)
+                    prog(pct, f"Claude Vision 분석 중 ({completed[0]}/{batch_count} 배치)…")
 
-            try:
-                items = await loop.run_in_executor(
-                    _executor,
-                    self.judge.judge_image_batch,
-                    batch,
-                    logo_b64,
-                    company_dict,
-                    batch_rule_hits or None,
-                )
-                all_vision_items.extend(items)
-                logger.info(f"[{job_id}] 배치 {bi+1}/{batch_count}: {len(items)}건 검출")
-            except Exception as e:
-                logger.error(f"[{job_id}] 배치 {bi+1} 오류: {e}")
-
-            await asyncio.sleep(0)
+        tasks   = [run_batch(bi, batch) for bi, batch in enumerate(batches)]
+        results = await asyncio.gather(*tasks)
+        for items in results:
+            all_vision_items.extend(items)
 
         prog(90, f"Vision 분석 완료 · 결과 합산 중…")
 
