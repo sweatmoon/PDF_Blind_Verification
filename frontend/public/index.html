@@ -2722,8 +2722,8 @@ function dbShowEmpty() {
 function dbSelectRunning(jobId, filename, source) {
   _dbSelectedId    = jobId;
   _dbCurrentReport = null;
-  renderDashboard(); // 카드 active 상태 갱신
-  dbMobileGoDetail(); // 모바일: 상세 탭으로 자동 전환
+  renderDashboard();
+  dbMobileGoDetail();
   document.getElementById('db-detailEmpty').classList.add('hidden');
   document.getElementById('db-detailDone').classList.add('hidden');
   document.getElementById('db-detailRunning').classList.remove('hidden');
@@ -2732,20 +2732,38 @@ function dbSelectRunning(jobId, filename, source) {
 
   // 서버 job이면 SSE를 통해 실시간 진행률 표시
   if (source === 'server') {
-    // 서버 job 구독 (이미 구독 중이면 재사용)
+    const sj = _dbServerJobs.find(j => j.job_id === jobId);
+
+    // ── failed job: 에러 UI 표시 ──────────────────────────────
+    if (sj && sj.status === 'failed') {
+      const bar   = document.getElementById('db-procBar');
+      const msgEl = document.getElementById('db-procMsg');
+      const pctEl = document.getElementById('db-procPct');
+      if (bar)   { bar.style.width = '100%'; bar.style.background = '#ef4444'; }
+      if (msgEl) { msgEl.textContent = sj.message || '작업이 중단됐습니다. 다시 업로드해 주세요.'; msgEl.style.color = '#ef4444'; }
+      if (pctEl) { pctEl.textContent = '실패'; pctEl.style.color = '#ef4444'; }
+      // 단계 표시 초기화
+      ['upload','analyze','vision','report'].forEach(id => {
+        const el = document.getElementById(`db-step-${id}`);
+        const lb = document.getElementById(`db-step-${id}-label`);
+        if (el) el.className = 'flex items-center gap-2 text-xs text-slate-400';
+        if (lb) { lb.textContent = '중단'; lb.className = 'text-red-400'; }
+      });
+      return;
+    }
+
+    // ── 정상 진행 중 job ──────────────────────────────────────
     if (!_dbSseMap[jobId]) {
       dbSubscribeSSE(jobId, filename, 0);
     }
-    // 현재 서버 job 진행률 즉시 표시
-    const sj = _dbServerJobs.find(j => j.job_id === jobId);
     if (sj) {
       const pct   = sj.progress || 0;
       const bar   = document.getElementById('db-procBar');
       const msgEl = document.getElementById('db-procMsg');
       const pctEl = document.getElementById('db-procPct');
-      if (bar)   bar.style.width   = pct + '%';
-      if (msgEl) msgEl.textContent = sj.message || '처리 중…';
-      if (pctEl) pctEl.textContent = pct + '%';
+      if (bar)   { bar.style.width = pct + '%'; bar.style.background = ''; }
+      if (msgEl) { msgEl.textContent = sj.message || '처리 중…'; msgEl.style.color = ''; }
+      if (pctEl) { pctEl.textContent = pct + '%'; pctEl.style.color = ''; }
       dbUpdateSteps(pct, sj.message || '');
     }
     return;
