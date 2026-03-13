@@ -11,7 +11,7 @@ from core.config import get_logger, OCR_ENABLED
 
 logger = get_logger("ocr_service")
 
-OCR_TIMEOUT_SECONDS = 20   # 페이지당 OCR 최대 시간
+OCR_TIMEOUT_SECONDS = 25   # 페이지당 OCR 최대 시간
 
 
 class OCRService:
@@ -57,8 +57,9 @@ class OCRService:
         try:
             img = self._preprocess(img)
             def _do():
+                # psm 11: 희소 텍스트 — PPT/슬라이드처럼 배치가 불규칙한 경우 최적
                 return self._tess.image_to_string(
-                    img, lang=lang, config="--oem 3 --psm 6").strip()
+                    img, lang=lang, config="--oem 3 --psm 11").strip()
             return self._run_with_timeout(_do, timeout=OCR_TIMEOUT_SECONDS)
         except Exception as e:
             logger.debug(f"OCR image 실패: {e}"); return ""
@@ -75,14 +76,14 @@ class OCRService:
     def _preprocess(self, img: Image.Image) -> Image.Image:
         try:
             if img.mode not in ("RGB", "L", "RGBA"): img = img.convert("RGB")
-            # 너무 작은 이미지만 업스케일 (큰 이미지는 그대로 - 속도 최적화)
+            # 너무 작은 이미지만 업스케일
             if img.width < 300:
                 ratio = 300 / img.width
                 img = img.resize((300, int(img.height * ratio)), Image.LANCZOS)
-            # 너무 큰 이미지는 다운스케일 (메모리 및 속도 최적화)
-            elif img.width > 2000:
-                ratio = 2000 / img.width
-                img = img.resize((2000, int(img.height * ratio)), Image.LANCZOS)
+            # 너무 큰 이미지는 다운스케일 (1600px 상한 — 속도/품질 균형)
+            elif img.width > 1600:
+                ratio = 1600 / img.width
+                img = img.resize((1600, int(img.height * ratio)), Image.LANCZOS)
         except Exception: pass
         return img
 
