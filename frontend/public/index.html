@@ -2392,6 +2392,10 @@ async function dbFetchServerJobs() {
       // 진행 중 job에 SSE 구독 (아직 없는 경우만)
       if ((job.status === 'pending' || job.status === 'processing') && !_dbSseMap[job.job_id]) {
         dbSubscribeSSE(job.job_id, job.filename, job.file_size || 0);
+        // 처리 중 job 발견 시 대시보드 페이지가 아니면 자동 이동
+        if (state.currentPage !== 'dashboard') {
+          showPage('dashboard');
+        }
       }
     }
 
@@ -3181,6 +3185,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     const badge = document.getElementById('dashboardBadge');
     if (badge) { badge.textContent = savedCount; badge.classList.remove('hidden'); }
   }
+
+  // ✅ 처리 중인 job 있으면 대시보드로 자동 이동
+  try {
+    const res = await fetch('/api/jobs/list');
+    if (res.ok) {
+      const jobs = await res.json();
+      const activeJob = jobs.find(j => j.status === 'pending' || j.status === 'processing');
+      if (activeJob) {
+        showPage('dashboard');
+      }
+    }
+  } catch(e) { /* ignore */ }
 
   // ✅ 저장된 API 키 복원
   const savedKey = localStorage.getItem('claudeApiKey');
