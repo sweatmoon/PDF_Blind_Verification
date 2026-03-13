@@ -25,6 +25,7 @@ module.exports = {
         AUTO_DELETE_MIN: process.env.AUTO_DELETE_MIN || '30',
         MAX_FILE_SIZE_MB: process.env.MAX_FILE_SIZE_MB || '300',
         OCR_ENABLED: process.env.OCR_ENABLED || 'true',
+        GOOGLE_VISION_API_KEY: process.env.GOOGLE_VISION_API_KEY || '',
       },
       watch: false,
       instances: 1,
