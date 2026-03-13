@@ -47,7 +47,11 @@ def _render_page_to_b64(svc: PDFService, page_idx: int, dpi: int = RENDER_DPI) -
 
 # ── OCR 실행 (단일 페이지, ThreadPool에서 호출) ───────────────────
 def _ocr_page(svc: PDFService, page_idx: int) -> str:
-    """페이지를 OCR_DPI로 렌더링 후 Tesseract OCR 실행 → 텍스트 반환"""
+    """
+    페이지 전체 OCR + 우측하단 15% 영역 별도 크롭 OCR
+    - 블라인드 미처리 제안서는 우측하단에 회사 로고/이름이 있는 경우가 많음
+    - 전체 OCR로 놓친 텍스트를 크롭 OCR로 보완
+    """
     try:
         ocr = get_ocr()
         if not ocr.enabled:
@@ -55,7 +59,31 @@ def _ocr_page(svc: PDFService, page_idx: int) -> str:
         img = svc.render_for_ocr(page_idx, dpi=OCR_DPI)
         if img is None:
             return ""
-        return ocr.from_image(img)
+
+        # ① 전체 페이지 OCR
+        full_text = ocr.from_image(img)
+
+        # ② 우측하단 15% 영역 크롭 OCR (로고 집중 탐지)
+        try:
+            w, h = img.width, img.height
+            # 우측하단 15%×20% 영역 크롭
+            left   = int(w * 0.72)  # 우측 28% 시작
+            top    = int(h * 0.78)  # 하단 22% 시작
+            region = img.crop((left, top, w, h))
+            corner_text = ocr.from_image(region)
+            if corner_text.strip():
+                # 중복 없는 텍스트만 추가
+                existing = set(full_text.lower().split())
+                extra = " ".join(
+                    t for t in corner_text.split()
+                    if t.lower() not in existing and len(t) >= 2
+                )
+                if extra:
+                    full_text = full_text + "\n" + extra
+        except Exception:
+            pass
+
+        return full_text
     except Exception as e:
         logger.warning(f"OCR 페이지 {page_idx+1} 실패: {e}")
         return ""
@@ -89,7 +117,7 @@ class ServerPipeline:
             raise RuntimeError("PDF 파일을 열 수 없습니다.")
 
         total = min(svc.total_pages, MAX_PAGES)
-        claude_on = self.judge.client is not None
+        claude_on = self.judge.enabled and getattr(self.judge, '_client', None) is not None
         ocr_on    = self.ocr.enabled
         mode_desc = []
         if claude_on: mode_desc.append("Claude Vision")
@@ -124,9 +152,11 @@ class ServerPipeline:
         logger.info(f"[{job_id}] PyMuPDF 텍스트: {total - len(ocr_needed)}p, OCR 대상: {len(ocr_needed)}p")
 
         # OCR이 필요한 페이지 병렬 처리
+        # ocr_pages: 실제 OCR로 처리된 페이지 idx 집합 (소스 표기용)
+        ocr_pages: set[int] = set()
         if ocr_needed and ocr_on:
-            prog(12, f"OCR 실행 중 (대상 {len(ocr_needed)}페이지)…")
-            # 메모리 안전을 위해 3페이지씩 병렬 처리 (Tesseract 다중 인스턴스 메모리 절약)
+            prog(12, f"OCR 실행 중 (대상 {len(ocr_needed)}페이지 · 우측하단 로고 영역 포함)…")
+            # 메모리 안전을 위해 3페이지씩 병렬 처리
             OCR_BATCH = 3
             ocr_done  = 0
             for batch_start in range(0, len(ocr_needed), OCR_BATCH):
@@ -138,13 +168,14 @@ class ServerPipeline:
                 ocr_results = await asyncio.gather(*ocr_tasks)
                 for idx, ocr_text in zip(batch_idxs, ocr_results):
                     if ocr_text.strip():
-                        raw_texts[idx] = ocr_text   # OCR 결과로 교체
+                        raw_texts[idx] = ocr_text
+                        ocr_pages.add(idx)   # OCR 성공 페이지 기록
                 ocr_done += len(batch_idxs)
                 pct = 12 + int((ocr_done / len(ocr_needed)) * 8)  # 12~20%
                 prog(pct, f"OCR 진행 중… ({ocr_done}/{len(ocr_needed)})")
                 await asyncio.sleep(0)
 
-            ocr_hit = sum(1 for i in ocr_needed if len(raw_texts[i].strip()) >= OCR_TEXT_THRESHOLD)
+            ocr_hit = len(ocr_pages)
             logger.info(f"[{job_id}] OCR 완료: {len(ocr_needed)}p 처리 → {ocr_hit}p 텍스트 추출 성공")
         elif ocr_needed and not ocr_on:
             logger.warning(f"[{job_id}] OCR 비활성 – {len(ocr_needed)}p 이미지 전용 페이지 텍스트 미추출")
@@ -156,6 +187,8 @@ class ServerPipeline:
         for i in range(total):
             text     = raw_texts.get(i, "")
             page_num = i + 1
+            # 소스: OCR로 추출한 텍스트면 'ocr', PyMuPDF 직접 추출이면 'rule'
+            text_source = "ocr" if i in ocr_pages else "rule"
             hits     = self.rules.detect(text, page_num)
             if hits:
                 key = str(page_num)
@@ -167,13 +200,13 @@ class ServerPipeline:
                         "reason":         h.reason,
                         "recommendation": h.recommendation,
                         "confidence":     h.confidence,
+                        "source":         text_source,  # 'ocr' or 'rule'
                     }
                     for h in hits
                 ]
             if i % 20 == 0:
                 await asyncio.sleep(0)
 
-        rule_total = sum(len(v) for v in rule_hits_by_page.items())
         rule_total = sum(len(v) for v in rule_hits_by_page.values())
         logger.info(f"[{job_id}] 규칙 탐지 완료: {rule_total}건 (OCR 포함)")
         prog(25, f"규칙 탐지 {rule_total}건 → 이미지 변환 시작…")
@@ -322,14 +355,16 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
                 for vc in vpage
             )
             if not already:
+                # source: 'ocr'이면 OCR로 읽은 텍스트에서 탐지, 'rule'이면 PyMuPDF 텍스트에서 탐지
+                src = h.get("source", "rule")  # 'ocr' or 'rule'
                 page_map.setdefault(p, []).append({
                     "detection_type":  h.get("type", "기타"),
                     "detected_text":   h.get("content", ""),
                     "verdict":         h.get("judgment", "주의"),
-                    "reason":          h.get("reason", "") + " [규칙+OCR 탐지]",
+                    "reason":          h.get("reason", ""),
                     "recommendation":  h.get("recommendation", ""),
                     "confidence":      h.get("confidence", 0.95),
-                    "source":          "rule",
+                    "source":          src,
                 })
 
     return page_map
@@ -393,6 +428,7 @@ def _build_report(job_id: str, filename: str, total_pages: int,
                 "judgment":       d.get("verdict", "주의"),
                 "reason":         d.get("reason", ""),
                 "recommendation": d.get("recommendation", ""),
+                "source":         d.get("source", "rule"),  # 'rule'|'ocr'|'vision'
             })
 
     return {
