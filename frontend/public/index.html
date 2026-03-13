@@ -2200,10 +2200,24 @@ function deleteSavedReport(jobId) {
   showToast('삭제됐습니다.', 'info');
 }
 
-function clearAllSavedReports() {
+async function clearAllSavedReports() {
   if (!confirm('저장된 검증 결과를 모두 삭제할까요?')) return;
+
+  // 서버 전체 삭제 API 호출 (완료/실패 job 일괄 삭제)
+  try {
+    await fetch('/api/jobs', { method: 'DELETE' });
+  } catch(e) {
+    console.warn('서버 전체 삭제 오류:', e);
+  }
+
+  // 로컬 상태 초기화
   setSavedReports([]);
+  _dbServerJobs = _dbServerJobs.filter(j => j.status === 'pending' || j.status === 'processing');
+  _dbSelectedId = null;
+
   renderSavedReports();
+  renderDashboard();
+  dbShowEmpty();
   showToast('전체 삭제됐습니다.', 'info');
 }
 
@@ -2558,7 +2572,10 @@ function renderDashboard() {
         ${!entry._serverOnly ? `<button onclick="event.stopPropagation(); dbDeleteJob('${entry.jobId}')"
           class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition text-xs">
           <i class="fas fa-times"></i>
-        </button>` : ''}`;
+        </button>` : `<button onclick="event.stopPropagation(); dbDeleteJob('${entry.jobId}')"
+          class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition text-xs">
+          <i class="fas fa-times"></i>
+        </button>`}`;
       doneList.appendChild(card);
     });
   }
@@ -2694,13 +2711,33 @@ function dbSelectDone(jobId) {
   showToast('저장된 결과를 찾을 수 없습니다.', 'error');
 }
 
-function dbDeleteJob(jobId) {
-  deleteSavedReport(jobId);
+async function dbDeleteJob(jobId) {
+  // 서버 API 호출 (백엔드 job 삭제, 404도 성공으로 처리)
+  try {
+    const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) {
+      console.warn('서버 job 삭제 실패:', res.status);
+    }
+  } catch(e) {
+    // 네트워크 오류도 로컬 삭제는 진행
+    console.warn('서버 job 삭제 오류:', e);
+  }
+
+  // _dbServerJobs에서 즉시 제거
+  _dbServerJobs = _dbServerJobs.filter(j => j.job_id !== jobId);
+
+  // localStorage에서 삭제
+  setSavedReports(getSavedReports().filter(r => r.jobId !== jobId));
+
   if (_dbSelectedId === jobId) {
     _dbSelectedId = null;
     dbShowEmpty();
   }
+
+  // 목록 + 대시보드 모두 갱신
+  renderSavedReports();
   renderDashboard();
+  showToast('작업이 삭제됐습니다.', 'info');
 }
 
 // 대시보드 결과 렌더링 (renderResult 대응)

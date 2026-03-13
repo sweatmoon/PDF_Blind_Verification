@@ -251,3 +251,25 @@ def job_delete(job_id: str):
         pass
     delete_job(job_id)
     return JSONResponse({"success": True, "message": "작업이 삭제되었습니다."})
+
+
+# ── 전체 작업 삭제 ────────────────────────────────────────────
+@router.delete("")
+def job_delete_all():
+    """완료/실패 상태의 모든 작업을 삭제합니다."""
+    jobs = list_jobs()
+    deleted = 0
+    for j in jobs:
+        jid = j.get("job_id")
+        if not jid:
+            continue
+        # 진행 중(pending/processing)은 삭제 제외
+        if j.get("status") in ("pending", "processing"):
+            continue
+        try:
+            delete_job_files(jid)
+        except Exception:
+            pass
+        delete_job(jid)
+        deleted += 1
+    return JSONResponse({"success": True, "deleted": deleted, "message": f"{deleted}개 작업이 삭제되었습니다."})
