@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-eng \
     libgl1 \
     libglib2.0-0 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,13 +19,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 앱 소스 복사
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
+# data 디렉토리 (dictionary.json 등 기본 설정 포함)
+COPY data/ ./data/
 
 # 런타임 디렉토리 생성
 RUN mkdir -p /app/tmp /app/logs /app/data/reports
 
 WORKDIR /app/backend
 
-EXPOSE 3000
+# Railway는 PORT 환경변수를 동적으로 주입 (기본 8080)
+ENV PORT=8080
+EXPOSE ${PORT}
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000", \
-     "--workers", "1", "--timeout-keep-alive", "300"]
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --timeout-keep-alive 300

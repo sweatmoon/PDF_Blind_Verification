@@ -1,0 +1,9 @@
+# Railway 배포용 nixpacks 설정 (대안)
+[phases.setup]
+aptPkgs = ["tesseract-ocr", "tesseract-ocr-kor", "tesseract-ocr-eng", "libgl1", "libglib2.0-0", "curl"]
+
+[phases.install]
+cmds = ["pip install -r backend/requirements.txt"]
+
+[start]
+cmd = "cd backend && uvicorn main:app --host 0.0.0.0 --port ${PORT:-3000} --workers 1 --timeout-keep-alive 300"
