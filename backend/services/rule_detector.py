@@ -86,8 +86,36 @@ class RuleDetector:
         return out
 
     # ── URL/도메인 ────────────────────────────────────────────
+    # 공개 플랫폼: 계정/경로 포함 시 → 주의 (위반 아님)
+    _PUBLIC_PLATFORMS = re.compile(
+        r"https?://(?:www\.)?"
+        r"(?:github\.com|gitlab\.com|bitbucket\.org"
+        r"|youtube\.com|youtu\.be|vimeo\.com"
+        r"|linkedin\.com|twitter\.com|x\.com"
+        r"|notion\.so|figma\.com|docs\.google\.com"
+        r"|medium\.com|tistory\.com|velog\.io|blog\.naver\.com)"
+        r"(?:/[^\s]*)?",
+        re.I,
+    )
+    # 공식 기술 문서·오픈소스: 허용
+    _TECH_WHITELIST = re.compile(
+        r"https?://(?:www\.)?"
+        r"(?:kubernetes\.io|docs\.docker\.com|spring\.io"
+        r"|reactjs\.org|vuejs\.org|nodejs\.org|python\.org"
+        r"|developer\.mozilla\.org|w3\.org|ietf\.org"
+        r"|apache\.org|nginx\.org|postgresql\.org|mysql\.com"
+        r"|aws\.amazon\.com/documentation|docs\.microsoft\.com"
+        r"|cloud\.google\.com/docs|opensource\.org)"
+        r"(?:/[^\s]*)?",
+        re.I,
+    )
+
     def _urls(self, text: str, page: int) -> list:
-        """http/https URL 자동 탐지 (사전 등록 여부 무관)"""
+        """http/https URL 자동 탐지 — 3단계 판정
+        위반:  회사 자체 도메인 또는 사전 등록 도메인 포함 URL
+        주의:  공개 플랫폼(github 등) + 개인/회사 계정 경로 포함
+        허용:  공식 기술문서·오픈소스 사이트
+        """
         out = []
         for m in _P["url"].finditer(text):
             url = m.group().strip()
@@ -95,12 +123,28 @@ class RuleDetector:
                 continue
             if self._is_allowed(url):
                 continue
+
+            # 허용: 공식 기술 문서·오픈소스
+            if self._TECH_WHITELIST.match(url):
+                continue
+
+            # 주의: 공개 플랫폼 (github 등) — 계정명으로 업체 유추 가능
+            if self._PUBLIC_PLATFORMS.match(url):
+                out.append(DetectionResult(
+                    page_number=page, detection_type=DetectionType.URL,
+                    detected_text=url, verdict=VerdictType.CAUTION,
+                    reason="공개 플랫폼 URL – 계정명/경로로 제안사 또는 참여인력 유추 가능",
+                    recommendation="URL 삭제 또는 계정명 마스킹 검토",
+                    confidence=0.80, source="rule"))
+                continue
+
+            # 위반: 그 외 URL (회사 자체 도메인 등)
             out.append(DetectionResult(
                 page_number=page, detection_type=DetectionType.URL,
                 detected_text=url, verdict=VerdictType.VIOLATION,
                 reason="URL/도메인 직접 노출 – 제안사 식별 가능",
                 recommendation="URL 삭제 또는 마스킹",
-                confidence=0.95, source="rule"))
+                confidence=0.92, source="rule"))
         return out
 
     # ── 사업자번호 ────────────────────────────────────────────
