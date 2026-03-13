@@ -66,8 +66,8 @@
       <span id="claudeStatusBadge" class="hidden sm:inline-flex text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-medium items-center">
         <i class="fas fa-robot mr-1"></i><span id="claudeStatusText">Claude AI</span>
       </span>
-      <span id="headerStatus" class="hidden sm:inline-flex text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full items-center">
-        <i class="fas fa-circle text-green-500 mr-1" style="font-size:8px"></i><span class="hidden md:inline">서비스 정상</span>
+      <span id="headerStatus" class="hidden sm:inline-flex text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full items-center cursor-pointer" onclick="showPage('admin')" title="관리자 페이지에서 Claude API 키를 설정하세요">
+        <i class="fas fa-exclamation-circle text-red-500 mr-1" style="font-size:10px"></i><span class="hidden md:inline">API 키 미설정</span>
       </span>
       <button onclick="showPage('admin')" class="text-xs text-slate-500 hover:text-indigo-600 p-1.5 rounded hover:bg-slate-100 transition">
         <i class="fas fa-cog text-base sm:mr-1"></i><span class="hidden sm:inline">관리자</span>
@@ -86,6 +86,17 @@
 
   <!-- ═══════════════ 업로드 화면 ═══════════════ -->
   <div id="page-upload" class="fade-in">
+    <!-- Claude API 키 미설정 경고 배너 -->
+    <div id="apiKeyWarningBanner" class="hidden bg-red-50 border border-red-300 rounded-xl p-4 mb-4 flex gap-3">
+      <i class="fas fa-exclamation-triangle text-red-500 mt-0.5 flex-shrink-0 text-lg"></i>
+      <div class="text-sm text-red-800 flex-1">
+        <strong>⚠️ Claude API 키가 설정되지 않았습니다.</strong><br>
+        AI 기반 블라인드 검증을 사용하려면 API 키가 필요합니다. 키 없이는 검증을 진행할 수 없습니다.
+      </div>
+      <button onclick="showPage('admin')" class="flex-shrink-0 bg-red-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-red-700 transition font-medium">
+        <i class="fas fa-cog mr-1"></i>API 키 설정
+      </button>
+    </div>
     <!-- 보안 배너 -->
     <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-6 flex gap-3">
       <i class="fas fa-lock text-indigo-500 mt-0.5 flex-shrink-0"></i>
@@ -1047,6 +1058,19 @@ async function applyApiKey() {
       });
       document.getElementById('claudeStatusBadge').classList.remove('hidden');
       document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
+      // 헤더 배지: 녹색으로
+      const headerStatusEl = document.getElementById('headerStatus');
+      if (headerStatusEl) {
+        headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full items-center';
+        headerStatusEl.innerHTML = '<i class="fas fa-circle text-green-500 mr-1" style="font-size:8px"></i><span class="hidden md:inline">서비스 정상</span>';
+        headerStatusEl.onclick = null;
+        headerStatusEl.removeAttribute('title');
+        headerStatusEl.style.cursor = '';
+        headerStatusEl.classList.remove('hidden');
+      }
+      // 업로드 경고 배너 숨기기
+      const warningBanner = document.getElementById('apiKeyWarningBanner');
+      if (warningBanner) warningBanner.classList.add('hidden');
       showToast('Claude AI가 활성화되었습니다. (저장됨)', 'success');
     } else {
       const err = await res.json();
@@ -1097,6 +1121,29 @@ async function applyVisionKey() {
 // ─────────────────────────────────────────────────────────────
 async function startVerification() {
   if (!state.selectedFile) return;
+
+  // ── Claude API 키 미설정 시 업로드 차단 ──────────────────────
+  if (!state.apiKeyApplied) {
+    showModal(
+      '⚠️ Claude API 키 미설정',
+      `<p class="text-slate-700 mb-4">Claude API 키가 설정되지 않아 블라인드 검증을 진행할 수 없습니다.</p>
+       <p class="text-slate-600 text-sm mb-4">AI 기반 검증은 <strong>Anthropic Claude API 키</strong>가 필요합니다.<br>관리자 페이지에서 API 키를 먼저 설정해 주세요.</p>
+       <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+         <i class="fas fa-info-circle mr-1"></i>
+         API 키 발급: <a href="https://console.anthropic.com/" target="_blank" class="underline font-medium">console.anthropic.com</a>
+       </div>`,
+      [{
+        label: '<i class="fas fa-cog mr-1"></i>API 키 설정하러 가기',
+        className: 'bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 text-sm font-medium',
+        action: () => { closeModal(); showPage('admin'); }
+      }, {
+        label: '닫기',
+        className: 'bg-slate-100 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-200 text-sm',
+        action: () => closeModal()
+      }]
+    );
+    return;
+  }
 
   const file = state.selectedFile;
   const btn  = document.getElementById('uploadBtn');
@@ -3018,6 +3065,41 @@ function timeAgo(ts) {
   return Math.floor(diff/3600)+'시간 전';
 }
 
+// ─── 공통 모달 ─────────────────────────────────────────────────
+function showModal(title, bodyHtml, buttons = []) {
+  let overlay = document.getElementById('commonModalOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'commonModalOverlay';
+    overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+    overlay.style.background = 'rgba(0,0,0,0.45)';
+    overlay.innerHTML = `
+      <div id="commonModalBox" class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 relative">
+        <h3 id="commonModalTitle" class="text-base font-bold text-slate-800 mb-3"></h3>
+        <div id="commonModalBody" class="text-sm mb-5"></div>
+        <div id="commonModalBtns" class="flex gap-2 justify-end"></div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+  }
+  document.getElementById('commonModalTitle').textContent = title;
+  document.getElementById('commonModalBody').innerHTML = bodyHtml;
+  const btnsEl = document.getElementById('commonModalBtns');
+  btnsEl.innerHTML = '';
+  buttons.forEach(b => {
+    const btn = document.createElement('button');
+    btn.innerHTML = b.label;
+    btn.className = b.className || 'bg-slate-100 text-slate-700 px-4 py-2 rounded-lg text-sm';
+    btn.onclick = b.action;
+    btnsEl.appendChild(btn);
+  });
+  overlay.classList.remove('hidden');
+}
+function closeModal() {
+  const overlay = document.getElementById('commonModalOverlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
 let toastTimer;
 function showToast(msg, type='info') {
   const toast = document.getElementById('toast');
@@ -3070,25 +3152,63 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // 서버 Claude 활성화 상태 확인
+  // 서버 Claude 활성화 상태 확인 → 헤더 배지 & 업로드 경고 배너 제어
   try {
     const res = await fetch('/api/admin/config');
+    const headerStatusEl = document.getElementById('headerStatus');
+    const warningBanner  = document.getElementById('apiKeyWarningBanner');
     if (res.ok) {
-      document.getElementById('headerStatus').classList.remove('hidden');
       const cfg = await res.json();
       if (cfg.claude_enabled) {
+        // ✅ Claude 활성 상태
         state.apiKeyApplied = true;
+        // 헤더: 녹색 "서비스 정상"
+        headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full items-center';
+        headerStatusEl.innerHTML = '<i class="fas fa-circle text-green-500 mr-1" style="font-size:8px"></i><span class="hidden md:inline">서비스 정상</span>';
+        headerStatusEl.removeAttribute('onclick');
+        headerStatusEl.removeAttribute('title');
+        headerStatusEl.style.cursor = '';
+        headerStatusEl.classList.remove('hidden');
+        // 경고 배너 숨기기
+        if (warningBanner) warningBanner.classList.add('hidden');
+        // 관리자 배지
         const badge = document.getElementById('claudeModeBadge');
         if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
         document.getElementById('claudeStatusBadge').classList.remove('hidden');
         document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
         const apiKeyStatusEl = document.getElementById('apiKeyStatus');
         if (apiKeyStatusEl) { apiKeyStatusEl.textContent = '✓ Claude AI 이미 활성화됨'; apiKeyStatusEl.className = 'text-xs text-green-600'; }
-      } else if (savedKey) {
-        _autoReapplyKey(savedKey);
+      } else {
+        // ❌ Claude 비활성 — 저장된 키로 재시도
+        if (savedKey) {
+          await _autoReapplyKey(savedKey);
+        } else {
+          // 재시도 없이 바로 경고 표시
+          _setApiKeyWarning(headerStatusEl, warningBanner);
+        }
       }
+    } else {
+      // 서버 응답 실패 시 경고
+      _setApiKeyWarning(headerStatusEl, warningBanner);
     }
-  } catch(e) {}
+  } catch(e) {
+    // 네트워크 오류 시 경고
+    const headerStatusEl = document.getElementById('headerStatus');
+    const warningBanner  = document.getElementById('apiKeyWarningBanner');
+    _setApiKeyWarning(headerStatusEl, warningBanner);
+  }
+
+  // API 키 미설정 경고 UI 세팅 헬퍼
+  function _setApiKeyWarning(headerEl, bannerEl) {
+    if (headerEl) {
+      headerEl.className = 'hidden sm:inline-flex text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full items-center cursor-pointer';
+      headerEl.innerHTML = '<i class="fas fa-exclamation-circle text-red-500 mr-1" style="font-size:10px"></i><span class="hidden md:inline">API 키 미설정</span>';
+      headerEl.onclick = () => showPage('admin');
+      headerEl.title = '관리자 페이지에서 Claude API 키를 설정하세요';
+      headerEl.classList.remove('hidden');
+    }
+    if (bannerEl) bannerEl.classList.remove('hidden');
+  }
 
   // 저장된 Google Vision 키 자동 복원
   const savedVisionKey = localStorage.getItem('googleVisionKey');
@@ -3113,6 +3233,19 @@ async function _autoReapplyKey(key) {
     });
     if (res.ok) {
       state.apiKeyApplied = true;
+      // 헤더 배지: 녹색으로
+      const headerStatusEl = document.getElementById('headerStatus');
+      if (headerStatusEl) {
+        headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full items-center';
+        headerStatusEl.innerHTML = '<i class="fas fa-circle text-green-500 mr-1" style="font-size:8px"></i><span class="hidden md:inline">서비스 정상</span>';
+        headerStatusEl.onclick = null;
+        headerStatusEl.removeAttribute('title');
+        headerStatusEl.style.cursor = '';
+        headerStatusEl.classList.remove('hidden');
+      }
+      // 업로드 경고 배너 숨기기
+      const warningBanner = document.getElementById('apiKeyWarningBanner');
+      if (warningBanner) warningBanner.classList.add('hidden');
       const badge = document.getElementById('claudeModeBadge');
       if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
       document.getElementById('claudeStatusBadge').classList.remove('hidden');
@@ -3120,6 +3253,18 @@ async function _autoReapplyKey(key) {
       const apiKeyStatusEl = document.getElementById('apiKeyStatus');
       if (apiKeyStatusEl) { apiKeyStatusEl.textContent = '✓ 저장된 키 자동 적용됨'; apiKeyStatusEl.className = 'text-xs text-green-600'; }
       showToast('저장된 Claude API 키가 자동으로 적용되었습니다.', 'success');
+    } else {
+      // 재적용 실패 → 경고 표시
+      const headerStatusEl = document.getElementById('headerStatus');
+      const warningBanner  = document.getElementById('apiKeyWarningBanner');
+      if (headerStatusEl) {
+        headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full items-center cursor-pointer';
+        headerStatusEl.innerHTML = '<i class="fas fa-exclamation-circle text-red-500 mr-1" style="font-size:10px"></i><span class="hidden md:inline">API 키 미설정</span>';
+        headerStatusEl.onclick = () => showPage('admin');
+        headerStatusEl.title = '관리자 페이지에서 Claude API 키를 설정하세요';
+        headerStatusEl.classList.remove('hidden');
+      }
+      if (warningBanner) warningBanner.classList.remove('hidden');
     }
   } catch(e) {
     console.warn('키 자동 재적용 실패:', e);
