@@ -29,6 +29,7 @@ WORKDIR /app/backend
 
 # Railway는 PORT 환경변수를 동적으로 주입 (기본 8080)
 ENV PORT=8080
-EXPOSE ${PORT}
+EXPOSE 8080
 
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --timeout-keep-alive 300
+# shell form으로 실행 (환경변수 $PORT 확장 보장)
+CMD ["/bin/sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --workers 1 --timeout-keep-alive 300"]
