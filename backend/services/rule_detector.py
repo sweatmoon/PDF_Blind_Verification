@@ -11,6 +11,13 @@ from core.config import get_logger, load_dict
 
 logger = get_logger("rule_detector")
 
+
+def _normalize_name(text: str) -> str:
+    """이름 우회 탐지용 정규화: 공백·특수문자·구분기호 제거
+    예) '홍 길 동' → '홍길동', '홍·길·동' → '홍길동', '홍_길동' → '홍길동'
+    """
+    return re.sub(r'[\s\u3000·•_\-/·\.·,]', '', text)
+
 # ── 정규식 패턴 ────────────────────────────────────────────────
 _P = {
     "email": re.compile(
@@ -79,9 +86,22 @@ class RuleDetector:
         return out
 
     # ── URL/도메인 ────────────────────────────────────────────
-    # 자동 검출 없음: URL/도메인 모두 사전 등록된 것만 검출 (_from_dict에서 처리)
     def _urls(self, text: str, page: int) -> list:
-        return []
+        """http/https URL 자동 탐지 (사전 등록 여부 무관)"""
+        out = []
+        for m in _P["url"].finditer(text):
+            url = m.group().strip()
+            if len(url) < 8:
+                continue
+            if self._is_allowed(url):
+                continue
+            out.append(DetectionResult(
+                page_number=page, detection_type=DetectionType.URL,
+                detected_text=url, verdict=VerdictType.VIOLATION,
+                reason="URL/도메인 직접 노출 – 제안사 식별 가능",
+                recommendation="URL 삭제 또는 마스킹",
+                confidence=0.95, source="rule"))
+        return out
 
     # ── 사업자번호 ────────────────────────────────────────────
     def _biz_numbers(self, text: str, page: int) -> list:
@@ -177,25 +197,64 @@ class RuleDetector:
                                "서비스 유형명으로 대체"),
         }
 
+        # 이름 정규화 텍스트: 공백·특수문자 제거한 버전도 병행 탐지
+        _norm_text = _normalize_name(text)
+
         for subcat, (dtype, verdict, reason, rec) in direct_map.items():
             for term in d.get("direct_identifiers", {}).get(subcat, []):
                 if not term or len(term) < 2: continue
-                # 인력명·대표자명 2글자는 한글 단어 경계 매칭 (false positive 방지)
-                # 앞뒤에 한글이 붙어있으면 매칭 제외 (예: '국민은행'에서 '국민' 미탐지)
-                if subcat in ("personnel_names", "representative_names") and len(term) <= 2:
-                    pattern = r"(?<![가-힣])" + re.escape(term) + r"(?![가-힣])"
+
+                # 인력명·대표자명: 정규화 텍스트에서도 추가 매칭 (홍 길 동 → 홍길동)
+                if subcat in ("personnel_names", "representative_names"):
+                    norm_term = _normalize_name(term)
+
+                    # ① 정규화 텍스트에서 매칭 (공백·기호 우회 탐지)
+                    if norm_term and len(norm_term) >= 2:
+                        norm_pattern = (
+                            r"(?<![가-힣])" + re.escape(norm_term) + r"(?![가-힣])"
+                            if len(norm_term) <= 2
+                            else re.escape(norm_term)
+                        )
+                        for m in re.finditer(norm_pattern, _norm_text, re.I):
+                            k = (norm_term[:60], dtype)
+                            if k in seen: continue
+                            seen.add(k)
+                            out.append(DetectionResult(
+                                page_number=page, detection_type=dtype,
+                                detected_text=term,   # 원본 이름 표시
+                                verdict=verdict,
+                                reason=reason + " (공백/기호 분리 형태 탐지)",
+                                recommendation=rec,
+                                confidence=0.97, source="rule"))
+
+                    # ② 원문 텍스트에서도 exact 매칭 (앞뒤 한글 경계)
+                    if len(term) <= 2:
+                        pattern = r"(?<![가-힣])" + re.escape(term) + r"(?![가-힣])"
+                    else:
+                        pattern = re.escape(term)
+                    for m in re.finditer(pattern, text, re.I):
+                        matched = m.group()
+                        k = (matched[:60], dtype)
+                        if k in seen: continue
+                        seen.add(k)
+                        out.append(DetectionResult(
+                            page_number=page, detection_type=dtype,
+                            detected_text=matched, verdict=verdict,
+                            reason=reason, recommendation=rec,
+                            confidence=0.99, source="rule"))
                 else:
+                    # 인력명 외 항목은 기존 방식
                     pattern = re.escape(term)
-                for m in re.finditer(pattern, text, re.I):
-                    matched = m.group()
-                    k = (matched[:60], dtype)
-                    if k in seen: continue
-                    seen.add(k)
-                    out.append(DetectionResult(
-                        page_number=page, detection_type=dtype,
-                        detected_text=matched, verdict=verdict,
-                        reason=reason, recommendation=rec,
-                        confidence=0.99, source="rule"))
+                    for m in re.finditer(pattern, text, re.I):
+                        matched = m.group()
+                        k = (matched[:60], dtype)
+                        if k in seen: continue
+                        seen.add(k)
+                        out.append(DetectionResult(
+                            page_number=page, detection_type=dtype,
+                            detected_text=matched, verdict=verdict,
+                            reason=reason, recommendation=rec,
+                            confidence=0.99, source="rule"))
 
         for subcat, (dtype, reason, rec) in indirect_map.items():
             for term in d.get("indirect_identifiers", {}).get(subcat, []):
