@@ -114,9 +114,20 @@ def _load_saved_jobs():
 
 def set_job(job_id: str, data: dict):
     _jobs[job_id] = data
+    # 모든 상태 즉시 파일 저장 (서버 재시작 복원용)
+    _save_job_file(job_id, data)
 
 def get_job(job_id: str) -> dict | None:
     job = _jobs.get(job_id)
+    if job is None:
+        # 메모리에 없으면 파일에서 복원 시도
+        try:
+            data = json.loads(_job_file(job_id).read_text("utf-8"))
+            _jobs[job_id] = {k: v for k, v in data.items() if k != "report"}
+            _jobs[job_id]["has_report"] = data.get("report") is not None
+            job = _jobs[job_id]
+        except Exception:
+            return None
     if job and job.get("has_report") and job.get("report") is None:
         # 파일에서 report 로드
         try:
@@ -130,10 +141,13 @@ def get_job(job_id: str) -> dict | None:
 def update_job(job_id: str, **kw):
     if job_id in _jobs:
         _jobs[job_id].update(kw)
-        # 완료/실패 시 파일로 영구 저장
         status = _jobs[job_id].get("status", "")
-        if status in ("completed", "failed"):
-            _save_job_file(job_id, _jobs[job_id])
+        # 모든 상태 파일 저장 (processing 포함 — 서버 재시작 복원용)
+        # report는 completed일 때만 저장 (용량 절약)
+        save_data = {k: v for k, v in _jobs[job_id].items() if k != "report"}
+        if status == "completed":
+            save_data = _jobs[job_id]  # report 포함
+        _save_job_file(job_id, save_data)
 
 def delete_job(job_id: str):
     _jobs.pop(job_id, None)

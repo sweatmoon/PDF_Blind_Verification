@@ -24,6 +24,14 @@ FRONTEND = Path(__file__).parent.parent / "frontend" / "public"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_saved_jobs()   # 서버 재시작 시 저장된 결과 복원
+
+    # 재시작 전 processing/pending 상태 job → failed 마킹 (중단된 작업 명확히 표시)
+    from core.config import list_jobs, update_job
+    for job in list_jobs():
+        if job.get("status") in ("processing", "pending"):
+            update_job(job["job_id"], status="failed", message="서버 재시작으로 작업이 중단됐습니다. 다시 업로드해 주세요.")
+            logger.info(f"중단된 job 처리: {job['job_id']}")
+
     task = asyncio.create_task(cleanup_scheduler())
     logger.info(f"서버 시작 | Claude={'활성 ' + CLAUDE_MODEL if CLAUDE_ENABLED else '비활성(규칙 기반)'}")
     yield
