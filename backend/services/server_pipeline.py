@@ -155,7 +155,7 @@ class ServerPipeline:
         # ocr_pages: 실제 OCR로 처리된 페이지 idx 집합 (소스 표기용)
         ocr_pages: set[int] = set()
         if ocr_needed and ocr_on:
-            prog(12, f"OCR 실행 중 (대상 {len(ocr_needed)}페이지 · 우측하단 로고 영역 포함)…")
+            prog(12, f"OCR 시작 (이미지 전용 {len(ocr_needed)}페이지 · Tesseract)…")
             # 메모리 안전을 위해 3페이지씩 병렬 처리
             OCR_BATCH = 3
             ocr_done  = 0
@@ -171,8 +171,9 @@ class ServerPipeline:
                         raw_texts[idx] = ocr_text
                         ocr_pages.add(idx)   # OCR 성공 페이지 기록
                 ocr_done += len(batch_idxs)
-                pct = 12 + int((ocr_done / len(ocr_needed)) * 8)  # 12~20%
-                prog(pct, f"OCR 진행 중… ({ocr_done}/{len(ocr_needed)})")
+                # OCR은 전체 처리 시간의 대부분 차지 → 12~45% 범위 사용
+                pct = 12 + int((ocr_done / len(ocr_needed)) * 33)  # 12~45%
+                prog(pct, f"OCR 진행 중… ({ocr_done}/{len(ocr_needed)}페이지)")
                 await asyncio.sleep(0)
 
             ocr_hit = len(ocr_pages)
@@ -181,7 +182,7 @@ class ServerPipeline:
             logger.warning(f"[{job_id}] OCR 비활성 – {len(ocr_needed)}p 이미지 전용 페이지 텍스트 미추출")
 
         # ── 3. 규칙 탐지 (전 페이지 — OCR 텍스트 포함) ──────────
-        prog(20, "규칙 탐지 중…")
+        prog(46, "규칙 탐지 중…")
         rule_hits_by_page: dict[str, list] = {}
 
         for i in range(total):
@@ -209,13 +210,13 @@ class ServerPipeline:
 
         rule_total = sum(len(v) for v in rule_hits_by_page.values())
         logger.info(f"[{job_id}] 규칙 탐지 완료: {rule_total}건 (OCR 포함)")
-        prog(25, f"규칙 탐지 {rule_total}건 → 이미지 변환 시작…")
+        prog(50, f"규칙 탐지 {rule_total}건 · 이미지 변환 시작…")
 
         # ── 4. 페이지 이미지 변환 (Claude Vision용, 배치 병렬) ───
         page_images = []  # [{"page": int, "b64": str, "media_type": str}]
 
         if claude_on:
-            prog(25, f"PDF 페이지 이미지 변환 중 (0/{total})…")
+            prog(50, f"PDF 페이지 이미지 변환 중 (0/{total})…")
             RENDER_BATCH = 4
             for batch_start in range(0, total, RENDER_BATCH):
                 batch_end = min(batch_start + RENDER_BATCH, total)
@@ -231,14 +232,14 @@ class ServerPipeline:
                             "b64":        b64,
                             "media_type": "image/jpeg",
                         })
-                pct = 25 + int((batch_end / total) * 25)  # 25~50%
+                pct = 50 + int((batch_end / total) * 15)  # 50~65%
                 prog(pct, f"이미지 변환 중 ({batch_end}/{total})…")
                 await asyncio.sleep(0)
 
-            prog(50, f"{len(page_images)}/{total}페이지 변환 완료 · Claude Vision 분석 시작…")
+            prog(65, f"{len(page_images)}/{total}페이지 변환 완료 · Claude Vision 분석 시작…")
         else:
             # Claude 없으면 이미지 변환 단계 건너뜀
-            prog(50, "Claude Vision 비활성 — 규칙+OCR 결과로 리포트 생성…")
+            prog(65, "Claude Vision 비활성 — 규칙+OCR 결과로 리포트 생성…")
 
         # ── 5. Claude Vision 배치 분석 (병렬, Claude 활성 시만) ──
         all_vision_items: list[dict] = []
@@ -278,7 +279,7 @@ class ServerPipeline:
                         return []
                     finally:
                         completed[0] += 1
-                        pct = 50 + int((completed[0] / batch_count) * 40)  # 50~90%
+                        pct = 65 + int((completed[0] / batch_count) * 25)  # 65~90%
                         prog(pct, f"Claude Vision 분석 중 ({completed[0]}/{batch_count} 배치)…")
 
             vision_tasks   = [run_batch(bi, batch) for bi, batch in enumerate(batches)]
