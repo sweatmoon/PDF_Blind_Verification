@@ -2785,7 +2785,10 @@ function dbRenderPages(report, filter) {
   pageList.innerHTML = '';
   if (!report) return;
 
-  // buildClientReport와 동일한 pageMap 구성
+  const riskColors = {HIGH:'#dc2626', MEDIUM:'#d97706', LOW:'#059669'};
+  const verdictBg = { '위반':'verdict-위반','주의':'verdict-주의','허용':'verdict-허용' };
+
+  // items 기반 pageMap 구성
   const pageMap = {};
   (report.items || []).forEach(it => {
     const p = String(it.page || 1);
@@ -2793,8 +2796,20 @@ function dbRenderPages(report, filter) {
     pageMap[p].push(it);
   });
 
-  const riskColors = {HIGH:'#dc2626', MEDIUM:'#d97706', LOW:'#059669'};
-  const verdictBg = { '위반':'verdict-위반','주의':'verdict-주의','허용':'verdict-허용' };
+  // page_results가 있으면 이상없는 페이지도 포함 (서버 파이프라인 결과)
+  const totalPages = report.total_pages || report.page_count || 0;
+  if (report.page_results && report.page_results.length > 0) {
+    report.page_results.forEach(pr => {
+      const p = String(pr.page_number);
+      if (!pageMap[p]) pageMap[p] = []; // 이상없는 페이지도 빈 배열로 추가
+    });
+  } else if (totalPages > 0) {
+    // page_results 없으면 total_pages 기준으로 빈 페이지 추가
+    for (let i = 1; i <= totalPages; i++) {
+      const p = String(i);
+      if (!pageMap[p]) pageMap[p] = [];
+    }
+  }
 
   let pages = Object.entries(pageMap).map(([p, items]) => {
     const vCount = items.filter(i=>i.judgment==='위반').length;
@@ -2865,7 +2880,7 @@ function dbRenderPages(report, filter) {
         </div>
         <i class="fas fa-chevron-down text-xs text-slate-300"></i>
       </div>
-      <div class="p-3">${typeHtml}</div>`;
+      <div class="p-3">${typeHtml || '<div class="flex items-center gap-2 text-green-600 py-1"><i class="fas fa-circle-check"></i><span class="text-xs font-medium">이상 없음 — 식별 정보 미검출</span></div>'}</div>`;
     pageList.appendChild(card);
   });
 }
