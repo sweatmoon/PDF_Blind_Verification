@@ -25,7 +25,7 @@ from core.config import (
 router = APIRouter()
 logger = get_logger("jobs_api")
 
-CHUNK_SIZE = 1024 * 1024  # 1MB
+CHUNK_SIZE = 4 * 1024 * 1024  # 4MB (큰 청크로 루프 횟수 줄임)
 
 
 def _max_bytes() -> int:
@@ -46,35 +46,39 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
     job_dir   = get_job_tmp_dir(job_id)
     dest      = job_dir / safe_name
 
-    # 청크 읽기
+    # 스트리밍으로 바로 파일에 기록 (메모리에 전체 로드 X)
+    first_chunk = True
+    total_size  = 0
+    max_bytes   = _max_bytes()
     try:
-        chunks, total_size = [], 0
-        while True:
-            chunk = await file.read(CHUNK_SIZE)
-            if not chunk:
-                break
-            total_size += len(chunk)
-            if total_size > _max_bytes():
-                from core.config import MAX_FILE_SIZE_MB as _MB
-                raise HTTPException(413, f"파일 크기 초과 (최대 {_MB}MB)")
-            chunks.append(chunk)
-            await asyncio.sleep(0)
-        content = b"".join(chunks)
+        with open(dest, "wb") as fp:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > max_bytes:
+                    fp.close()
+                    dest.unlink(missing_ok=True)
+                    from core.config import MAX_FILE_SIZE_MB as _MB
+                    raise HTTPException(413, f"파일 크기 초과 (최대 {_MB}MB)")
+                # 첫 청크에서 PDF 헤더 검사
+                if first_chunk:
+                    if len(chunk) < 5 or not chunk[:5].startswith(b"%PDF-"):
+                        fp.close()
+                        dest.unlink(missing_ok=True)
+                        raise HTTPException(400, "유효하지 않은 PDF 파일입니다.")
+                    first_chunk = False
+                fp.write(chunk)
     except HTTPException:
         raise
     except Exception as e:
+        dest.unlink(missing_ok=True)
         raise HTTPException(500, f"파일 읽기 오류: {e}")
 
-    if len(content) < 100:
-        raise HTTPException(400, "파일이 너무 작거나 비어 있습니다.")
-    if not content[:5].startswith(b"%PDF-"):
-        raise HTTPException(400, "유효하지 않은 PDF 파일입니다.")
-
-    dest.write_bytes(content)
-    ok, msg = validate_pdf(dest)
-    if not ok:
+    if total_size < 100:
         dest.unlink(missing_ok=True)
-        raise HTTPException(400, f"PDF 검증 실패: {msg}")
+        raise HTTPException(400, "파일이 너무 작거나 비어 있습니다.")
 
     set_job(job_id, {
         "job_id":     job_id,
@@ -84,7 +88,7 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
         "message":    "검증 대기 중…",
         "filename":   fname,
         "safe_name":  safe_name,
-        "file_size":  len(content),
+        "file_size":  total_size,
         "created_at": datetime.now().isoformat(),
         "report":     None,
         "error":      None,
@@ -92,7 +96,7 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
     register_ttl(job_id)
     bg.add_task(_run_server_pipeline, job_id, dest, fname)
 
-    logger.info(f"대시보드 업로드: {safe_name} ({len(content)/1024:.1f} KB) job={job_id}")
+    logger.info(f"대시보드 업로드: {safe_name} ({total_size/1024:.1f} KB) job={job_id}")
     return JSONResponse({
         "job_id":   job_id,
         "status":   "pending",
