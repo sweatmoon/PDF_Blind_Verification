@@ -2517,6 +2517,9 @@ function renderDashboard() {
     (j.status === 'pending' || j.status === 'processing') && !savedIds.has(j.job_id)
   );
 
+  // 서버 실패 job - 대시보드에 표시
+  const serverFailed = _dbServerJobs.filter(j => j.status === 'failed');
+
   // 메모리 recentJobs (현재 세션에서 시작한 것, 서버 job 목록에 없는 경우 대비)
   const memRunning = state.recentJobs.filter(j =>
     j.status === 'processing' &&
@@ -2561,7 +2564,7 @@ function renderDashboard() {
   // ── 진행 중 섹션 ──
   const runningSection = document.getElementById('db-runningSection');
   const runningList    = document.getElementById('db-runningList');
-  if (running.length > 0) {
+  if (running.length > 0 || serverFailed.length > 0) {
     runningSection.classList.remove('hidden');
     runningList.innerHTML = '';
     running.forEach(j => {
@@ -2583,6 +2586,22 @@ function renderDashboard() {
             </div>
             <p class="text-xs text-slate-400 mt-0.5">${j.message || '분석 진행 중…'}</p>
           </div>
+        </div>`;
+      runningList.appendChild(card);
+    });
+    // 실패 job 카드
+    serverFailed.forEach(j => {
+      const card = document.createElement('div');
+      card.className = 'job-card bg-white rounded-xl border border-red-100 p-3';
+      card.innerHTML = `
+        <div class="flex items-center gap-2">
+          <span class="text-base">❌</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-xs font-medium text-slate-700 truncate">${esc(j.filename)}</p>
+            <p class="text-xs text-red-500 mt-0.5">${j.message || '작업이 중단됐습니다. 다시 업로드해 주세요.'}</p>
+          </div>
+          <button onclick="fetch('/api/jobs/${j.job_id}',{method:'DELETE'}).then(()=>dbFetchServerJobs())"
+            class="text-xs text-slate-400 hover:text-red-500 flex-shrink-0 px-1">✕</button>
         </div>`;
       runningList.appendChild(card);
     });
