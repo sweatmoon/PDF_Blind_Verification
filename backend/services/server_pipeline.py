@@ -20,11 +20,12 @@ from core.config import get_logger, update_job, load_dict, DATA_DIR
 
 logger = get_logger("server_pipeline")
 
-PAGES_PER_BATCH   = 4    # Claude Vision 배치당 페이지 수
-RENDER_DPI        = 120  # Claude Vision용 이미지 DPI
-OCR_DPI           = 150  # OCR용 이미지 DPI (150 = 속도/품질 균형, 200은 너무 느림)
-MAX_PAGES         = 200  # 최대 처리 페이지 수
-OCR_TEXT_THRESHOLD = 50  # 이 글자 수 미만이면 OCR 실행
+PAGES_PER_BATCH    = 4    # Claude Vision 배치당 페이지 수
+RENDER_DPI         = 200  # Claude Vision용 이미지 DPI (120=252KB/장, 200=539KB/장, 300=939KB/장)
+OCR_DPI            = 120  # OCR용 이미지 DPI (GV는 120으로 충분, 1300px)
+GV_BATCH_SIZE      = 16   # Google Vision 배치당 최대 페이지 수
+MAX_PAGES          = 200  # 최대 처리 페이지 수
+OCR_TEXT_THRESHOLD = 50   # 이 글자 수 미만이면 OCR 실행
 _executor = ThreadPoolExecutor(max_workers=8)
 
 
@@ -45,47 +46,50 @@ def _render_page_to_b64(svc: PDFService, page_idx: int, dpi: int = RENDER_DPI) -
         return None
 
 
-# ── OCR 실행 (단일 페이지, ThreadPool에서 호출) ───────────────────
-def _ocr_page(svc: PDFService, page_idx: int) -> str:
-    """
-    페이지 전체 OCR + 우측하단 15% 영역 별도 크롭 OCR
-    - 블라인드 미처리 제안서는 우측하단에 회사 로고/이름이 있는 경우가 많음
-    - 전체 OCR로 놓친 텍스트를 크롭 OCR로 보완
-    """
+# ── 페이지 렌더링 → PIL Image (OCR/GV용) ────────────────────────
+def _render_page_to_pil(pdf_path: Path, page_idx: int, dpi: int = OCR_DPI):
+    """PyMuPDF로 페이지를 PIL Image로 변환 (OCR 입력용)"""
+    try:
+        import fitz
+        from PIL import Image as PILImage
+        doc = fitz.open(str(pdf_path))
+        page = doc[page_idx]
+        mat = fitz.Matrix(dpi / 72, dpi / 72)
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+        img_bytes = pix.tobytes("jpeg", jpg_quality=85)
+        doc.close()
+        return PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+    except Exception as e:
+        logger.warning(f"페이지 {page_idx+1} PIL 렌더링 실패: {e}")
+        return None
+
+
+# ── Tesseract 폴백 단일 OCR (ThreadPool용) ───────────────────────
+def _tesseract_ocr_page(pdf_path: Path, page_idx: int) -> str:
+    """Tesseract로 단일 페이지 OCR (GV 실패 폴백용)"""
     try:
         ocr = get_ocr()
-        if not ocr.enabled:
-            return ""
-        img = svc.render_for_ocr(page_idx, dpi=OCR_DPI)
+        img = _render_page_to_pil(pdf_path, page_idx, dpi=OCR_DPI)
         if img is None:
             return ""
-
-        # ① 전체 페이지 OCR
-        full_text = ocr.from_image(img)
-
-        # ② 우측하단 15% 영역 크롭 OCR (로고 집중 탐지)
+        # 전체 OCR
+        full_text = ocr._tesseract_ocr(img)
+        # 우측하단 크롭 보완 (로고 영역)
         try:
             w, h = img.width, img.height
-            # 우측하단 15%×20% 영역 크롭
-            left   = int(w * 0.72)  # 우측 28% 시작
-            top    = int(h * 0.78)  # 하단 22% 시작
-            region = img.crop((left, top, w, h))
-            corner_text = ocr.from_image(region)
-            if corner_text.strip():
-                # 중복 없는 텍스트만 추가
+            region = img.crop((int(w * 0.72), int(h * 0.78), w, h))
+            corner = ocr._tesseract_ocr(region)
+            if corner.strip():
                 existing = set(full_text.lower().split())
-                extra = " ".join(
-                    t for t in corner_text.split()
-                    if t.lower() not in existing and len(t) >= 2
-                )
+                extra = " ".join(t for t in corner.split()
+                                 if t.lower() not in existing and len(t) >= 2)
                 if extra:
                     full_text = full_text + "\n" + extra
         except Exception:
             pass
-
         return full_text
     except Exception as e:
-        logger.warning(f"OCR 페이지 {page_idx+1} 실패: {e}")
+        logger.warning(f"Tesseract OCR 페이지 {page_idx+1} 실패: {e}")
         return ""
 
 
@@ -119,9 +123,10 @@ class ServerPipeline:
         total = min(svc.total_pages, MAX_PAGES)
         claude_on = self.judge.enabled and getattr(self.judge, '_client', None) is not None
         ocr_on    = self.ocr.enabled
+        gv_on     = self.ocr.use_google_vision
         mode_desc = []
         if claude_on: mode_desc.append("Claude Vision")
-        if ocr_on:    mode_desc.append("OCR")
+        if ocr_on:    mode_desc.append("Google Vision OCR" if gv_on else "Tesseract OCR")
         mode_desc.append("규칙 탐지")
         logger.info(f"[{job_id}] 분석 모드: {' + '.join(mode_desc)} | 총 {total}p")
         prog(8, f"총 {svc.total_pages}페이지 확인 · 분석 준비 중…")
@@ -151,33 +156,88 @@ class ServerPipeline:
 
         logger.info(f"[{job_id}] PyMuPDF 텍스트: {total - len(ocr_needed)}p, OCR 대상: {len(ocr_needed)}p")
 
-        # OCR이 필요한 페이지 병렬 처리
+        # OCR이 필요한 페이지 처리
         # ocr_pages: 실제 OCR로 처리된 페이지 idx 집합 (소스 표기용)
         ocr_pages: set[int] = set()
         if ocr_needed and ocr_on:
-            prog(12, f"OCR 시작 (이미지 전용 {len(ocr_needed)}페이지 · Tesseract)…")
-            # 메모리 안전을 위해 3페이지씩 병렬 처리
-            OCR_BATCH = 3
-            ocr_done  = 0
-            for batch_start in range(0, len(ocr_needed), OCR_BATCH):
-                batch_idxs = ocr_needed[batch_start:batch_start + OCR_BATCH]
-                ocr_tasks  = [
-                    loop.run_in_executor(_executor, _ocr_page, svc, idx)
-                    for idx in batch_idxs
+            use_gv = self.ocr.use_google_vision
+            engine = "Google Vision" if use_gv else "Tesseract"
+            prog(12, f"OCR 시작 (이미지 전용 {len(ocr_needed)}페이지 · {engine})…")
+            logger.info(f"[{job_id}] OCR 엔진: {engine} | 대상: {len(ocr_needed)}p")
+
+            ocr_done = 0
+
+            if use_gv:
+                # ── Google Vision: 렌더링 + 배치 전송 완전 병렬 ──────────
+                # 1) 모든 페이지 동시 렌더링
+                prog(12, f"페이지 렌더링 중… ({len(ocr_needed)}장 병렬)")
+                render_tasks = [
+                    loop.run_in_executor(_executor, _render_page_to_pil, pdf_path, idx, OCR_DPI)
+                    for idx in ocr_needed
                 ]
-                ocr_results = await asyncio.gather(*ocr_tasks)
-                for idx, ocr_text in zip(batch_idxs, ocr_results):
-                    if ocr_text.strip():
-                        raw_texts[idx] = ocr_text
-                        ocr_pages.add(idx)   # OCR 성공 페이지 기록
-                ocr_done += len(batch_idxs)
-                # OCR은 전체 처리 시간의 대부분 차지 → 12~45% 범위 사용
-                pct = 12 + int((ocr_done / len(ocr_needed)) * 33)  # 12~45%
-                prog(pct, f"OCR 진행 중… ({ocr_done}/{len(ocr_needed)}페이지)")
-                await asyncio.sleep(0)
+                rendered_imgs = await asyncio.gather(*render_tasks)
+                prog(18, f"렌더링 완료 · Google Vision 동시 전송 중…")
+
+                # 2) 배치 분할 후 모든 배치 동시 전송 (순차→병렬)
+                valid_items = [(idx, img) for idx, img in zip(ocr_needed, rendered_imgs) if img is not None]
+                gv_failed: list[int] = []
+
+                batches = [
+                    valid_items[s:s + GV_BATCH_SIZE]
+                    for s in range(0, len(valid_items), GV_BATCH_SIZE)
+                ]
+
+                def _gv_batch(batch_items):
+                    return self.ocr.gv_ocr_batch(batch_items)
+
+                # 모든 배치 동시 실행 (GV API는 동시 요청 허용)
+                batch_tasks = [
+                    loop.run_in_executor(_executor, _gv_batch, batch)
+                    for batch in batches
+                ]
+                batch_results = await asyncio.gather(*batch_tasks)
+
+                for batch, result in zip(batches, batch_results):
+                    for idx, _ in batch:
+                        text = result.get(idx, "")
+                        if text.strip():
+                            raw_texts[idx] = text
+                            ocr_pages.add(idx)
+                        else:
+                            gv_failed.append(idx)
+
+                ocr_done = len(valid_items)
+                prog(45, f"Google Vision OCR 완료 ({ocr_done}/{len(ocr_needed)}페이지)")
+
+                # 3) GV 실패 페이지 Tesseract 폴백
+                if gv_failed:
+                    logger.warning(f"[{job_id}] GV 실패 {len(gv_failed)}p → Tesseract 폴백")
+                    for idx in gv_failed:
+                        text = await loop.run_in_executor(_executor, _tesseract_ocr_page, pdf_path, idx)
+                        if text.strip():
+                            raw_texts[idx] = text
+                            ocr_pages.add(idx)
+            else:
+                # ── Tesseract: 3페이지씩 병렬 처리 ──────────────────────
+                TESS_BATCH = 3
+                for batch_start in range(0, len(ocr_needed), TESS_BATCH):
+                    batch_idxs = ocr_needed[batch_start:batch_start + TESS_BATCH]
+                    tess_tasks = [
+                        loop.run_in_executor(_executor, _tesseract_ocr_page, pdf_path, idx)
+                        for idx in batch_idxs
+                    ]
+                    tess_results = await asyncio.gather(*tess_tasks)
+                    for idx, text in zip(batch_idxs, tess_results):
+                        if text.strip():
+                            raw_texts[idx] = text
+                            ocr_pages.add(idx)
+                    ocr_done += len(batch_idxs)
+                    pct = 12 + int((ocr_done / len(ocr_needed)) * 33)  # 12~45%
+                    prog(pct, f"Tesseract OCR… ({ocr_done}/{len(ocr_needed)}페이지)")
+                    await asyncio.sleep(0)
 
             ocr_hit = len(ocr_pages)
-            logger.info(f"[{job_id}] OCR 완료: {len(ocr_needed)}p 처리 → {ocr_hit}p 텍스트 추출 성공")
+            logger.info(f"[{job_id}] OCR 완료 ({engine}): {len(ocr_needed)}p → {ocr_hit}p 텍스트 추출 성공")
         elif ocr_needed and not ocr_on:
             logger.warning(f"[{job_id}] OCR 비활성 – {len(ocr_needed)}p 이미지 전용 페이지 텍스트 미추출")
 
