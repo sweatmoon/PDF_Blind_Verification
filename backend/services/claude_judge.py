@@ -1664,16 +1664,17 @@ def _verify_face_candidate(
     """
     인물 사진 후보 bbox 영역을 crop 후 재분류.
 
-    판정 순서 (색상 휴리스틱 선제 → CV 탐지 → Claude Vision 폴백):
-      1단계: 색상/채도 휴리스틱 (단색·벡터 즉시 허용)
-             → 단색/실루엣(unique≤12, sat_std<25) → icon_or_silhouette 즉시 반환
-             → 벡터/플랫(unique≤20, sat_std<35) → icon_or_silhouette 즉시 반환
-             (MediaPipe가 단색 원·사각형을 얼굴로 오탐하는 문제 방지)
-      2단계: MediaPipe BlazeFace + OpenCV Haar (결정론적)
+    판정 순서 (단색 즉시허용 → MediaPipe 최우선 → 피부색 보완 → Claude 폴백):
+      1단계: 색상/채도 휴리스틱 (단색·실루엣만 즉시 허용)
+             → 단색/실루엣(unique_fg≤10, fg_sat_std<30) → icon_or_silhouette 즉시 반환
+             → 그 외 모든 케이스 → 2단계로 진행 (skin_fg 무관)
+             ※ skin_fg로 즉시 허용/위반하지 않음 — 오탐 원인이었던 0.20 임계값 제거
+      2단계: MediaPipe BlazeFace + OpenCV Haar (결정론적 — 최우선)
              → 얼굴 검출 (conf ≥ 0.5) → real_photo 즉시 반환
-             → 얼굴 없음 → 피부색 휴리스틱으로 진행
-      3단계: 피부색 휴리스틱 (비정면·작은 얼굴 보완)
-             → skin_ratio ≥ 0.06 AND sat_std > 45 → real_photo
+             → 얼굴 미검출 → 3단계로 진행
+      3단계: 피부색 휴리스틱 보완 (CV 미탐 케이스 — 완화된 임계값)
+             → skin_fg ≥ 0.05 AND fg_sat_std > 20 → real_photo
+             (이전 0.20/45 → 0.05/20: 정장+소형얼굴/어두운피부 보완)
       4단계: Claude Vision (불명확 케이스만)
              → real_photo / icon_or_silhouette / unknown
 
@@ -1739,13 +1740,18 @@ def _verify_face_candidate(
                     })
                     return "icon_or_silhouette"
 
-            # ── D: 전경 기준 피부색 비율 계산 ──────────────────────────
+            # ── D: 전경 기준 피부색 비율 계산 (보조 참고값 — 즉시 판정 안 함) ──
+            # NOTE: 피부색 비율로 즉시 허용/위반하지 않음.
+            #       단색/실루엣 판별 후 MediaPipe를 먼저 실행하고,
+            #       피부색은 3단계 보완에서만 사용.
             if fg_count > 0:
                 r, g, b = fg_pixels[:, 0], fg_pixels[:, 1], fg_pixels[:, 2]
+                # 확장된 피부색 범위: 어두운 피부(R>90)부터 밝은 피부까지 포함
+                # (이전 R>150 조건은 어두운 피부/머리카락 많은 사진에서 0.000이 됨)
                 skin = (
-                    (r > 150) & (g > 100) & (b > 80) &
-                    ((r.astype(np.int16) - g.astype(np.int16)) > 10) &
-                    ((g.astype(np.int16) - b.astype(np.int16)) > 5)
+                    (r > 90) & (g > 60) & (b > 40) &
+                    (r.astype(np.int16) > b.astype(np.int16)) &
+                    (r.astype(np.int16) > g.astype(np.int16))
                 )
                 _fg_skin_ratio = float(skin.sum()) / max(fg_count, 1)
 
@@ -1753,45 +1759,13 @@ def _verify_face_candidate(
                 f"[face_verify] fg={fg_count}px, "
                 f"skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f}"
             )
-
-            # 피부색 거의 없음 → 아이콘/그래픽 (실사 불필요)
-            if _fg_skin_ratio < 0.20:
-                logger.info(
-                    f"[face_verify] 피부색 부족 → icon_or_silhouette "
-                    f"(skin_fg={_fg_skin_ratio:.3f})"
-                )
-                alog.log("face_verify", "low_skin", {
-                    "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
-                    "fg_count": fg_count, "skin_fg": round(_fg_skin_ratio, 3),
-                    "fg_sat_std": round(_fg_sat_std, 1),
-                    "result": "icon_or_silhouette",
-                })
-                return "icon_or_silhouette"
-
-            # 피부색 풍부 → 실사 (CV 탐지 없이 즉시)
-            if _fg_skin_ratio >= 0.20 and _fg_sat_std > 30:
-                logger.info(
-                    f"[face_verify] 피부색 풍부 → real_photo "
-                    f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
-                )
-                alog.log("face_verify", "rich_skin", {
-                    "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
-                    "fg_count": fg_count, "skin_fg": round(_fg_skin_ratio, 3),
-                    "fg_sat_std": round(_fg_sat_std, 1),
-                    "result": "real_photo",
-                })
-                return "real_photo"
-
-            # ≥ 0.20 이지만 sat_std 낮음 → 애매 → CV 탐지 진행
             _heuristic_done = True
-            logger.debug(
-                f"[face_verify] 피부색 있으나 채도 낮음 ({_fg_skin_ratio:.3f}, sat={_fg_sat_std:.1f}) → CV 탐지 진행"
-            )
 
         except Exception as _he:
             logger.debug(f"[face_verify] 색상 휴리스틱 실패 (무시 후 진행): {_he}")
 
-        # ══ 2단계: Computer Vision 얼굴 탐지 (결정론적) ════════════════
+        # ══ 2단계: Computer Vision 얼굴 탐지 (결정론적 — 최우선) ═════════
+        # 단색/실루엣 통과 시 무조건 MediaPipe 실행 (skin_fg 무관)
         face_detected = _detect_real_face(crop_img)
         if face_detected:
             logger.info(
@@ -1812,12 +1786,11 @@ def _verify_face_candidate(
             "fg_sat_std": round(_fg_sat_std, 1),
         })
 
-        # ══ 3단계: 피부색 휴리스틱 보완 (CV 미탐 + 전경 피부색 있는 경우) ════
-        # 1단계에서 0.10~0.15 범위였고 CV도 미탐 → 경계값 처리
-        # 임계값을 높게 유지: skin_fg ≥ 0.20 + fg_sat_std > 45
-        # (벡터 일러스트 살구색이 0.14~0.15 수준임을 고려)
+        # ══ 3단계: 피부색 휴리스틱 보완 (CV 미탐 + 피부색 있는 경우) ════
+        # 임계값 완화: skin_fg ≥ 0.05 + fg_sat_std > 20
+        # (이전 0.20/45 기준은 정장+소형얼굴/어두운피부를 과도하게 허용함)
         try:
-            if _fg_skin_ratio >= 0.20 and _fg_sat_std > 45:
+            if _fg_skin_ratio >= 0.05 and _fg_sat_std > 20:
                 logger.info(
                     f"[face_verify] 피부색 보완 → real_photo "
                     f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
