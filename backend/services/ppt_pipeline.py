@@ -391,6 +391,34 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         for _t in _subcat_vals:
             if _t:
                 _allowed_flat.add(_t.strip().lower())
+
+    # ★★★ DB 등록 사전 항목 전체 수집 (Vision 오탐 필터용) ★★★
+    # Vision이 탐지한 업체명·영문명·도메인·브랜드·색상·솔루션·대표자명은
+    # 반드시 DB에 등록된 항목과 일치해야만 위반 처리. 미등록 항목은 오탐으로 필터링.
+    _direct = _dict.get("direct_identifiers", {})
+    _indirect = _dict.get("indirect_identifiers", {})
+    _db_company_terms: set[str] = set()  # 업체 관련 DB 등록 항목 (소문자)
+    for _key in ("company_names", "english_names", "abbreviations",
+                 "representative_names", "emails", "domains", "brand_names", "urls"):
+        for _t in (_direct.get(_key) or []):
+            if _t and str(_t).strip():
+                _db_company_terms.add(str(_t).strip().lower())
+    for _key in ("color_names", "solution_names", "slogans", "org_names", "service_names"):
+        for _t in (_indirect.get(_key) or []):
+            if _t and str(_t).strip():
+                _db_company_terms.add(str(_t).strip().lower())
+    # personnel_names는 별도 처리 (이름 부분 매칭 필요)
+    _db_personnel: set[str] = set()
+    for _t in (_direct.get("personnel_names") or []):
+        if _t and str(_t).strip():
+            _db_personnel.add(str(_t).strip().lower())
+
+    # Vision이 탐지한 업체 관련 type 목록
+    _COMPANY_DTYPES = {
+        "제안사명", "업체명", "회사명", "영문명", "영문명·도메인", "도메인", "이메일",
+        "브랜드명", "고유색상", "솔루션명", "슬로건", "조직명", "서비스명",
+        "대표자명", "약칭",
+    }
     # 공공기관 등 고정 허용 기관명 키워드 (allowed_terms에 없어도 기본 허용)
     _FIXED_ALLOWED_ORGS = {
         "국민건강보험", "국민건강보험공단", "국민연금", "국민연금공단",
@@ -444,10 +472,28 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         if already:
             continue
 
-        # ── 일반 명사 체크: _COMMON_WORDS에 해당하면 허용으로 처리 (skip 아님, 결과에 표시)
-        from services.rule_detector import _COMMON_WORDS as _CW
+        # ★★★ DB 등록 사전 검증 필터 (업체 관련 오탐 차단) ★★★
+        # Vision이 스스로 판단한 업체명·영문명·도메인 등이 DB에 없으면 오탐으로 필터링
         import re as _re
+        from services.rule_detector import _COMMON_WORDS as _CW
         content_stripped = content.strip()
+        _dtype_norm = dtype.strip()
+
+        if _dtype_norm in _COMPANY_DTYPES and it.get("judgment") in ("위반", "주의"):
+            _content_lower = content_stripped.lower()
+            # DB에 등록된 항목 중 하나라도 content에 포함(또는 동일)해야 통과
+            _matched = any(
+                _db_term and (_db_term in _content_lower or _content_lower in _db_term)
+                for _db_term in _db_company_terms
+                if _db_term
+            )
+            if not _matched:
+                # DB에 없는 항목 → 오탐으로 로깅 후 skip
+                import logging as _logging
+                _logging.getLogger("ppt_pipeline").debug(
+                    f"[DB 검증 필터] p{p} '{content}' ({dtype}) → DB 미등록, 오탐 제외"
+                )
+                continue
         # 인력명/이름 관련 모든 type에 대해 _COMMON_WORDS 체크
         _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
         if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
