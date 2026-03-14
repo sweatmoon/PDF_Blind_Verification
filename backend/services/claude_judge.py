@@ -2215,16 +2215,19 @@ def scan_slide_for_faces(
                 )
                 continue
 
-            # 상대좌표로 변환 (0~1)
-            rel_bbox = [fx/W, fy/H, fw/W, fh/H]
+            # _extract_crop은 [x1,y1,x2,y2] 절대 픽셀을 기대함
+            # (x,y,w,h) → (x1,y1,x2,y2) 변환 후 전달
+            abs_bbox_x1y1x2y2 = [fx, fy, fx + fw, fy + fh]
 
-            verdict = _verify_face_candidate(page_b64, rel_bbox, client=client, model=model)
+            verdict = _verify_face_candidate(page_b64, abs_bbox_x1y1x2y2, client=client, model=model)
             logger.info(
                 f"[face_scan] p{page_no} bbox={fx},{fy},{fw},{fh} "
                 f"→ face_verify={verdict}"
             )
 
             if verdict == "real_photo":
+                # 상대좌표(0~1)는 리포트 표시용으로만 저장
+                rel_bbox = [fx/W, fy/H, (fx+fw)/W, (fy+fh)/H]
                 item = {
                     "page": page_no,
                     "type": "person_candidate",
@@ -2239,11 +2242,12 @@ def scan_slide_for_faces(
                 alog.log("face_scan", "real_photo", {
                     "page": page_no,
                     "bbox": rel_bbox,
-                    "abs_bbox": [fx, fy, fw, fh],
+                    "abs_bbox": [fx, fy, fx+fw, fy+fh],
                 })
             else:
                 alog.log("face_scan", verdict, {
-                    "page": page_no, "bbox": rel_bbox,
+                    "page": page_no,
+                    "abs_bbox": [fx, fy, fw, fh],
                 })
 
     except ImportError as _ie:
