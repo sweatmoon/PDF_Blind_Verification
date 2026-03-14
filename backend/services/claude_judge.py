@@ -1,14 +1,14 @@
 """
-Claude Vision 판정 엔진 v4
+Claude Vision 판정 엔진 v5
 - PAGE 블록 구조로 페이지 간 전이 완전 차단
 - rule_hits 확정→후보 교차검증 방식
 - 전체 이름 일치 기준 적용
 - 이름+직책 문맥 조건 강화
 - 로고 판정 4단계 보수적 정책:
-    1단계 Claude Vision → 로고 후보 탐지
-    2단계 후보 영역 crop
-    3단계 레퍼런스 로고와 재비교
-    4단계 완전 일치 시만 위반 (그 외 허용)
+    1단계 Claude Vision → 로고 후보 탐지 + bbox 반환
+    2단계 bbox 기반 정확 crop (고정 영역 crop 제거)
+    3단계 SSIM + ORB feature match 이중 비교
+    4단계 threshold 0.70 이상 시만 위반 확정
 - 발주기관/공공기관 로고 오탐 방지
 - 강조 그래픽 오탐 방지
 - 우측하단 편향 제거
@@ -174,97 +174,148 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
       "content": "검출 내용",
       "judgment": "위반 또는 주의 또는 허용",
       "reason": "판정 사유",
-      "recommendation": "수정 권고 (허용이면 빈 문자열)"
+      "recommendation": "수정 권고 (허용이면 빈 문자열)",
+      "bbox": [x1, y1, x2, y2]
     }
   ]
 }
+- bbox는 이미지 내 검출 영역의 픽셀 좌표 (좌상단 x1,y1 / 우하단 x2,y2)
+- bbox를 특정할 수 없으면 null로 설정
+- 로고/로고후보 탐지 시 반드시 bbox를 포함하라 — 재비교에 사용됨
 - 문제 없는 페이지는 포함하지 않아도 된다
 - 한 페이지에 위반 요소 N개면 items 배열에 N개 항목
 - 로고 후보(1차 탐지)는 type="로고후보"로 표시하고 judgment="주의"로 설정
-- 최종 위반 확정은 코드에서 재비교 후 결정하므로 로고는 보수적으로 판정"""
+- 최종 위반 확정은 코드에서 bbox crop 후 SSIM/ORB 재비교로 결정"""
 
 
-# ── 로고 후보 재비교 (crop → 픽셀 유사도) ───────────────────────
+# ── threshold ────────────────────────────────────────────────────
+_LOGO_SIM_THRESHOLD = 0.70  # SSIM 또는 ORB 매칭 기준 (0.70 이상 → 위반 확정)
+
+
+# ── 로고 후보 재비교: bbox crop → SSIM + ORB 이중 비교 ────────────
 def _verify_logo_candidate(
     page_b64: str,
     logo_ref_b64: str,
+    bbox: Optional[list] = None,
     page_media_type: str = "image/jpeg",
 ) -> bool:
     """
-    Claude Vision이 로고 후보로 탐지한 페이지 이미지에서
-    우측하단 영역을 crop 후 레퍼런스 로고와 pixel-level 재비교.
-    반환값: True = 실제 로고 일치 (위반 확정), False = 불일치 (허용)
+    Claude Vision이 반환한 bbox 영역을 crop 후 레퍼런스 로고와
+    SSIM + ORB feature match 이중 비교.
+
+    bbox: [x1, y1, x2, y2] 픽셀 좌표 (Claude 반환값)
+          None이면 우측하단 fallback crop 사용
+    반환값: True = 로고 일치 (위반 확정), False = 불일치 (허용)
     """
     try:
-        from PIL import Image, ImageChops
+        from PIL import Image
         import numpy as np
+        import cv2
 
-        # 페이지 이미지 디코딩
+        # ── 이미지 디코딩 ──────────────────────────────────────────
         page_bytes = base64.b64decode(page_b64)
-        page_img = Image.open(io.BytesIO(page_bytes)).convert("RGB")
-        pw, ph = page_img.width, page_img.height
+        page_img   = Image.open(io.BytesIO(page_bytes)).convert("RGB")
+        pw, ph     = page_img.width, page_img.height
 
-        # 레퍼런스 로고 디코딩
-        ref_bytes = base64.b64decode(logo_ref_b64)
-        ref_img = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
-        rw, rh = ref_img.width, ref_img.height
+        ref_bytes  = base64.b64decode(logo_ref_b64)
+        ref_img    = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
 
-        # 비교 영역 목록: 우측하단 28% × 22%, 우측하단 40% × 30%, 전체 우측 절반
-        crop_regions = [
-            (int(pw * 0.72), int(ph * 0.78), pw, ph),           # 우측하단 28%×22%
-            (int(pw * 0.60), int(ph * 0.70), pw, ph),           # 우측하단 40%×30%
-            (int(pw * 0.50), int(ph * 0.60), pw, ph),           # 우측절반 아래 40%
-        ]
+        # ── crop 영역 결정 ────────────────────────────────────────
+        if bbox and len(bbox) == 4:
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            # 범위 클리핑
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(pw, x2), min(ph, y2)
+            # 너무 작은 bbox는 패딩 확장 (최소 32×32)
+            pad = 10
+            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+            x2, y2 = min(pw, x2 + pad), min(ph, y2 + pad)
+            crop_img = page_img.crop((x1, y1, x2, y2))
+            logger.debug(f"bbox crop: ({x1},{y1},{x2},{y2}) / 페이지 {pw}×{ph}")
+        else:
+            # bbox 없음 → 우측하단 fallback (보수적으로 허용 처리)
+            logger.debug("bbox 없음 → fallback crop (우측하단 28%×22%)")
+            x0 = int(pw * 0.72)
+            y0 = int(ph * 0.78)
+            crop_img = page_img.crop((x0, y0, pw, ph))
 
-        # 레퍼런스 크기를 기준 비교 크기로 설정
-        cmp_w = max(64, min(rw, 200))
-        cmp_h = max(32, min(rh, 100))
-        ref_resized = ref_img.resize((cmp_w, cmp_h), Image.LANCZOS)
-        ref_arr = _img_to_hist(ref_resized)
+        # 비교 크기 통일
+        cmp_size = (128, 64)
+        crop_resized = crop_img.resize(cmp_size, Image.LANCZOS)
+        ref_resized  = ref_img.resize(cmp_size, Image.LANCZOS)
 
-        best_sim = 0.0
-        for x0, y0, x1, y1 in crop_regions:
-            crop = page_img.crop((x0, y0, x1, y1))
-            crop_r = crop.resize((cmp_w, cmp_h), Image.LANCZOS)
-            crop_arr = _img_to_hist(crop_r)
-            sim = _hist_similarity(ref_arr, crop_arr)
-            if sim > best_sim:
-                best_sim = sim
-            # 빠른 조기 종료
-            if best_sim >= 0.82:
-                break
+        crop_np = np.array(crop_resized)
+        ref_np  = np.array(ref_resized)
 
-        result = best_sim >= 0.82
-        logger.debug(f"로고 재비교 유사도={best_sim:.3f} → {'위반확정' if result else '허용'}")
+        # ── 1단계: SSIM 비교 ──────────────────────────────────────
+        ssim_score = _compute_ssim(ref_np, crop_np)
+        logger.debug(f"SSIM={ssim_score:.3f}")
+
+        if ssim_score >= _LOGO_SIM_THRESHOLD:
+            logger.info(f"로고 재비교 SSIM 일치={ssim_score:.3f} → 위반 확정")
+            return True
+
+        # ── 2단계: ORB feature match ──────────────────────────────
+        orb_score = _compute_orb(ref_np, crop_np)
+        logger.debug(f"ORB={orb_score:.3f}")
+
+        result = orb_score >= _LOGO_SIM_THRESHOLD
+        logger.info(
+            f"로고 재비교 SSIM={ssim_score:.3f} ORB={orb_score:.3f} "
+            f"→ {'위반 확정' if result else '허용'}"
+        )
         return result
 
-    except ImportError:
-        # PIL/numpy 없으면 보수적으로 허용 처리
-        logger.warning("PIL/numpy 미설치 → 로고 재비교 불가, 허용 처리")
+    except ImportError as e:
+        logger.warning(f"로고 재비교 라이브러리 미설치: {e} → 허용 처리")
         return False
     except Exception as e:
         logger.warning(f"로고 재비교 실패: {e} → 허용 처리")
         return False
 
 
-def _img_to_hist(img) -> list:
-    """RGB 이미지를 정규화된 색상 히스토그램으로 변환"""
-    import numpy as np
-    arr = np.array(img)
-    hists = []
-    for ch in range(3):
-        h, _ = np.histogram(arr[:, :, ch], bins=32, range=(0, 256))
-        h = h.astype(float) / (h.sum() + 1e-9)
-        hists.extend(h.tolist())
-    return hists
+def _compute_ssim(ref_np, crop_np) -> float:
+    """Grayscale SSIM 유사도 (0~1)"""
+    try:
+        from skimage.metrics import structural_similarity as ssim
+        import cv2
+        ref_gray  = cv2.cvtColor(ref_np,  cv2.COLOR_RGB2GRAY)
+        crop_gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+        score, _ = ssim(ref_gray, crop_gray, full=True)
+        return float(max(0.0, score))
+    except Exception as e:
+        logger.debug(f"SSIM 실패: {e}")
+        return 0.0
 
 
-def _hist_similarity(h1: list, h2: list) -> float:
-    """Bhattacharyya 계수 기반 히스토그램 유사도 (0~1)"""
-    import numpy as np
-    a = np.array(h1)
-    b = np.array(h2)
-    return float(np.sum(np.sqrt(a * b)))
+def _compute_orb(ref_np, crop_np) -> float:
+    """
+    ORB feature match 기반 유사도 (0~1).
+    매칭 비율 = good_matches / max(kp_ref, kp_crop)
+    """
+    try:
+        import cv2
+        ref_gray  = cv2.cvtColor(ref_np,  cv2.COLOR_RGB2GRAY)
+        crop_gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+
+        orb = cv2.ORB_create(nfeatures=500)
+        kp1, des1 = orb.detectAndCompute(ref_gray,  None)
+        kp2, des2 = orb.detectAndCompute(crop_gray, None)
+
+        if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+            return 0.0
+
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(des1, des2)
+
+        # Lowe ratio test 대신 거리 기준 필터 (crossCheck이므로 단순 distance cutoff)
+        good = [m for m in matches if m.distance < 50]
+        denom = max(len(kp1), len(kp2), 1)
+        score = len(good) / denom
+        return float(min(1.0, score))
+    except Exception as e:
+        logger.debug(f"ORB 실패: {e}")
+        return 0.0
 
 
 class ClaudeVisionJudge:
@@ -532,12 +583,20 @@ class ClaudeVisionJudge:
                         logger.debug(f"공공기관 로고 오탐 차단: {content} (키워드: {kw})")
                         break
 
-            # ── 로고 후보/위반 → crop 재비교 ───────────────────
+            # ── 로고 후보/위반 → bbox crop 재비교 ──────────────
             if judgment in ("위반", "주의") and _is_logo_type(dtype) and it.get("judgment") != "허용":
                 page_num = it.get("page", 0)
                 if logo_b64 and page_num in page_b64_map:
                     b64, mtype = page_b64_map[page_num]
-                    matched = _verify_logo_candidate(b64, logo_b64, mtype)
+                    # Claude가 반환한 bbox 파싱
+                    raw_bbox = it.get("bbox")
+                    bbox = None
+                    if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+                        try:
+                            bbox = [float(v) for v in raw_bbox]
+                        except (TypeError, ValueError):
+                            bbox = None
+                    matched = _verify_logo_candidate(b64, logo_b64, bbox, mtype)
                     if not matched:
                         # 재비교 불일치 → 허용 강등
                         original_judgment = it.get("judgment", "주의")
@@ -586,6 +645,15 @@ class ClaudeVisionJudge:
                 it.setdefault("judgment", "주의")
                 it.setdefault("reason", "")
                 it.setdefault("recommendation", "")
+                # bbox: 로고 재비교용 — 없으면 None으로 통일
+                if "bbox" not in it:
+                    it["bbox"] = None
+                elif it["bbox"] is not None:
+                    # 유효한 4-원소 리스트인지 검증
+                    try:
+                        it["bbox"] = [float(v) for v in it["bbox"]] if len(it["bbox"]) == 4 else None
+                    except (TypeError, ValueError):
+                        it["bbox"] = None
 
                 # 검증 1: page가 실제 배치 범위 안에 있는지
                 if valid_pages:
