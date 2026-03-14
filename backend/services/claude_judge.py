@@ -1,18 +1,19 @@
 """
-Claude Vision 판정 엔진 v5
+Claude Vision 판정 엔진 v6
+- Computer Vision 우선 + Claude Vision 보조 아키텍처
+- MediaPipe BlazeFace + OpenCV Haar: 얼굴 탐지 1선 (결정론적)
+- pHash: 로고 유사도 1차 필터 (결정론적)
+- SSIM + ORB: 로고 유사도 2차 확인
 - PAGE 블록 구조로 페이지 간 전이 완전 차단
-- rule_hits 확정→후보 교차검증 방식
-- 전체 이름 일치 기준 적용
-- 이름+직책 문맥 조건 강화
-- 로고 판정 4단계 보수적 정책:
-    1단계 Claude Vision → 로고 후보 탐지 + bbox 반환
-    2단계 bbox 기반 정확 crop (고정 영역 crop 제거)
-    3단계 SSIM + ORB feature match 이중 비교
-    4단계 threshold 0.70 이상 시만 위반 확정
-- 발주기관/공공기관 로고 오탐 방지
-- 강조 그래픽 오탐 방지
-- 우측하단 편향 제거
-- _parse_items() 출력 검증 강화
+- 인물사진 판정 순서:
+    1단계 MediaPipe BlazeFace (얼굴 landmark) → 실제 얼굴 확정
+    2단계 OpenCV Haar Cascade → 보조 탐지
+    3단계 색상/채도/피부색 휴리스틱 → 아이콘/실루엣 필터
+    4단계 Claude Vision → 불명확 케이스만 호출
+- 로고 판정 순서:
+    1단계 pHash distance ≤ 8 → 즉시 위반 확정 (Claude 불필요)
+    2단계 SSIM + ORB threshold 0.70↑ → 위반 확정
+    3단계 threshold 미달 → 심볼 비교 단계
 """
 from __future__ import annotations
 import json, re, base64, io
@@ -277,7 +278,7 @@ def _extract_crop(
         return None
 
 
-# ── 로고 후보 재비교: bbox crop → SSIM + ORB 이중 비교 ────────────
+# ── 로고 후보 재비교: pHash → SSIM → ORB → red_mask 순차 비교 ──
 def _verify_logo_candidate(
     page_b64: str,
     logo_ref_b64: str,
@@ -285,12 +286,15 @@ def _verify_logo_candidate(
     page_media_type: str = "image/jpeg",
 ) -> bool:
     """
-    Claude Vision이 반환한 bbox 영역을 crop 후 레퍼런스 로고와
-    SSIM + ORB feature match 이중 비교.
+    Claude Vision이 반환한 bbox 영역을 crop 후 레퍼런스 로고와 비교.
 
-    bbox: [x1, y1, x2, y2] 픽셀 좌표 (Claude 반환값)
-          None이면 우측하단 fallback crop 사용
-    반환값: True = 전체 로고 일치 (위반 확정), False = 불일치 (심볼 단계로 진행)
+    비교 순서 (결정론적 → 점진적 정밀도):
+      0단계: pHash (distance ≤ 8) → 즉시 위반 확정 (Claude 불필요, 빠름)
+      1단계: SSIM ≥ 0.70          → 위반 확정
+      2단계: ORB ≥ 0.70           → 위반 확정
+      3단계: red_mask SSIM ≥ 0.70 → 위반 확정
+
+    반환값: True = 전체 로고 일치 (위반 확정), False = 불일치
     """
     try:
         import numpy as np
@@ -304,18 +308,25 @@ def _verify_logo_candidate(
         if crop_img is None:
             return False
 
-        # ── crop 크기가 너무 작으면(fallback 우측하단) 페이지 전체 이미지 사용 ──
-        # bbox=None일 때 fallback crop은 일부만 잘라내므로,
-        # crop 면적이 ref의 30% 미만이면 페이지 전체 이미지로 대체
+        # bbox=None fallback 처리
         crop_area = crop_img.width * crop_img.height
         ref_area  = ref_w * ref_h
         if bbox is None and crop_area < ref_area * 0.3:
             page_bytes = base64.b64decode(page_b64)
             crop_img = Image.open(io.BytesIO(page_bytes)).convert("RGB")
-            logger.debug(f"bbox=None fallback → 페이지 전체 이미지 사용: {crop_img.size}")
+            logger.debug(f"bbox=None fallback → 페이지 전체 이미지: {crop_img.size}")
 
-        # ── 비교 크기: 레퍼런스 비율을 유지한 표준 크기 ──────────────
-        # 가로세로 비율을 유지하지 않으면 SSIM이 크게 낮아짐
+        # ── 0단계: pHash (결정론적 1차 필터) ────────────────────────
+        phash_dist = _compare_phash(ref_img, crop_img)
+        if 0.0 <= phash_dist <= _PHASH_MATCH_THRESHOLD:
+            logger.info(
+                f"[전체로고] pHash distance={phash_dist:.0f} ≤ {_PHASH_MATCH_THRESHOLD}"
+                f" → 위반 확정 (Claude 불필요)"
+            )
+            return True
+        logger.debug(f"[전체로고] pHash distance={phash_dist:.0f} > {_PHASH_MATCH_THRESHOLD}")
+
+        # ── 비교 크기: 레퍼런스 비율 유지 ───────────────────────────
         aspect = ref_w / max(ref_h, 1)
         cmp_h  = 80
         cmp_w  = max(80, int(cmp_h * aspect))
@@ -324,31 +335,27 @@ def _verify_logo_candidate(
         crop_np = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
         ref_np  = np.array(ref_img.resize(cmp_size,  Image.LANCZOS))
 
-        # ── 1단계: SSIM (배경 정규화 포함) ───────────────────────────
+        # ── 1단계: SSIM ─────────────────────────────────────────────
         ssim_score = _compute_ssim(ref_np, crop_np)
         logger.debug(f"[전체로고] SSIM={ssim_score:.3f}")
         if ssim_score >= _LOGO_SIM_THRESHOLD:
-            logger.info(f"전체 로고 SSIM 일치={ssim_score:.3f} → 위반 확정")
+            logger.info(f"전체 로고 SSIM={ssim_score:.3f} → 위반 확정")
             return True
 
-        # ── 2단계: ORB (배경 정규화 포함) ───────────────────────────
+        # ── 2단계: ORB ──────────────────────────────────────────────
         orb_score = _compute_orb(ref_np, crop_np)
         logger.debug(f"[전체로고] ORB={orb_score:.3f}")
         if orb_score >= _LOGO_SIM_THRESHOLD:
-            logger.info(f"전체 로고 ORB 일치={orb_score:.3f} → 위반 확정")
+            logger.info(f"전체 로고 ORB={orb_score:.3f} → 위반 확정")
             return True
 
-        # ── 3단계: 빨간 마스크 SSIM (배경색 독립 비교) ───────────────
-        # 누끼(검정 배경) 레퍼런스와 흰 배경 대상 모두에서 빨간 심볼을
-        # 이진화해 형태만 비교 → 배경색 차이에 완전히 강건
-        ref_full_np  = np.array(ref_img)   # 원본 크기 사용 (해상도 확보)
+        # ── 3단계: 빨간 마스크 SSIM ─────────────────────────────────
+        ref_full_np  = np.array(ref_img)
         crop_full_np = np.array(crop_img)
         red_score = _compute_red_mask_ssim(ref_full_np, crop_full_np)
         logger.debug(f"[전체로고] red_mask={red_score:.3f}")
         if red_score >= _LOGO_SIM_THRESHOLD:
-            logger.info(
-                f"전체 로고 red_mask 일치={red_score:.3f} → 위반 확정"
-            )
+            logger.info(f"전체 로고 red_mask={red_score:.3f} → 위반 확정")
             return True
 
         logger.info(
@@ -661,6 +668,175 @@ def _has_wordmark_nearby(
     except Exception as e:
         logger.debug(f"워드마크 확인 실패: {e}")
         return False
+
+
+# ── Computer Vision 유틸리티 ──────────────────────────────────────────────────
+
+# MediaPipe 모델 경로 (백엔드 루트)
+import os as _os
+_MP_MODEL_PATH = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    "blaze_face_short_range.tflite"
+)
+
+# 싱글톤 탐지기 (초기화 비용 절감)
+_mp_face_detector = None
+_cv_face_cascade  = None
+
+
+def _get_mp_face_detector():
+    """MediaPipe BlazeFace 탐지기 싱글톤 반환 (모델 파일 없으면 None)"""
+    global _mp_face_detector
+    if _mp_face_detector is not None:
+        return _mp_face_detector
+    try:
+        if not _os.path.exists(_MP_MODEL_PATH):
+            logger.warning(f"[face_detect] BlazeFace 모델 없음: {_MP_MODEL_PATH}")
+            return None
+        from mediapipe.tasks.python import vision as _mp_vision
+        from mediapipe.tasks.python.core.base_options import BaseOptions as _BaseOpts
+        opts = _mp_vision.FaceDetectorOptions(
+            base_options=_BaseOpts(model_asset_path=_MP_MODEL_PATH),
+            min_detection_confidence=0.5,
+        )
+        _mp_face_detector = _mp_vision.FaceDetector.create_from_options(opts)
+        logger.info("[face_detect] MediaPipe BlazeFace 탐지기 초기화 완료")
+        return _mp_face_detector
+    except Exception as e:
+        logger.warning(f"[face_detect] MediaPipe 초기화 실패: {e}")
+        return None
+
+
+def _get_cv_face_cascade():
+    """OpenCV Haar Cascade 탐지기 싱글톤 반환"""
+    global _cv_face_cascade
+    if _cv_face_cascade is not None:
+        return _cv_face_cascade
+    try:
+        import cv2
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        _cv_face_cascade = cv2.CascadeClassifier(cascade_path)
+        if _cv_face_cascade.empty():
+            logger.warning("[face_detect] Haar cascade 로드 실패")
+            return None
+        logger.info("[face_detect] OpenCV Haar Cascade 초기화 완료")
+        return _cv_face_cascade
+    except Exception as e:
+        logger.warning(f"[face_detect] OpenCV Haar 초기화 실패: {e}")
+        return None
+
+
+def _detect_real_face(pil_img) -> bool:
+    """
+    Computer Vision 기반 실제 얼굴 탐지 (결정론적).
+
+    검사 순서:
+      1단계: MediaPipe BlazeFace (신경망 기반, 높은 정밀도)
+             → 얼굴 landmark 검출 시 즉시 True 반환
+      2단계: OpenCV Haar Cascade (전통적, 빠른 폴백)
+             → 얼굴 영역 검출 시 True 반환
+
+    반환값:
+      True  → 실제 사람 얼굴 존재 (위반 확정)
+      False → 얼굴 없음 (아이콘/실루엣/일러스트 가능)
+
+    아이콘·실루엣·벡터 일러스트·캐릭터는 얼굴 landmark가 없으므로
+    False 반환 → 허용 처리.
+    """
+    try:
+        import numpy as np
+        import cv2
+
+        if pil_img.width < 30 or pil_img.height < 30:
+            logger.debug("[face_detect] 이미지 너무 작음 → False")
+            return False
+
+        img_rgb = np.array(pil_img.convert("RGB"))
+
+        # ── 1단계: MediaPipe BlazeFace ──────────────────────────────
+        mp_detector = _get_mp_face_detector()
+        if mp_detector is not None:
+            try:
+                import mediapipe as _mp
+                mp_img = _mp.Image(
+                    image_format=_mp.ImageFormat.SRGB,
+                    data=img_rgb.astype(np.uint8)
+                )
+                result = mp_detector.detect(mp_img)
+                if result.detections:
+                    conf = result.detections[0].categories[0].score \
+                        if result.detections[0].categories else 0.0
+                    logger.info(
+                        f"[face_detect] MediaPipe 얼굴 검출 "
+                        f"(count={len(result.detections)}, conf={conf:.2f}) → True"
+                    )
+                    return True
+                logger.debug("[face_detect] MediaPipe: 얼굴 없음")
+            except Exception as _me:
+                logger.debug(f"[face_detect] MediaPipe 실패: {_me}")
+
+        # ── 2단계: OpenCV Haar Cascade (폴백) ──────────────────────
+        cascade = _get_cv_face_cascade()
+        if cascade is not None:
+            try:
+                gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+                faces = cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.1,
+                    minNeighbors=4,
+                    minSize=(20, 20),
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+                if len(faces) > 0:
+                    logger.info(
+                        f"[face_detect] Haar Cascade 얼굴 검출 "
+                        f"(count={len(faces)}) → True"
+                    )
+                    return True
+                logger.debug("[face_detect] Haar: 얼굴 없음")
+            except Exception as _ce:
+                logger.debug(f"[face_detect] Haar 실패: {_ce}")
+
+        return False
+
+    except Exception as e:
+        logger.warning(f"[face_detect] 전체 실패: {e} → False")
+        return False
+
+
+# ── pHash 기반 로고 유사도 1차 필터 (결정론적) ──────────────────────────────
+_PHASH_MATCH_THRESHOLD = 8   # distance ≤ 8 → 동일 로고 (64-bit hash 기준)
+
+
+def _compute_phash(pil_img):
+    """
+    PIL Image → perceptual hash.
+    반환: imagehash.ImageHash 객체 (None on error)
+    """
+    try:
+        import imagehash
+        return imagehash.phash(pil_img)
+    except Exception as e:
+        logger.debug(f"[phash] 계산 실패: {e}")
+        return None
+
+
+def _compare_phash(pil_ref, pil_crop) -> float:
+    """
+    pHash distance 계산.
+    반환: 0~64 (낮을수록 유사), -1.0 = 계산 실패
+    """
+    try:
+        h1 = _compute_phash(pil_ref)
+        h2 = _compute_phash(pil_crop)
+        if h1 is None or h2 is None:
+            return -1.0
+        dist = float(h1 - h2)
+        logger.debug(f"[phash] distance={dist:.0f}")
+        return dist
+    except Exception as e:
+        logger.debug(f"[phash] 비교 실패: {e}")
+        return -1.0
 
 
 def _normalize_bg_to_white(np_img) -> object:
@@ -1416,15 +1592,25 @@ def _verify_face_candidate(
     model: str = "",
 ) -> str:
     """
-    인물 사진 후보 bbox 영역을 crop 후 Claude Vision으로 재분류.
+    인물 사진 후보 bbox 영역을 crop 후 재분류.
+
+    판정 순서 (색상 휴리스틱 선제 → CV 탐지 → Claude Vision 폴백):
+      1단계: 색상/채도 휴리스틱 (단색·벡터 즉시 허용)
+             → 단색/실루엣(unique≤12, sat_std<25) → icon_or_silhouette 즉시 반환
+             → 벡터/플랫(unique≤20, sat_std<35) → icon_or_silhouette 즉시 반환
+             (MediaPipe가 단색 원·사각형을 얼굴로 오탐하는 문제 방지)
+      2단계: MediaPipe BlazeFace + OpenCV Haar (결정론적)
+             → 얼굴 검출 (conf ≥ 0.5) → real_photo 즉시 반환
+             → 얼굴 없음 → 피부색 휴리스틱으로 진행
+      3단계: 피부색 휴리스틱 (비정면·작은 얼굴 보완)
+             → skin_ratio ≥ 0.06 AND sat_std > 45 → real_photo
+      4단계: Claude Vision (불명확 케이스만)
+             → real_photo / icon_or_silhouette / unknown
 
     반환값:
-      "real_photo"         — 피부질감·이목구비 확인, 실제 카메라 촬영 사진
-      "icon_or_silhouette" — 아이콘/실루엣/픽토그램/일러스트 등 그래픽 요소
-      "unknown"            — 판단 불충분, 허용 처리
-
-    client: anthropic.Anthropic 인스턴스 (없으면 이미지 기반 휴리스틱 사용)
-    model: Claude 모델명 (없으면 core.config에서 읽음)
+      "real_photo"         — 실제 얼굴/카메라 사진 확인
+      "icon_or_silhouette" — 아이콘/실루엣/그래픽
+      "unknown"            — 판단 불충분
     """
     try:
         crop_img = _extract_crop(page_b64, bbox, pad=8)
@@ -1432,84 +1618,115 @@ def _verify_face_candidate(
             logger.debug("[face_verify] crop 실패 → unknown")
             return "unknown"
 
-        # ── 이미지 기반 휴리스틱 1차 검사 (라이브러리만으로 처리) ──────────────
-        #    색상 다양성: 단색/실루엣이면 고유 색상 수가 매우 적음
+        # 공유 분석 변수 초기화
+        _fg_skin_ratio = 0.0   # 전경 기준 피부색 비율
+        _fg_sat_std    = 0.0   # 전경 기준 채도 표준편차
+        _heuristic_done = False
+
+        # ══ 1단계: 색상/채도 휴리스틱 (선제 필터 — 단색·아이콘 즉시 허용) ══
+        # 전략:
+        #   A. 코너 평균 → 배경색 추정 → 전경 픽셀 분리
+        #   B. 전경 기준 피부색 비율로 아이콘/실사 판별
+        #      skin_fg < 0.10  → 피부색 거의 없음  → icon_or_silhouette
+        #      skin_fg ≥ 0.15  → 피부색 풍부       → real_photo  (3단계 생략)
+        #      0.10 ~ 0.15    → 애매               → CV 탐지로 진행
         try:
             import numpy as np
+            import cv2
             from PIL import Image as _PIL
 
-            # crop 이미지를 작게 리사이즈해 색상 분석
             thumb = crop_img.resize((64, 64), _PIL.LANCZOS).convert("RGB")
-            arr = np.array(thumb)
+            arr   = np.array(thumb)
 
-            # 1) 고유 색상 수 → 실루엣/아이콘은 색상이 매우 단순
-            pixels = arr.reshape(-1, 3)
-            # 색상을 32단위로 양자화해 유니크 색상 수 계산
-            quantized = (pixels // 32).astype(np.int32)
-            unique_colors = len(set(map(tuple, quantized.tolist())))
+            # ── A: 배경색 추정 (코너 4픽셀 평균) ──────────────────────
+            corners  = [arr[0, 0], arr[0, -1], arr[-1, 0], arr[-1, -1]]
+            bg_color = np.mean(corners, axis=0)
+            diff     = np.sqrt(np.sum((arr.astype(np.float32) - bg_color) ** 2, axis=2))
+            fg_mask  = diff > 20      # 배경과 20 이상 차이 = 전경
+            fg_pixels = arr[fg_mask]
+            fg_count  = int(fg_mask.sum())
 
-            # 2) 채도 분산 → 실사 사진은 채도 변화가 풍부
-            import cv2
-            hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
-            sat_std = float(hsv[:, :, 1].std())
+            # ── B: 전경 픽셀 채도 분석 ─────────────────────────────────
+            hsv     = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
+            fg_sat  = hsv[:, :, 1][fg_mask]
+            _fg_sat_std = float(fg_sat.std()) if fg_count > 0 else 0.0
 
-            # 3) 엣지 복잡도 → 실루엣/아이콘은 단순한 윤곽선, 실사는 복잡한 엣지
-            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            edge_ratio = float(edges.sum() // 255) / max(64 * 64, 1)
+            # ── C: 단색/실루엣 조기 판별 ───────────────────────────────
+            if fg_count > 0:
+                quantized = (fg_pixels // 32).astype(np.int32)
+                unique_fg = len(set(map(tuple, quantized.tolist())))
+
+                if unique_fg <= 10 and _fg_sat_std < 30:
+                    logger.info(
+                        f"[face_verify] 단색/실루엣 → icon_or_silhouette "
+                        f"(unique_fg={unique_fg}, fg_sat_std={_fg_sat_std:.1f})"
+                    )
+                    return "icon_or_silhouette"
+
+            # ── D: 전경 기준 피부색 비율 계산 ──────────────────────────
+            if fg_count > 0:
+                r, g, b = fg_pixels[:, 0], fg_pixels[:, 1], fg_pixels[:, 2]
+                skin = (
+                    (r > 150) & (g > 100) & (b > 80) &
+                    ((r.astype(np.int16) - g.astype(np.int16)) > 10) &
+                    ((g.astype(np.int16) - b.astype(np.int16)) > 5)
+                )
+                _fg_skin_ratio = float(skin.sum()) / max(fg_count, 1)
 
             logger.debug(
-                f"[face_verify] unique_colors={unique_colors}, "
-                f"sat_std={sat_std:.1f}, edge_ratio={edge_ratio:.3f}"
+                f"[face_verify] fg={fg_count}px, "
+                f"skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f}"
             )
 
-            # 단색/실루엣 판단: 색상이 매우 단순하고 채도 변화 없으면
-            if unique_colors <= 12 and sat_std < 25:
+            # 피부색 거의 없음 → 아이콘/그래픽 (실사 불필요)
+            if _fg_skin_ratio < 0.20:
                 logger.info(
-                    f"[face_verify] 휴리스틱 → icon_or_silhouette "
-                    f"(unique_colors={unique_colors}, sat_std={sat_std:.1f})"
+                    f"[face_verify] 피부색 부족 → icon_or_silhouette "
+                    f"(skin_fg={_fg_skin_ratio:.3f})"
                 )
                 return "icon_or_silhouette"
 
-            # 벡터/플랫 일러스트 판단: 색상이 적당히 있으나 채도가 낮고
-            # 엣지가 너무 단순 (벡터 경계는 sharp하지만 수가 적음)
-            # ★ 실사 사진은 보통 unique_colors>30, sat_std>50, edge_ratio>0.1
-            # 임계값을 엄격하게 유지해 실사 사진이 icon으로 오분류되지 않도록
-            if unique_colors <= 15 and sat_std < 30 and edge_ratio < 0.04:
+            # 피부색 풍부 → 실사 (CV 탐지 없이 즉시)
+            if _fg_skin_ratio >= 0.20 and _fg_sat_std > 30:
                 logger.info(
-                    f"[face_verify] 휴리스틱 → icon_or_silhouette (벡터/플랫 일러스트)"
+                    f"[face_verify] 피부색 풍부 → real_photo "
+                    f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
                 )
-                return "icon_or_silhouette"
+                return "real_photo"
 
-            # ── 피부색 기반 실사 탐지 ─────────────────────────────────────────
-            # 피부색 픽셀: R > G > B, R > 150, G > 100, B > 80
-            # 아이콘/실루엣은 피부색 없음, 실사 증명사진은 5%+ 피부색
-            try:
-                skin_mask = (
-                    (arr[:, :, 0] > 150) &
-                    (arr[:, :, 1] > 100) &
-                    (arr[:, :, 2] > 80)  &
-                    (arr[:, :, 0].astype(np.int16) - arr[:, :, 1].astype(np.int16) > 10) &
-                    (arr[:, :, 1].astype(np.int16) - arr[:, :, 2].astype(np.int16) > 5)
-                )
-                skin_ratio = float(skin_mask.sum()) / max(64 * 64, 1)
-
-                logger.debug(f"[face_verify] skin_ratio={skin_ratio:.3f}")
-
-                # 피부색 4% 이상 + 채도 풍부 → 실사 인물 사진 확정
-                if skin_ratio >= 0.04 and sat_std > 40:
-                    logger.info(
-                        f"[face_verify] 피부색 탐지 → real_photo "
-                        f"(skin_ratio={skin_ratio:.3f}, sat_std={sat_std:.1f})"
-                    )
-                    return "real_photo"
-            except Exception as _se:
-                logger.debug(f"[face_verify] 피부색 탐지 실패: {_se}")
+            # ≥ 0.20 이지만 sat_std 낮음 → 애매 → CV 탐지 진행
+            _heuristic_done = True
+            logger.debug(
+                f"[face_verify] 피부색 있으나 채도 낮음 ({_fg_skin_ratio:.3f}, sat={_fg_sat_std:.1f}) → CV 탐지 진행"
+            )
 
         except Exception as _he:
-            logger.debug(f"[face_verify] 휴리스틱 실패: {_he}")
+            logger.debug(f"[face_verify] 색상 휴리스틱 실패 (무시 후 진행): {_he}")
 
-        # ── Claude Vision 재판정 (client가 있는 경우) ──────────────────────────
+        # ══ 2단계: Computer Vision 얼굴 탐지 (결정론적) ════════════════
+        face_detected = _detect_real_face(crop_img)
+        if face_detected:
+            logger.info(
+                "[face_verify] CV 얼굴 검출 → real_photo "
+                f"(crop={crop_img.width}×{crop_img.height})"
+            )
+            return "real_photo"
+
+        # ══ 3단계: 피부색 휴리스틱 보완 (CV 미탐 + 전경 피부색 있는 경우) ════
+        # 1단계에서 0.10~0.15 범위였고 CV도 미탐 → 경계값 처리
+        # 임계값을 높게 유지: skin_fg ≥ 0.20 + fg_sat_std > 45
+        # (벡터 일러스트 살구색이 0.14~0.15 수준임을 고려)
+        try:
+            if _fg_skin_ratio >= 0.20 and _fg_sat_std > 45:
+                logger.info(
+                    f"[face_verify] 피부색 보완 → real_photo "
+                    f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
+                )
+                return "real_photo"
+        except Exception as _se:
+            logger.debug(f"[face_verify] 피부색 보완 실패: {_se}")
+
+        # ══ 4단계: Claude Vision (불명확 케이스만) ═══════════════════════
         if client is not None:
             try:
                 buf = io.BytesIO()
@@ -1542,7 +1759,6 @@ def _verify_face_candidate(
                     }]
                 )
                 raw = resp.content[0].text.strip()
-                # JSON 파싱
                 raw_clean = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`")
                 s = raw_clean.find("{")
                 e = raw_clean.rfind("}")
@@ -1551,23 +1767,19 @@ def _verify_face_candidate(
                     result = obj.get("result", "unknown")
                     reason = obj.get("reason", "")
                     if result in ("real_photo", "icon_or_silhouette", "unknown"):
-                        logger.info(
-                            f"[face_verify] Claude 재판정 → {result}: {reason[:60]}"
-                        )
+                        logger.info(f"[face_verify] Claude 재판정 → {result}: {reason[:60]}")
                         return result
-
                 logger.debug(f"[face_verify] Claude 응답 파싱 실패: {raw[:100]}")
-
             except Exception as _ce:
                 logger.warning(f"[face_verify] Claude 재판정 실패: {_ce}")
 
-        # ── 기본값: unknown (허용 처리) ─────────────────────────────────────────
-        logger.debug("[face_verify] 재판정 불가 → unknown")
+        logger.debug("[face_verify] 판정 불가 → unknown")
         return "unknown"
 
     except Exception as e:
         logger.warning(f"[face_verify] 전체 오류: {e} → unknown")
         return "unknown"
+
 
 
 def _post_process_faces(
