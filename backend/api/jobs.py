@@ -4,13 +4,15 @@
 - 작업 목록/상태/진행률 조회
 - SSE 실시간 진행률 스트리밍
 - 결과 조회 & 삭제
+- 동시 처리 1개 제한 + 큐잉 (옵션 A)
 """
 from __future__ import annotations
 import asyncio, json
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from models.schemas import JobStatus
@@ -26,7 +28,13 @@ from core.config import (
 router = APIRouter()
 logger = get_logger("jobs_api")
 
-CHUNK_SIZE = 4 * 1024 * 1024  # 4MB (큰 청크로 루프 횟수 줄임)
+CHUNK_SIZE = 4 * 1024 * 1024  # 4MB
+
+# ── 동시 처리 제한 (옵션 A: 동시 1개 + 큐잉) ──────────────────
+_pipeline_sem  = asyncio.Semaphore(1)   # 동시 실행 최대 1개
+_job_queue: deque[tuple] = deque()      # (job_id, path, filename, file_type)
+_queue_lock    = asyncio.Lock()
+_queue_runner_started = False
 
 
 def _max_bytes() -> int:
@@ -50,7 +58,7 @@ def _detect_file_type(fname: str, first_chunk: bytes) -> str:
 
 # ── 업로드 & 서버사이드 검증 시작 ────────────────────────────────
 @router.post("/upload")
-async def dashboard_upload(request: Request, bg: BackgroundTasks,
+async def dashboard_upload(request: Request,
                             file: UploadFile = File(...)):
     fname = (file.filename or "document.pdf").strip()
     ext   = Path(fname).suffix.lower()
@@ -116,20 +124,52 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
     })
     register_ttl(job_id)
 
-    # 파일 타입에 따라 파이프라인 분기
-    if file_type == "pptx":
-        bg.add_task(_run_ppt_pipeline, job_id, dest, fname)
-    else:
-        bg.add_task(_run_server_pipeline, job_id, dest, fname)
+    # 큐에 추가 후 큐 워커 시작
+    queue_pos = await _enqueue_job(job_id, dest, fname, file_type)
 
-    logger.info(f"대시보드 업로드: {safe_name} ({total_size/1024:.1f} KB) job={job_id} type={file_type}")
+    logger.info(f"대시보드 업로드: {safe_name} ({total_size/1024:.1f} KB) job={job_id} type={file_type} 큐위치={queue_pos}")
+    msg = "검증을 시작합니다." if queue_pos == 0 else f"대기 중… (앞에 {queue_pos}개 작업 있음)"
     return JSONResponse({
-        "job_id":    job_id,
-        "status":    "pending",
-        "filename":  fname,
-        "file_type": file_type,
-        "message":   "서버에서 검증을 시작합니다. 브라우저를 닫아도 계속 처리됩니다.",
+        "job_id":     job_id,
+        "status":     "pending",
+        "filename":   fname,
+        "file_type":  file_type,
+        "queue_pos":  queue_pos,
+        "message":    msg,
     })
+
+
+# ── 큐 관리 ────────────────────────────────────────────────────
+async def _enqueue_job(job_id: str, path: Path, filename: str, file_type: str) -> int:
+    """큐에 job 추가 후 워커 시작. 현재 큐 위치(0=즉시 실행) 반환."""
+    global _queue_runner_started
+    async with _queue_lock:
+        _job_queue.append((job_id, path, filename, file_type))
+        pos = len(_job_queue) - 1
+        if not _queue_runner_started:
+            _queue_runner_started = True
+            asyncio.ensure_future(_queue_worker())
+    return pos
+
+
+async def _queue_worker():
+    """큐에서 job을 하나씩 꺼내 순차 실행. 세마포어로 동시 1개 보장."""
+    global _queue_runner_started
+    while True:
+        async with _queue_lock:
+            if not _job_queue:
+                _queue_runner_started = False
+                return
+            job_id, path, filename, file_type = _job_queue.popleft()
+            # 남은 대기 job들 메시지 갱신
+            for i, (jid, *_) in enumerate(_job_queue):
+                update_job(jid, message=f"대기 중… (앞에 {i+1}개 작업 처리 중)")
+
+        async with _pipeline_sem:
+            if file_type == "pptx":
+                await _run_ppt_pipeline(job_id, path, filename)
+            else:
+                await _run_server_pipeline(job_id, path, filename)
 
 
 # ── 백그라운드 실행 (PDF) ───────────────────────────────────────

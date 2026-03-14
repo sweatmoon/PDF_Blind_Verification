@@ -383,6 +383,28 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
     page_map: dict[int, list] = {}
     _cropped_pages = page_has_cropped or {}
 
+    # allowed_terms 전체 목록 로드 (Vision 탐지 결과 허용 처리용)
+    from core.config import load_dict as _load_dict
+    _dict = _load_dict()
+    _allowed_flat: set[str] = set()
+    for _subcat_vals in _dict.get("allowed_terms", {}).values():
+        for _t in _subcat_vals:
+            if _t:
+                _allowed_flat.add(_t.strip().lower())
+    # 공공기관 등 고정 허용 기관명 키워드 (allowed_terms에 없어도 기본 허용)
+    _FIXED_ALLOWED_ORGS = {
+        "국민건강보험", "국민건강보험공단", "국민연금", "국민연금공단",
+        "건강보험심사평가원", "국가철도공단", "한국도로공사", "한국토지주택공사",
+        "국토교통부", "행정안전부", "과학기술정보통신부", "교육부", "고용노동부",
+        "보건복지부", "환경부", "문화체육관광부", "농림축산식품부", "산업통상자원부",
+        "중소벤처기업부", "국방부", "경찰청", "소방청", "기상청", "통계청",
+        "조달청", "특허청", "식품의약품안전처", "금융위원회", "공정거래위원회",
+        "한국전력공사", "한국수자원공사", "한국농어촌공사", "한국가스공사",
+        "한국철도공사", "코레일", "한국공항공사", "인천국제공항공사",
+        "NIA", "NIPA", "KISA", "ETRI", "KAIST", "KIST",
+        "정부24", "민원24", "나라장터", "디지털서비스",
+    }
+
     for it in vision_items:
         try:
             p = int(it.get("page", 0))
@@ -401,16 +423,45 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         if already:
             continue
 
+        # ── 일반 명사 체크: _COMMON_WORDS에 해당하면 허용으로 처리 (skip 아님, 결과에 표시)
+        from services.rule_detector import _COMMON_WORDS as _CW
+        import re as _re
+        content_stripped = content.strip()
+        # 인력명/이름 관련 모든 type에 대해 _COMMON_WORDS 체크
+        _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
+        if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
+            page_map.setdefault(p, []).append({
+                "detection_type":  dtype,
+                "detected_text":   content,
+                "verdict":         "허용",
+                "reason":          f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{content_stripped}'은 고유 인명이 아님)",
+                "recommendation":  "검증 불필요 – 일반 명사/단어로 확인됨",
+                "confidence":      0.98,
+                "source":          "vision",
+                "cropped":         False,
+            })
+            continue
+
         # 2글자 이하 인력명: 허용 기관명 포함 여부로 오탐 필터
-        # Vision AI가 '국민' 검출 시 reason에 '국민건강보험공단' 같은 기관명이 언급된 경우 스킵
-        if len(content.strip()) <= 2 and dtype in ("참여인력명", "인력명", "업체명", "대표자명"):
-            import re as _re
+        # Vision AI가 '국민' 검출 시 reason에 '국민건강보험공단' 같은 기관명이 언급된 경우 허용으로 처리
+        if len(content_stripped) <= 2 and (dtype in ("참여인력명", "인력명", "업체명", "대표자명") or "인력" in dtype or "이름" in dtype):
             reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
             _ORG_KEYWORDS = (
                 r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|'
                 r'건강보험|국민연금|서민금융|대국민|안전처|안전부'
             )
             if _re.search(_ORG_KEYWORDS, reason_text):
+                # skip 대신 허용으로 결과에 추가
+                page_map.setdefault(p, []).append({
+                    "detection_type":  dtype,
+                    "detected_text":   content,
+                    "verdict":         "허용",
+                    "reason":          f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 (reason: {reason_text[:60]})",
+                    "recommendation":  "기관명 복합어로 확인됨, 검증 불필요",
+                    "confidence":      0.97,
+                    "source":          "vision",
+                    "cropped":         False,
+                })
                 continue
 
         # 크롭 이미지가 있는 페이지의 Vision 탐지 → 로고/업체명 위반 → 주의 강등

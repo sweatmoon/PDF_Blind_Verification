@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from services.rule_detector import get_rule_detector
+from services.rule_detector import get_rule_detector, _is_org_context
 from services.claude_judge  import get_claude_judge, ClaudeVisionJudge
 from services.ocr_service   import get_ocr
 from services.file_manager  import _wipe_file
@@ -398,6 +398,38 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
         )
         if already:
             continue
+        # ── 일반 명사 체크: _COMMON_WORDS에 해당하면 허용으로 처리 (결과에 표시)
+        from services.rule_detector import _COMMON_WORDS as _CW
+        import re as _re
+        content_stripped = content.strip()
+        _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
+        if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
+            page_map.setdefault(p, []).append({
+                "detection_type":  dtype,
+                "detected_text":   content,
+                "verdict":         "허용",
+                "reason":          f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{content_stripped}'은 고유 인명이 아님)",
+                "recommendation":  "검증 불필요 – 일반 명사/단어로 확인됨",
+                "confidence":      0.98,
+                "source":          "vision",
+            })
+            continue
+
+        # 2글자 이하 인력명: reason에 기관명 키워드가 있으면 허용으로 처리 (결과에 표시)
+        if len(content_stripped) <= 2 and (dtype in ("참여인력명", "인력명", "업체명", "대표자명") or "인력" in dtype or "이름" in dtype):
+            reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
+            if _re.search(r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|건강보험|국민연금|서민금융|대국민|안전처|안전부', reason_text):
+                page_map.setdefault(p, []).append({
+                    "detection_type":  dtype,
+                    "detected_text":   content,
+                    "verdict":         "허용",
+                    "reason":          f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 (reason: {reason_text[:60]})",
+                    "recommendation":  "기관명 복합어로 확인됨, 검증 불필요",
+                    "confidence":      0.97,
+                    "source":          "vision",
+                })
+                continue
+
         page_map.setdefault(p, []).append({
             "detection_type":  dtype,
             "detected_text":   content,
