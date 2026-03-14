@@ -323,7 +323,7 @@ class PPTServerPipeline:
                             for i in range(0, len(page_images), PAGES_PER_BATCH)]
             batch_count  = len(batches)
 
-            BATCH_CONCURRENCY = 5
+            BATCH_CONCURRENCY = 3   # 5→3: 429 rate limit 방지
             sem       = asyncio.Semaphore(BATCH_CONCURRENCY)
             completed = [0]
 
@@ -334,24 +334,37 @@ class PPTServerPipeline:
                         for pg in batch
                         if str(pg["page"]) in rule_hits_by_page
                     }
-                    try:
-                        import functools as _ft
-                        _fn = _ft.partial(
-                            self.judge.judge_image_batch,
-                            batch, logo_b64, company_dict,
-                            batch_rule_hits or None,
-                            logo_symbol_b64,
-                        )
-                        items = await loop.run_in_executor(_executor, _fn)
-                        logger.info(f"[{job_id}] Vision 배치 {bi+1}/{batch_count}: {len(items)}건")
-                        return items
-                    except Exception as e:
-                        logger.error(f"[{job_id}] Vision 배치 {bi+1} 오류: {e}")
-                        return []
-                    finally:
-                        completed[0] += 1
-                        pct = 65 + int((completed[0] / batch_count) * 25)
-                        prog(pct, f"Claude Vision 분석 중 ({completed[0]}/{batch_count} 배치)…")
+                    # 429 rate limit 자동 재시도 (최대 2회, 지수 백오프)
+                    result = []
+                    for _attempt in range(3):
+                        try:
+                            import functools as _ft
+                            _fn = _ft.partial(
+                                self.judge.judge_image_batch,
+                                batch, logo_b64, company_dict,
+                                batch_rule_hits or None,
+                                logo_symbol_b64,
+                            )
+                            result = await loop.run_in_executor(_executor, _fn)
+                            logger.info(f"[{job_id}] Vision 배치 {bi+1}/{batch_count}: {len(result)}건")
+                            break
+                        except Exception as e:
+                            err_str = str(e)
+                            if "429" in err_str and _attempt < 2:
+                                wait_sec = 10 * (2 ** _attempt)  # 10s, 20s
+                                logger.warning(
+                                    f"[{job_id}] Vision 배치 {bi+1} 429 rate limit "
+                                    f"→ {wait_sec}s 후 재시도 ({_attempt+1}/2)"
+                                )
+                                await asyncio.sleep(wait_sec)
+                                continue
+                            logger.error(f"[{job_id}] Vision 배치 {bi+1} 오류: {e}")
+                            result = []
+                            break
+                    completed[0] += 1
+                    pct = 65 + int((completed[0] / batch_count) * 25)
+                    prog(pct, f"Claude Vision 분석 중 ({completed[0]}/{batch_count} 배치)…")
+                    return result
 
             vision_tasks   = [run_batch(bi, b) for bi, b in enumerate(batches)]
             vision_results = await asyncio.gather(*vision_tasks)

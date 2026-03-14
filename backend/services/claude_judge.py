@@ -1805,20 +1805,34 @@ def _verify_face_candidate(
             "fg_sat_std": round(_fg_sat_std, 1),
         })
 
-        # ══ 3단계: 피부색 휴리스틱 보완 (CV 미탐 + 피부색 있는 경우) ════
-        # 임계값 완화: skin_fg ≥ 0.05 + fg_sat_std > 20
-        # (이전 0.20/45 기준은 정장+소형얼굴/어두운피부를 과도하게 허용함)
+        # ══ 3단계: 피부색 휴리스틱 보완 (CV 완전 미탐 + 피부색 충분한 경우만) ════
+        # ★ 적용 조건 강화:
+        #   - skin_fg ≥ 0.15 (이전 0.05 → 0.15: 아이콘 회색 픽셀 오탐 방지)
+        #   - fg_sat_std > 40  (이전 20 → 40: 채도 낮은 단색 이미지 제외)
+        #   - crop 크기 80px 이상 (아이콘 crop은 보통 50~79px)
+        # ★ 사용 목적: MediaPipe/Haar 모두 미탐했으나 피부색이 충분한 측면/소형 얼굴 보완
+        # ★ 아이콘 오탐 원인: 회색/파란색 픽셀이 R>90,G>60,B>40 조건 통과 → skin_fg 과다 산출
         try:
-            if _fg_skin_ratio >= 0.05 and _fg_sat_std > 20:
+            crop_w = crop_img.width if crop_img else 0
+            crop_h = crop_img.height if crop_img else 0
+            if (_fg_skin_ratio >= 0.15 and _fg_sat_std > 40
+                    and crop_w >= 80 and crop_h >= 80):
                 logger.info(
                     f"[face_verify] 피부색 보완 → real_photo "
-                    f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
+                    f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f}, "
+                    f"crop={crop_w}×{crop_h})"
                 )
                 alog.log("face_verify", "skin_supplement", {
                     "bbox": bbox, "skin_fg": round(_fg_skin_ratio, 3),
                     "fg_sat_std": round(_fg_sat_std, 1), "result": "real_photo",
                 })
                 return "real_photo"
+            elif _fg_skin_ratio >= 0.05:
+                logger.debug(
+                    f"[face_verify] 피부색 보완 조건 미달 → 4단계로 진행 "
+                    f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f}, "
+                    f"crop={crop_w}×{crop_h})"
+                )
         except Exception as _se:
             logger.debug(f"[face_verify] 피부색 보완 실패: {_se}")
 
