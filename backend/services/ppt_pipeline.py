@@ -415,7 +415,15 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         content = it.get("content", "")
         dtype   = it.get("type", "기타")
 
-        # 대소문자 무시 중복 제거
+        # ── "텍스트 추출 탐지" 더미 항목 필터링 ──────────────────────
+        # Claude가 rule_hits 힌트를 받아서 "텍스트 추출로 확인된 위반 요소 존재" 같은
+        # 더미 결과를 반환할 때 이를 제외 (실제 탐지 내용이 없는 메타 항목)
+        _DUMMY_TYPES = ("텍스트 추출 탐지", "텍스트추출탐지", "텍스트 탐지", "텍스트탐지")
+        _DUMMY_CONTENTS = ("텍스트 추출로 확인된 위반 요소 존재", "텍스트 추출 위반 확인",
+                           "텍스트 추출로 확인된 위반")
+        if dtype in _DUMMY_TYPES or content.strip() in _DUMMY_CONTENTS:
+            continue
+
         already = any(
             d["detected_text"].lower() == content.lower() and d["detection_type"] == dtype
             for d in page_map.get(p, [])

@@ -1330,9 +1330,9 @@ function buildSourceBadge(src) {
   const hasOcr    = src.includes('ocr');
   const hasVision = src.includes('vision');
   const badges = [];
-  if (hasRule)   badges.push(`<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium flex-shrink-0"><i class="fas fa-list-check" style="font-size:9px"></i> 텍스트</span>`);
-  if (hasOcr)    badges.push(`<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium flex-shrink-0"><i class="fas fa-eye" style="font-size:9px"></i> OCR</span>`);
-  if (hasVision) badges.push(`<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium flex-shrink-0"><i class="fas fa-robot" style="font-size:9px"></i> AI</span>`);
+  if (hasRule)   badges.push(`<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium flex-shrink-0" title="텍스트 레이어에서 직접 추출된 규칙 기반 탐지"><i class="fas fa-list-check" style="font-size:9px"></i> 규칙</span>`);
+  if (hasOcr)    badges.push(`<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium flex-shrink-0" title="이미지에서 문자 인식(OCR)으로 탐지"><i class="fas fa-eye" style="font-size:9px"></i> OCR</span>`);
+  if (hasVision) badges.push(`<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium flex-shrink-0" title="AI Vision으로 이미지 분석하여 탐지"><i class="fas fa-robot" style="font-size:9px"></i> AI</span>`);
   return badges.join(' ');
 }
 

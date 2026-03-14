@@ -71,9 +71,20 @@ def update_dictionary(req: DictionaryUpdateRequest):
     clean = [i.strip() for i in req.items if i.strip()]
 
     if req.action == "add":
+        # ── 일반어/짧은 단어 경고 체크 ────────────────────────────────
+        from services.rule_detector import _COMMON_WORDS
+        _GENERIC_WORDS = {"테스트", "test", "sample", "예시", "샘플", "임시", "temp", "dummy"}
+        warnings = []
+        for item in clean:
+            if item.lower() in {w.lower() for w in _COMMON_WORDS | _GENERIC_WORDS}:
+                warnings.append(f"'{item}'은 일반 단어입니다 – 실제 업체/인력명이 아닐 수 있습니다")
+            elif len(item) <= 2 and req.subcategory in ("company_names", "brand_names"):
+                warnings.append(f"'{item}'은 2글자 이하입니다 – 오탐이 많을 수 있습니다")
+
         added, skipped = db_add_terms(req.group, req.subcategory, clean)
         total = db_count_subkey(req.group, req.subcategory)
     elif req.action == "remove":
+        warnings = []
         for item in clean:
             db_remove_term(req.group, req.subcategory, item)
         total = db_count_subkey(req.group, req.subcategory)
@@ -95,6 +106,8 @@ def update_dictionary(req: DictionaryUpdateRequest):
     if req.action == "add":
         resp["added"]   = added
         resp["skipped"] = skipped
+        if warnings:
+            resp["warnings"] = warnings
     return JSONResponse(resp)
 
 

@@ -345,8 +345,14 @@ class RuleDetector:
                             reason=reason, recommendation=rec,
                             confidence=0.99, source="rule"))
                 else:
-                    # 인력명 외 항목은 기존 방식
-                    pattern = re.escape(term)
+                    # 인력명 외 항목 (company_names, brand_names 등)
+                    # 한국어 단어 경계: 앞뒤가 한글로 이어지지 않아야 함 (복합어 오탐 방지)
+                    # 단, 3글자 이상 업체명은 경계 없이 포함 탐지
+                    if len(term) <= 4:
+                        # 짧은 단어는 앞뒤 한글 경계 체크
+                        pattern = r"(?<![가-힣A-Za-z])" + re.escape(term) + r"(?![가-힣A-Za-z])"
+                    else:
+                        pattern = re.escape(term)
                     for m in re.finditer(pattern, text, re.I):
                         matched = m.group()
                         k = (matched[:60], dtype)
