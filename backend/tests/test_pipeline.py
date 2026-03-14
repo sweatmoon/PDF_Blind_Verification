@@ -669,15 +669,31 @@ def test_tc6_person_photo_false_positive():
             f"  (dtype={dtype}, reason={reason[:40]})"
         )
 
-    # ── _post_process_faces() 검증 ────────────────────────────────
+    # ── _post_process_faces() 검증 (새 정책: page_images 없음 + 키워드 없음 → 위반 유지) ──
     from services.claude_judge import _post_process_faces
-    print("  [_post_process_faces 검증]")
-    for desc, dtype, content, reason, inp_jdg, exp_jdg in CASES:
+    print("  [_post_process_faces 검증 — 새 정책]")
+
+    # 새 정책 케이스: page_images=None 이면 키워드 폴백
+    #   그래픽 키워드 → 허용 / 실사 키워드 → 위반 / 없음 → 위반 유지(안전)
+    PPF_CASES = [
+        # 그래픽 키워드 → 허용
+        ("아이콘",     "인물사진", "사람 아이콘",      "단색 아이콘 형태",             "위반", "허용"),
+        ("픽토그램",   "인물",     "직원 픽토그램",    "픽토그램 스타일",              "위반", "허용"),
+        ("실루엣",     "사진",     "단색 실루엣 인물", "실루엣 그래픽",               "위반", "허용"),
+        ("벡터 일러스트","인물사진","연구자 일러스트","벡터 스타일 일러스트 캐릭터",  "주의", "허용"),
+        # 실사 키워드 → 위반 유지
+        ("실사 사진",  "인물사진", "실사 프로필 사진", "피부색과 이목구비가 명확히 보이는 실사 사진", "위반", "위반"),
+        ("촬영 사진",  "인물",     "촬영된 인물 사진", "카메라 촬영으로 확인됨, 얼굴 사진",          "위반", "위반"),
+        # 키워드 없음 + page_images=None → 안전 방향: 위반 유지
+        ("키워드없음(안전유지)","인물사진","불명확한 인물","사람처럼 보이는 형태","위반","위반"),
+        ("키워드없음(주의유지)","인물","어떤 사람",     "형태 확인됨",               "주의", "주의"),
+    ]
+    for desc, dtype, content, reason, inp_jdg, exp_jdg in PPF_CASES:
         raw = [_make_item(
             page=1, dtype=dtype, content=content,
             judgment=inp_jdg, reason=reason,
         )]
-        result = _post_process_faces(raw)
+        result = _post_process_faces(raw, page_images=None)
         assert result, f"TC6-B/{desc}: 결과 없음"
         actual = result[0].get("judgment", "")
         assert actual == exp_jdg, (
@@ -685,7 +701,7 @@ def test_tc6_person_photo_false_positive():
             f"  (dtype={dtype}, reason={reason[:40]})"
         )
 
-    print("✅ TC6 통과: 인물사진 오탐 방지 — 아이콘/일러스트/픽토그램/불명확 모두 허용, 실사 사진만 위반")
+    print("✅ TC6 통과: 인물사진 오탐 방지 — 아이콘/일러스트/픽토그램 허용, 키워드없음은 안전방향 유지, 실사 사진만 위반")
 
 
 
@@ -882,12 +898,13 @@ def test_tc11_real_id_photo_violation():
 # ────────────────────────────────────────────────────────────────────
 def test_tc12_small_blurry_thumbnail_allowed():
     """
-    매우 작은 썸네일 이미지 → 허용.
-    이미지가 너무 작아 판단 불가 → unknown → 허용.
+    매우 작은 썸네일 이미지 (page_images 없음).
+    새 정책: page_images 없음 + 키워드 없음 → 안전 방향 위반 유지.
+    실제 서버에서는 page_images가 항상 전달되므로 이미지 재검증이 수행됨.
     """
     from services.claude_judge import _post_process_faces
 
-    # 키워드 없는 불명확 케이스 → 기본값 허용
+    # page_images 없음 + 키워드 없음 → 안전 방향: 위반 유지
     item = {
         "page": 4,
         "type": "인물사진",
@@ -898,14 +915,14 @@ def test_tc12_small_blurry_thumbnail_allowed():
         "bbox": None,
     }
 
-    # page_images 없음 → 키워드 폴백 → 불명확 → 기본값 허용
+    # page_images 없음 → 키워드 폴백 → 키워드 없음 → 안전 방향: 위반 유지
     result = _post_process_faces([item], page_images=None)
     assert result, "TC12: 결과 없음"
     actual = result[0]["judgment"]
-    assert actual == "허용", (
-        f"TC12 실패: 불명확 썸네일 → 허용이어야 하는데 '{actual}'"
+    assert actual == "위반", (
+        f"TC12 실패: page_images 없음+키워드없음 → 안전방향 위반유지여야 하는데 '{actual}'"
     )
-    print("✅ TC12 통과: 작은/불명확 인물 → 허용 (기본값)")
+    print("✅ TC12 통과: page_images 없음+불명확 → 안전 방향 위반 유지")
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -964,7 +981,7 @@ def test_tc13_caution_judgment_also_processed():
     )
     print("  ✔ TC13-A: 주의+단색 이미지 → 허용 (이미지 재검증)")
 
-    # ── (B) 주의 + page_images 없음 + 일반 키워드 → 기본값 허용 ────────
+    # ── (B) 주의 + page_images 없음 + 일반 키워드 없음 → 안전 방향: 위반/주의 유지 ──
     item_b = {
         "page": 3,
         "type": "인물사진",
@@ -976,10 +993,11 @@ def test_tc13_caution_judgment_also_processed():
     }
     result_b = _post_process_faces([item_b], page_images=None)
     assert result_b, "TC13-B: 결과 없음"
-    assert result_b[0]["judgment"] == "허용", (
-        f"TC13-B 실패: 주의+불명확 → 허용이어야 하는데 '{result_b[0]['judgment']}'"
+    # 새 정책: page_images 없음 + 키워드 없음 → 안전 방향: 원판정(주의) 유지
+    assert result_b[0]["judgment"] in ("주의", "위반"), (
+        f"TC13-B 실패: 주의+불명확(page_images없음) → 주의/위반이어야 하는데 '{result_b[0]['judgment']}'"
     )
-    print("  ✔ TC13-B: 주의+불명확(키워드없음) → 기본값 허용")
+    print("  ✔ TC13-B: 주의+불명확(page_images 없음) → 안전 방향 원판정 유지")
 
     # ── (C) 주의 + 실사 키워드 → 위반 유지 (키워드 폴백) ───────────────
     item_c = {

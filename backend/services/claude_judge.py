@@ -1481,6 +1481,31 @@ def _verify_face_candidate(
                 )
                 return "icon_or_silhouette"
 
+            # ── 피부색 기반 실사 탐지 ─────────────────────────────────────────
+            # 피부색 픽셀: R > G > B, R > 150, G > 100, B > 80
+            # 아이콘/실루엣은 피부색 없음, 실사 증명사진은 5%+ 피부색
+            try:
+                skin_mask = (
+                    (arr[:, :, 0] > 150) &
+                    (arr[:, :, 1] > 100) &
+                    (arr[:, :, 2] > 80)  &
+                    (arr[:, :, 0].astype(np.int16) - arr[:, :, 1].astype(np.int16) > 10) &
+                    (arr[:, :, 1].astype(np.int16) - arr[:, :, 2].astype(np.int16) > 5)
+                )
+                skin_ratio = float(skin_mask.sum()) / max(64 * 64, 1)
+
+                logger.debug(f"[face_verify] skin_ratio={skin_ratio:.3f}")
+
+                # 피부색 4% 이상 + 채도 풍부 → 실사 인물 사진 확정
+                if skin_ratio >= 0.04 and sat_std > 40:
+                    logger.info(
+                        f"[face_verify] 피부색 탐지 → real_photo "
+                        f"(skin_ratio={skin_ratio:.3f}, sat_std={sat_std:.1f})"
+                    )
+                    return "real_photo"
+            except Exception as _se:
+                logger.debug(f"[face_verify] 피부색 탐지 실패: {_se}")
+
         except Exception as _he:
             logger.debug(f"[face_verify] 휴리스틱 실패: {_he}")
 
@@ -1637,15 +1662,25 @@ def _post_process_faces(
                 continue
 
             else:  # unknown
-                # 이미지 재검증 결과: 불충분 → 허용
-                it = dict(it)
-                it["judgment"]       = "허용"
-                it["reason"]         = "실제 촬영 사진으로 확인되지 않아 허용 처리 (이미지 재검증 불충분)"
-                it["recommendation"] = ""
-                logger.info(
-                    f"[face_verify] 재검증 불충분 → 허용: "
-                    f"p{page_num} '{it.get('content', '')[:40]}'"
-                )
+                # 이미지 재검증 결과: 불충분
+                # ★ unknown이면 키워드 폴백으로 2차 판단
+                #   그래픽 키워드 있으면 허용, 없으면 위반 유지 (안전 방향)
+                combined_kw = dtype + " " + content + " " + reason
+                if any(kw in combined_kw for kw in _GRAPHIC_KW):
+                    it = dict(it)
+                    it["judgment"]       = "허용"
+                    it["reason"]         = "그래픽/아이콘으로 확인되어 허용 처리 (이미지 재검증 후 키워드 확인)"
+                    it["recommendation"] = ""
+                    logger.info(
+                        f"[face_verify] unknown+그래픽키워드 → 허용: "
+                        f"p{page_num} '{it.get('content', '')[:40]}'"
+                    )
+                else:
+                    # unknown + 그래픽 키워드 없음 → 위반 유지 (실사 가능성)
+                    logger.info(
+                        f"[face_verify] unknown → 위반 유지 (실사 가능성): "
+                        f"p{page_num} '{it.get('content', '')[:40]}'"
+                    )
                 out.append(it)
                 continue
 
@@ -1668,13 +1703,9 @@ def _post_process_faces(
             out.append(it)
             continue
 
-        # ③ 불명확 (어느 쪽도 아님) → 기본값 허용
-        #    "사람 형태"만 있고 실제 사진 증거 없음 → 오탐으로 간주
-        it = dict(it)
-        it["judgment"]       = "허용"
-        it["reason"]         = "실제 촬영 사진으로 확인되지 않아 허용 처리 (사람 형태만으로 위반 판정 불가)"
-        it["recommendation"] = ""
-        logger.debug(f"얼굴 불명확 허용: '{it.get('content', '')}' (실사 증거 없음)")
+        # ③ 불명확 (어느 쪽도 아님)
+        #   page_images 없는 폴백이므로 기본값 위반 유지 (안전 방향)
+        logger.debug(f"얼굴 불명확 → 위반 유지: '{it.get('content', '')}' (키워드 없음, page_images 없음)")
         out.append(it)
     return out
 
