@@ -448,7 +448,11 @@ _DUMMY_KEYWORDS: tuple = (
 )
 
 # 얼굴/인물 타입 키워드
-_FACE_DTYPES_KW: tuple = ("인물", "사진", "얼굴", "face", "photo", "인물사진", "사람")
+# ★ "person_candidate"는 새 아키텍처에서 Claude가 반환하는 후보 타입
+_FACE_DTYPES_KW: tuple = (
+    "인물", "사진", "얼굴", "face", "photo", "인물사진", "사람",
+    "person_candidate",  # 새 아키텍처: Claude가 반환하는 후보 타입
+)
 
 # ★ 그래픽/아이콘 확정 키워드 (하나라도 있으면 무조건 허용)
 _ICON_ALLOW_KW: tuple = (
@@ -673,7 +677,7 @@ def apply_logo_filters(items: list) -> list:
 # ─────────────────────────────────────────────────────────────────
 def apply_face_filters(items: list) -> list:
     """
-    인물사진 타입 항목에만 적용.
+    인물사진/person_candidate 타입 항목에만 적용.
 
     ★ 처리 흐름:
       0. claude_judge._post_process_faces에서 이미 재검증된 항목(_face_reverified=True)
@@ -686,8 +690,8 @@ def apply_face_filters(items: list) -> list:
          - 실사 가능성 있으므로 위반으로 유지하고 리뷰 유도
 
     ★ 정책 근거:
-      - 5회 중 1회만 검출되는 현상의 근본 원인 제거
-      - 이 함수는 1차 텍스트 키워드 필터로만 작동
+      - _post_process_faces에서 이미 face not detected → 허용 처리 완료
+      - 이 함수는 _post_process_faces를 거치지 않은 항목에 대한 2차 텍스트 키워드 필터
       - 이미지 재검증(_post_process_faces)에서 판정된 결과 우선
     """
     out = []

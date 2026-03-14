@@ -80,58 +80,44 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - 사전에 없는 텍스트를 임의로 회사 관련 정보로 추정하는 것 엄격히 금지
 - 뉴스 기사·스크린샷·UI 이미지 속 텍스트를 제안사 정보로 오인 금지
 
-━━━ 우선순위 4 — 인물 사진 ━━━
+━━━ 우선순위 4 — 인물 사진 후보 탐지 ━━━
 
-★★★ 핵심 원칙: "사람 형태"가 보인다고 절대 위반 판정하지 마라 ★★★
-★★★ 반드시 "카메라로 촬영된 실제 사람 사진"인지만 기준으로 삼아라 ★★★
+★★★ 역할 정의: Claude는 "탐지기"이지 "판정기"가 아니다 ★★★
+★★★ 사람 관련 시각 요소가 있을 수 있는 bbox만 반환하라 ★★★
+★★★ 실제 사진/아이콘/실루엣 여부의 최종 판정은 절대 하지 마라 ★★★
 
-【1단계: 인물 사진 후보 탐지 (이 단계는 의심 항목을 태그하는 것, 위반 확정 아님)】
-아래 중 하나라도 해당하면 type="인물사진" 또는 type="얼굴사진"으로 표시하고 bbox를 포함하라:
-  1. 피부 질감이 사진처럼 보인다 (픽셀 질감, 사진 해상도)
-  2. 눈·코·입 이목구비가 실제 사람처럼 식별 가능하다
-  3. 카메라로 촬영된 실사 이미지처럼 보인다
+【역할: 사람 관련 시각 요소 후보 탐지기】
+아래 중 하나라도 해당하면 type="person_candidate"로 표시하고 bbox를 포함하라:
+  1. 사람 얼굴 또는 신체가 포함된 시각 요소 (사진, 아이콘, 그래픽 등 종류 무관)
+  2. 인물처럼 보이는 영역 (확실하지 않아도 후보로 표시)
+  3. 피부 질감, 이목구비, 사람 형태가 감지되는 영역
 
-★ 인물 사진으로 의심되면 반드시 bbox와 함께 "위반" 또는 "주의"로 제출하라
-★ 최종 위반 확정은 후처리 코드에서 bbox crop 이미지 재분류로 결정됨
-★ 실사 사진 같으면 일단 「위반」으로, 애매하면 「주의」로 표시하라
-   → 후처리에서 이미지 재판정으로 확인하므로 오탐 걱정 없음
+★ 반드시 type="person_candidate"로만 표시하라 (type="인물사진" 사용 금지)
+★ judgment는 반드시 "주의"로만 설정하라 (위반/허용 판정 금지)
+★ 최종 위반/허용 판정은 후처리 코드에서 MediaPipe Face Detection으로 결정된다
+★ 애매하거나 불확실한 경우에도 bbox와 함께 주의 후보로 제출하라
+   → 후처리에서 MediaPipe가 실제 얼굴 여부를 검사하여 최종 판정한다
+   → 오탐 걱정 없이 적극적으로 후보를 제출하라
 
-해당하는 경우:
-- 피부 질감이 보이는 실사 인물 사진
-- 눈·코·입이 명확히 식별되는 사진
-- 인물 프로필 사진 (증명사진, 여권사진 포함)
-- 행사/인터뷰 촬영 사진, 명함 사진
-- 여러 인물의 얼굴 사진 배열 (조직도 포함)
+후보로 포함해야 하는 경우:
+- 피부 질감이 보이는 영역
+- 눈·코·입이 감지되는 영역
+- 인물 프로필 사진처럼 보이는 영역 (증명사진, 여권사진 포함)
+- 사람 아이콘, 실루엣, 픽토그램 (아이콘이라도 일단 후보로 제출)
+- 행사/인터뷰 사진처럼 보이는 영역
+- 여러 인물 얼굴 배열 (조직도 포함)
+- 확실하지 않더라도 사람과 관련 가능성이 있는 시각 요소
 
-【2단계: 그래픽/아이콘이 명확한 경우 — 1단계에서 제외 (검출하지 않아도 됨)】
-아래 유형은 그래픽임이 명확하면 결과에 포함하지 않아도 된다:
-- 사람 아이콘 (단색, 선화, 색상 무관)
-- 픽토그램 (화장실 표지판 스타일 포함)
-- 실루엣 그래픽 (단색 또는 그라데이션 실루엣)
-- 캐릭터 일러스트 (카툰, 애니메이션, 만화 스타일)
-- 벡터 스타일 사람 그림 (선이 깔끔하고 평면적인 그림)
-- 단색 인물 아이콘 (한 가지 색상으로만 표현된 사람 형태)
-- 얼굴 디테일이 없는 사람 그래픽 (눈코입 없음)
-- 시스템 다이어그램·플로우차트 속 사람 아이콘
-- 연구자/직원/사용자 아이콘 (소프트웨어 UI 스타일)
-- AI 생성 일러스트, 3D 렌더링 캐릭터
-- 얼굴이 흐릿하거나 식별 불가한 이미지
-- 먼 거리 촬영, 뒷모습, 작은 썸네일
+결과에서 제외해도 되는 경우 (명확히 사람과 무관한 경우만):
+- 텍스트만 있는 영역
+- 로고/심볼만 있는 영역 (사람 형태 없음)
+- 도표/차트/그래프 (사람 이미지 없음)
+- 건물/풍경/사물 사진
 
-판단 기준:
-  Q. "이 이미지는 카메라로 촬영된 실제 사람 사진인가?"
-  → YES 또는 가능성 있음 → 반드시 bbox와 함께 【위반】 또는 【주의】로 표시
-  → 그래픽/아이콘이 명확 → 결과에서 제외하거나 【허용】
-  → 불확실 → 【주의】로 표시 (후처리에서 재판정)
-
-  Q. "사람 형태가 보이는 그래픽/아이콘/일러스트인가?"
-  → YES (명확히 그래픽) → 결과에서 제외
-  → 불확실 → 【주의】로 표시
-
-★★★ 인물 사진 탐지 시 반드시 bbox를 포함하라 — 이미지 재검증에 사용됨 ★★★
-- 인물 후보(위반/주의) 탐지 시 반드시 해당 인물이 위치한 bbox를 [x1,y1,x2,y2]로 표시
+★★★ 인물 후보 탐지 시 반드시 bbox를 포함하라 — MediaPipe 재검증에 사용됨 ★★★
+- 후보 탐지 시 반드시 해당 영역의 bbox를 [x1,y1,x2,y2]로 표시
 - bbox를 특정할 수 없어도 최대한 추정값을 포함하라 (null 사용 지양)
-- bbox가 없으면 후처리 재검증을 수행할 수 없어 오탐 방지가 불가능해짐
+- bbox가 없으면 후처리 MediaPipe 검증을 수행할 수 없어 오탐 방지가 불가능해짐
 
 ━━━ 우선순위 4-B — 회사 로고 판정 (매우 보수적으로) ━━━
 
@@ -225,13 +211,16 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - bbox는 이미지 내 검출 영역의 픽셀 좌표 (좌상단 x1,y1 / 우하단 x2,y2)
 - bbox를 특정할 수 없어도 최대한 추정값을 포함하라 (null 사용 지양)
 - 로고/로고후보 탐지 시 반드시 bbox를 포함하라 — 재비교에 사용됨
-- 인물사진/인물/얼굴 탐지 시 반드시 bbox를 포함하라 — 이미지 재검증에 사용됨
-- bbox가 없으면 후처리 재검증을 수행할 수 없어 오탐 방지가 불가능해짐
-- 문제 없는 페이지는 포함하지 않아도 된다
+- 인물사진/인물/얼굴 탐지 시 반드시 bbox를 포함하라 — MediaPipe 재검증에 사용됨
+- 인물 후보는 반드시 type="person_candidate", judgment="주의"로만 반환 (위반/허용 판정 금지)
+- 최종 위반/허용 판정은 서버 후처리에서 MediaPipe Face Detection으로 결정됨
 - 한 페이지에 위반 요소 N개면 items 배열에 N개 항목
 - 로고 후보(1차 탐지)는 type="로고후보"로 표시하고 judgment="주의"로 설정
 - 최종 위반 확정은 코드에서 bbox crop 후 SSIM/ORB 재비교로 결정
-- 인물 최종 위반 확정은 코드에서 bbox crop 후 이미지 재분류로 결정"""
+- 인물 후보는 type="person_candidate", judgment="주의"로만 반환 (위반/허용 판정 금지)
+- 인물 최종 위반/허용 확정은 서버에서 bbox crop 후 MediaPipe Face Detection으로 결정
+- 문제 없는 페이지는 포함하지 않아도 된다
+- 한 페이지에 위반 요소 N개면 items 배열에 N개 항목"""
 
 
 # ── threshold ────────────────────────────────────────────────────
@@ -1535,7 +1524,11 @@ def _is_logo_type(text: str) -> bool:
 # ── 얼굴/인물사진 후처리 필터 ────────────────────────────────────
 
 # 얼굴/인물 타입 키워드 (이 타입이면 필터 대상)
-_FACE_DTYPE_KW: tuple = ("인물", "사진", "얼굴", "face", "photo", "인물사진", "사람")
+# ★ "person_candidate"는 새 아키텍처에서 Claude가 반환하는 후보 타입
+_FACE_DTYPE_KW: tuple = (
+    "인물", "사진", "얼굴", "face", "photo", "인물사진", "사람",
+    "person_candidate",   # 새 아키텍처: Claude가 반환하는 후보 타입
+)
 
 # ★ 실제 사진 확정 키워드 (이것이 있을 때만 위반 유지)
 # 반드시 카메라 촬영된 실사 사진임을 나타내는 표현
@@ -1789,18 +1782,23 @@ def _post_process_faces(
     model: str = "",
 ) -> List[dict]:
     """
-    인물사진 타입 항목 후처리 — bbox 기반 이미지 재검증 포함.
+    인물 후보(person_candidate / 인물사진 등) 후처리 — MediaPipe 중심 최종 판정.
 
-    수정된 파이프라인:
-      Claude Vision → 인물 후보 + bbox
-      → bbox crop → _verify_face_candidate() 이미지 재분류
-      → real_photo       → 위반 유지
-      → icon_or_silhouette → 허용 ("아이콘/실루엣/일러스트로 확인되어 허용 처리")
-      → unknown          → 허용 ("실제 촬영 사진으로 확인되지 않아 허용 처리")
+    새 아키텍처:
+      Claude Vision → type="person_candidate", judgment="주의" (후보 태깅만)
+      → bbox crop → _verify_face_candidate() [전경 피부색 + MediaPipe + Claude 폴백]
+          real_photo         → judgment="위반" 으로 확정 (실제 얼굴 검출)
+          icon_or_silhouette → judgment="허용" (얼굴 없음, 그래픽으로 처리)
+          unknown            → judgment="허용" (얼굴 미확인 = face not detected → 허용)
 
-    키워드 필터(_REAL_PHOTO_KW, _GRAPHIC_KW)는 2차 힌트로만 사용:
-      - 이미지 재검증이 가능한 경우 → 이미지 판정 우선
-      - page_images 없거나 bbox 없는 경우 → 키워드 필터 폴백
+    ★ 요구사항: face not detected이면 아이콘/실루엣/일러스트로 간주하여 허용
+      → real_photo가 확정될 때만 위반, 나머지(icon_or_silhouette, unknown) 모두 허용
+
+    하위 호환:
+      - 구버전 type="인물사진" / "얼굴사진" 항목도 동일하게 처리
+      - page_images 없으면 키워드 폴백 (하위 호환)
+
+    ★ _face_reverified=True 마킹으로 server_pipeline 중복 처리 방지
 
     인자:
       items       : Claude Vision이 반환한 아이템 리스트
@@ -1852,78 +1850,79 @@ def _post_process_faces(
             )
 
             if face_class == "real_photo":
-                # 이미지 재검증 결과: 실제 사진 → 위반 유지
+                # MediaPipe/CV 얼굴 검출 → 위반 확정
                 it = dict(it)
+                it["judgment"]       = "위반"
+                # ★ 타입은 Claude가 반환한 원래 타입(person_candidate 등) 유지
+                #   "인물사진"으로 덮어쓰지 않음
+                it["reason"]         = (it.get("reason") or "") + " (CV 얼굴 검출 → 위반 확정)"
                 it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
                 logger.info(
-                    f"[face_verify] 실제 사진 확인 → 위반 유지: "
+                    f"[face_post] CV 얼굴 검출 → 위반 확정: "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
                 )
                 out.append(it)
                 continue
 
             elif face_class == "icon_or_silhouette":
-                # 이미지 재검증 결과: 아이콘/실루엣 → 허용
+                # 얼굴 없음 → 허용 (아이콘/실루엣/벡터 그래픽)
                 it = dict(it)
                 it["judgment"]       = "허용"
-                it["reason"]         = "아이콘/실루엣/일러스트로 확인되어 허용 처리 (이미지 재검증)"
+                it["reason"]         = "얼굴 미검출(아이콘/실루엣/그래픽) — MediaPipe 재검증 결과 허용"
                 it["recommendation"] = ""
-                it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
+                it["_face_reverified"] = True
                 logger.info(
-                    f"[face_verify] 아이콘/실루엣 확인 → 허용: "
+                    f"[face_post] 얼굴 없음 → 허용(아이콘/그래픽): "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
                 )
                 out.append(it)
                 continue
 
-            else:  # unknown
-                # 이미지 재검증 결과: 불충분
-                # ★ unknown이면 키워드 폴백으로 2차 판단
-                #   그래픽 키워드 있으면 허용, 없으면 위반 유지 (안전 방향)
-                combined_kw = dtype + " " + content + " " + reason
-                if any(kw in combined_kw for kw in _GRAPHIC_KW):
-                    it = dict(it)
-                    it["judgment"]       = "허용"
-                    it["reason"]         = "그래픽/아이콘으로 확인되어 허용 처리 (이미지 재검증 후 키워드 확인)"
-                    it["recommendation"] = ""
-                    it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
-                    logger.info(
-                        f"[face_verify] unknown+그래픽키워드 → 허용: "
-                        f"p{page_num} '{it.get('content', '')[:40]}'"
-                    )
-                else:
-                    # unknown + 그래픽 키워드 없음 → 위반 유지 (실사 가능성)
-                    it = dict(it)
-                    it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
-                    logger.info(
-                        f"[face_verify] unknown → 위반 유지 (실사 가능성): "
-                        f"p{page_num} '{it.get('content', '')[:40]}'"
-                    )
+            else:  # unknown — MediaPipe 얼굴 미검출 → 허용 (얼굴 미확인)
+                # ★ 요구사항: face not detected이면 아이콘/실루엣/일러스트로 간주하여 허용
+                # unknown = CV/휴리스틱 모두에서 얼굴을 확인하지 못한 경우
+                it = dict(it)
+                it["judgment"]       = "허용"
+                it["reason"]         = "얼굴 미검출(판정 불충분) — MediaPipe 재검증에서 얼굴 확인 불가, 허용 처리"
+                it["recommendation"] = ""
+                it["_face_reverified"] = True
+                logger.info(
+                    f"[face_post] unknown → 허용(얼굴 미확인): "
+                    f"p{page_num} '{it.get('content', '')[:40]}'"
+                )
                 out.append(it)
                 continue
 
         # ── 2단계: 키워드 폴백 (page_images 없거나 page 불일치) ──────────────
         combined = dtype + " " + content + " " + reason
 
-        # ① 그래픽/아이콘 키워드 존재 → 무조건 허용
+        # ① 그래픽/아이콘 키워드 → 허용
         if any(kw in combined for kw in _GRAPHIC_KW):
             it = dict(it)
             it["judgment"]       = "허용"
-            it["reason"]         = "그래픽/아이콘/일러스트로 확인되어 허용 처리 (실제 사진 아님)"
+            it["reason"]         = "그래픽/아이콘/일러스트 확인 → 허용 (page_images 없어 키워드 폴백)"
             it["recommendation"] = ""
-            logger.debug(f"얼굴 오탐 허용: '{it.get('content', '')}' (그래픽 키워드 검출)")
+            logger.debug(f"[face_post] 그래픽 키워드 → 허용: '{it.get('content', '')[:40]}'")
             out.append(it)
             continue
 
-        # ② 실제 사진 키워드 존재 → 위반 유지
+        # ② 실제 사진 키워드 → 위반 유지
         if any(kw in combined for kw in _REAL_PHOTO_KW):
-            logger.debug(f"실제 사진 확인 → 위반 유지: '{it.get('content', '')}' (실사 키워드 검출)")
+            it = dict(it)
+            it["judgment"]   = "위반"
+            # ★ 타입은 Claude가 반환한 원래 타입(person_candidate 등) 유지
+            logger.debug(f"[face_post] 실사 키워드 → 위반 유지: '{it.get('content', '')[:40]}'")
             out.append(it)
             continue
 
-        # ③ 불명확 (어느 쪽도 아님)
-        #   page_images 없는 폴백이므로 기본값 위반 유지 (안전 방향)
-        logger.debug(f"얼굴 불명확 → 위반 유지: '{it.get('content', '')}' (키워드 없음, page_images 없음)")
+        # ③ 불명확 — page_images 없는 폴백, 원래 판정 유지 (안전 방향)
+        # 입력 judgment가 "위반"이면 위반 유지, "주의"면 주의 유지
+        it = dict(it)
+        if judgment not in ("위반", "주의"):
+            it["judgment"] = "위반"   # 알 수 없는 값은 안전 방향으로 위반
+        # 타입은 Claude가 반환한 원래 타입 유지 (person_candidate 등)
+        it["reason"]     = (it.get("reason") or "") + " (page_images 없음, 원래 판정 유지)"
+        logger.debug(f"[face_post] 불명확(키워드없음) → 판정 유지({it['judgment']}): '{it.get('content', '')[:40]}'")
         out.append(it)
     return out
 
