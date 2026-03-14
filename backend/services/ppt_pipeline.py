@@ -46,6 +46,17 @@ def _load_logo_b64() -> Optional[str]:
     return None
 
 
+def _load_logo_symbol_b64() -> Optional[str]:
+    """저장된 로고 심볼 레퍼런스 이미지 로드 (logo_symbol_reference.png)"""
+    sym_path = DATA_DIR / "logo_symbol_reference.png"
+    if sym_path.exists():
+        try:
+            return base64.b64encode(sym_path.read_bytes()).decode("utf-8")
+        except Exception:
+            pass
+    return None
+
+
 class PPTServerPipeline:
     """PPT(X) 서버사이드 완전 검증 파이프라인"""
 
@@ -296,8 +307,9 @@ class PPTServerPipeline:
         all_vision_items: list[dict] = []
 
         if claude_on and page_images:
-            company_dict = load_dict()
-            logo_b64     = _load_logo_b64()
+            company_dict    = load_dict()
+            logo_b64        = _load_logo_b64()
+            logo_symbol_b64 = _load_logo_symbol_b64()
             batches      = [page_images[i:i+PAGES_PER_BATCH]
                             for i in range(0, len(page_images), PAGES_PER_BATCH)]
             batch_count  = len(batches)
@@ -314,12 +326,14 @@ class PPTServerPipeline:
                         if str(pg["page"]) in rule_hits_by_page
                     }
                     try:
-                        items = await loop.run_in_executor(
-                            _executor,
+                        import functools as _ft
+                        _fn = _ft.partial(
                             self.judge.judge_image_batch,
                             batch, logo_b64, company_dict,
                             batch_rule_hits or None,
+                            logo_symbol_b64,
                         )
+                        items = await loop.run_in_executor(_executor, _fn)
                         logger.info(f"[{job_id}] Vision 배치 {bi+1}/{batch_count}: {len(items)}건")
                         return items
                     except Exception as e:

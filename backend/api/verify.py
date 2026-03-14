@@ -331,8 +331,8 @@ async def analyze_images(req: AnalyzeImagesRequest):
 
 
 # ── 로고 레퍼런스 이미지 저장/조회 ──────────────────────────────
-_logo_store: dict[str, str] = {}   # session_key → base64
-
+_logo_store: dict[str, str] = {}        # session_key → base64 (전체 로고)
+_logo_symbol_store: dict[str, str] = {} # session_key → base64 (심볼 전용)
 
 # ── Vision 전용: PDF 텍스트 추출 + 규칙 탐지 ──────────────────
 @router.post("/scan-text")
@@ -680,6 +680,89 @@ def delete_logo_reference(logo_id: str):
         del _logo_store[logo_id]
         return JSONResponse({"success": True})
     raise HTTPException(404, "로고 레퍼런스를 찾을 수 없습니다.")
+
+
+# ── 로고 심볼 레퍼런스 엔드포인트 ────────────────────────────────
+@router.post("/logo-symbol-reference")
+async def upload_logo_symbol_reference(file: UploadFile = File(...)):
+    """
+    로고 심볼 레퍼런스 이미지 업로드 (PNG/JPEG, 최대 2MB).
+    전체 로고와 별도로 심볼(마크) 부분만 잘라낸 이미지를 등록.
+    심볼 기반 로고 판별 파이프라인(Case B/C/D)에서 사용.
+    """
+    MAX_LOGO_SIZE = 2 * 1024 * 1024
+
+    ctype = file.content_type or ""
+    if not any(t in ctype for t in ("image/png", "image/jpeg", "image/jpg", "image/webp")):
+        if not (file.filename or "").lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            raise HTTPException(400, "PNG/JPEG/WebP 이미지만 지원합니다.")
+
+    data = await file.read()
+    if len(data) > MAX_LOGO_SIZE:
+        raise HTTPException(413, f"심볼 이미지는 2MB 이하만 지원합니다. (현재 {len(data)//1024}KB)")
+
+    # PNG 변환
+    try:
+        from PIL import Image as PILImage
+        import io as _io
+        img = PILImage.open(_io.BytesIO(data))
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        b64 = base64.b64encode(data).decode()
+
+    symbol_id = generate_job_id()[:8]
+    _logo_symbol_store[symbol_id] = b64
+
+    # 서버 파이프라인용 영구 저장 (data/logo_symbol_reference.png)
+    try:
+        from core.config import DATA_DIR as _DATA_DIR
+        import base64 as _b64
+        sym_bytes = _b64.b64decode(b64)
+        (_DATA_DIR / "logo_symbol_reference.png").write_bytes(sym_bytes)
+        logger.info(f"로고 심볼 레퍼런스 파일 저장: data/logo_symbol_reference.png")
+    except Exception as _e:
+        logger.warning(f"심볼 파일 저장 실패: {_e}")
+
+    # 최대 10개 유지
+    if len(_logo_symbol_store) > 10:
+        oldest = next(iter(_logo_symbol_store))
+        del _logo_symbol_store[oldest]
+
+    logger.info(f"로고 심볼 레퍼런스 업로드: {symbol_id} ({len(data)//1024}KB)")
+    return JSONResponse({
+        "symbol_id": symbol_id,
+        "size_kb":   len(data) // 1024,
+        "filename":  file.filename,
+        "note":      "심볼 레퍼런스가 등록되었습니다. 이후 검증에서 심볼 기반 로고 판별(Case B/C/D)이 활성화됩니다.",
+    })
+
+
+@router.get("/logo-symbol-reference/{symbol_id}")
+def get_logo_symbol_reference(symbol_id: str):
+    """저장된 심볼 레퍼런스 base64 반환"""
+    b64 = _logo_symbol_store.get(symbol_id)
+    if not b64:
+        raise HTTPException(404, "심볼 레퍼런스를 찾을 수 없습니다.")
+    return JSONResponse({"symbol_id": symbol_id, "b64": b64})
+
+
+@router.delete("/logo-symbol-reference/{symbol_id}")
+def delete_logo_symbol_reference(symbol_id: str):
+    """심볼 레퍼런스 삭제"""
+    if symbol_id in _logo_symbol_store:
+        del _logo_symbol_store[symbol_id]
+        # 파일도 삭제
+        try:
+            from core.config import DATA_DIR as _DATA_DIR
+            _sym_path = _DATA_DIR / "logo_symbol_reference.png"
+            if _sym_path.exists():
+                _sym_path.unlink()
+        except Exception:
+            pass
+        return JSONResponse({"success": True})
+    raise HTTPException(404, "심볼 레퍼런스를 찾을 수 없습니다.")
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────

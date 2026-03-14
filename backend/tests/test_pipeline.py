@@ -7,6 +7,7 @@
   TC3: 실루엣/아이콘 인물 → 허용 (아이콘 오탐 차단)
   TC4: 페이지 상단 이름 목록 (대표자 태그 없음) → 참여인력/기타 분류,
        대표자명 아님 (classify_person_name 검증)
+  TC5: 심볼 기반 로고 판정 (Case A/B/C/D 분기 검증)
 ────────────────────────────────────────────────────────────────────
 """
 from __future__ import annotations
@@ -316,18 +317,131 @@ def test_is_logo_type():
 
 
 # ────────────────────────────────────────────────────────────────────
+# TC5: 심볼 기반 로고 판정 (Case A / B / C / D)
+# ────────────────────────────────────────────────────────────────────
+def test_tc5_symbol_based_logo_verdict():
+    """
+    _post_process_logo() 4단계 Case 분기 검증:
+
+    Case A: 전체 로고 일치 → 위반
+    Case B: 전체 불일치 + 심볼 일치 + 워드마크 검출 → 위반
+    Case C: 전체 불일치 + 심볼 일치 + 워드마크 미검출 → 주의
+    Case D: 전체 불일치 + 심볼 불일치 → 허용
+
+    실제 이미지 없이 _verify_logo_candidate / _verify_symbol_candidate /
+    _has_wordmark_nearby 를 패치해 로직만 검증한다.
+    """
+    import unittest.mock as _mock
+    from services.claude_judge import ClaudeVisionJudge
+
+    judge = ClaudeVisionJudge.__new__(ClaudeVisionJudge)
+
+    # 더미 페이지 이미지 (내용 무관)
+    import base64, io
+    try:
+        from PIL import Image as _PIL
+        buf = io.BytesIO()
+        _PIL.new("RGB", (10, 10), (128, 128, 128)).save(buf, "PNG")
+        dummy_b64 = base64.b64encode(buf.getvalue()).decode()
+    except ImportError:
+        import base64
+        dummy_b64 = base64.b64encode(b"dummy_image_bytes_placeholder").decode()
+
+    _page_images = [{"page": 1, "b64": dummy_b64, "media_type": "image/jpeg"}]
+    _logo_b64    = dummy_b64
+    _sym_b64     = dummy_b64
+
+    def _make_logo_item(judgment="위반"):
+        return {
+            "page": 1, "type": "로고", "content": "ACTIVO",
+            "judgment": judgment, "reason": "1차 탐지",
+            "recommendation": "", "bbox": [10, 10, 100, 50],
+        }
+
+    # ── Case A: 전체 로고 일치 → 위반 ───────────────────────────────
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=True):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, _sym_b64,
+        )
+    assert items[0]["judgment"] == "위반", (
+        f"Case A 실패: 전체 로고 일치 → 위반이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "Case A" in items[0]["reason"], f"Case A reason 누락: {items[0]['reason']}"
+    print("  ✔ Case A: 전체 로고 일치 → 위반")
+
+    # ── Case B: 전체 불일치 + 심볼 일치 + 워드마크 존재 → 위반 ─────
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._verify_symbol_candidate", return_value=True), \
+         _mock.patch("services.claude_judge._has_wordmark_nearby", return_value=True):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, _sym_b64,
+        )
+    assert items[0]["judgment"] == "위반", (
+        f"Case B 실패: 심볼+워드마크 일치 → 위반이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "Case B" in items[0]["reason"], f"Case B reason 누락: {items[0]['reason']}"
+    print("  ✔ Case B: 전체 불일치 + 심볼+워드마크 → 위반")
+
+    # ── Case C: 전체 불일치 + 심볼 일치 + 워드마크 없음 → 주의 ──────
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._verify_symbol_candidate", return_value=True), \
+         _mock.patch("services.claude_judge._has_wordmark_nearby", return_value=False):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, _sym_b64,
+        )
+    assert items[0]["judgment"] == "주의", (
+        f"Case C 실패: 심볼만 일치 → 주의이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "Case C" in items[0]["reason"], f"Case C reason 누락: {items[0]['reason']}"
+    print("  ✔ Case C: 전체 불일치 + 심볼만 일치 → 주의")
+
+    # ── Case D: 전체 불일치 + 심볼 불일치 → 허용 ───────────────────
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._verify_symbol_candidate", return_value=False):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, _sym_b64,
+        )
+    assert items[0]["judgment"] == "허용", (
+        f"Case D 실패: 심볼 불일치 → 허용이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "Case D" in items[0]["reason"], f"Case D reason 누락: {items[0]['reason']}"
+    print("  ✔ Case D: 전체 불일치 + 심볼 불일치 → 허용")
+
+    # ── 심볼 레퍼런스 없는 경우: 전체 비교 실패 → 허용 (심볼 등록 권장) ──
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, logo_symbol_b64=None,  # 심볼 레퍼런스 없음
+        )
+    assert items[0]["judgment"] == "허용", (
+        f"No-symbol 실패: 심볼 레퍼런스 없음 → 허용이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "심볼 레퍼런스" in items[0]["recommendation"] or \
+           "심볼 레퍼런스" in items[0]["reason"], \
+        f"No-symbol reason 누락: {items[0]['reason']}"
+    print("  ✔ No-symbol: 심볼 레퍼런스 없음 → 허용 (등록 권장)")
+
+    print("✅ TC5 통과: 심볼 기반 로고 판정 Case A/B/C/D + No-symbol 모두 정상")
+
+
+# ────────────────────────────────────────────────────────────────────
 # 전체 실행
 # ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import traceback
 
     tests = [
-        ("구문 검사",          test_syntax_check),
-        ("is_logo_type 단위",  test_is_logo_type),
-        ("TC1 ACTIVO 로고",    test_tc1_activo_logo_violation),
-        ("TC2 국가철도공단",   test_tc2_krail_logo_allowed),
-        ("TC3 실루엣/아이콘",  test_tc3_silhouette_icon_allowed),
-        ("TC4 이름목록 분류",  test_tc4_name_list_not_representative),
+        ("구문 검사",               test_syntax_check),
+        ("is_logo_type 단위",       test_is_logo_type),
+        ("TC1 ACTIVO 로고",         test_tc1_activo_logo_violation),
+        ("TC2 국가철도공단",         test_tc2_krail_logo_allowed),
+        ("TC3 실루엣/아이콘",        test_tc3_silhouette_icon_allowed),
+        ("TC4 이름목록 분류",        test_tc4_name_list_not_representative),
+        ("TC5 심볼기반 로고 판정",   test_tc5_symbol_based_logo_verdict),
     ]
 
     passed = 0

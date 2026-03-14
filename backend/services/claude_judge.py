@@ -189,7 +189,47 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 
 
 # ── threshold ────────────────────────────────────────────────────
-_LOGO_SIM_THRESHOLD = 0.70  # SSIM 또는 ORB 매칭 기준 (0.70 이상 → 위반 확정)
+_LOGO_SIM_THRESHOLD        = 0.70  # 전체 로고 SSIM/ORB 임계값 (0.70↑ → 위반)
+_SYMBOL_SIM_THRESHOLD      = 0.65  # 심볼 비교 임계값 (전체보다 완화)
+_SYMBOL_TEMPLATE_THRESHOLD = 0.55  # template matching 임계값
+
+# 워드마크 후보 키워드 (company_dict 없을 때 기본 사용)
+# 실제 사용 시 company_dict의 company_names/english_names/abbreviations에서 동적 생성
+_DEFAULT_WORDMARK_CANDIDATES: tuple = (
+    "activo", "악티보", "주식회사 악티보",
+)
+
+
+# ── 공통 crop 추출 유틸 ──────────────────────────────────────────
+def _extract_crop(
+    page_b64: str,
+    bbox: Optional[list],
+    pad: int = 10,
+) -> Optional[object]:
+    """
+    페이지 이미지(base64)에서 bbox 기반 crop PIL Image 반환.
+    bbox None → 우측하단 fallback.
+    """
+    try:
+        from PIL import Image
+        page_bytes = base64.b64decode(page_b64)
+        page_img   = Image.open(io.BytesIO(page_bytes)).convert("RGB")
+        pw, ph = page_img.width, page_img.height
+
+        if bbox and len(bbox) == 4:
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+            x2, y2 = min(pw, x2 + pad), min(ph, y2 + pad)
+            logger.debug(f"bbox crop: ({x1},{y1},{x2},{y2}) / 페이지 {pw}×{ph}")
+        else:
+            logger.debug("bbox 없음 → fallback crop (우측하단 28%×22%)")
+            x1, y1 = int(pw * 0.72), int(ph * 0.78)
+            x2, y2 = pw, ph
+
+        return page_img.crop((x1, y1, x2, y2))
+    except Exception as e:
+        logger.warning(f"crop 추출 실패: {e}")
+        return None
 
 
 # ── 로고 후보 재비교: bbox crop → SSIM + ORB 이중 비교 ────────────
@@ -205,64 +245,38 @@ def _verify_logo_candidate(
 
     bbox: [x1, y1, x2, y2] 픽셀 좌표 (Claude 반환값)
           None이면 우측하단 fallback crop 사용
-    반환값: True = 로고 일치 (위반 확정), False = 불일치 (허용)
+    반환값: True = 전체 로고 일치 (위반 확정), False = 불일치 (심볼 단계로 진행)
     """
     try:
-        from PIL import Image
         import numpy as np
-        import cv2
+        from PIL import Image
 
-        # ── 이미지 디코딩 ──────────────────────────────────────────
-        page_bytes = base64.b64decode(page_b64)
-        page_img   = Image.open(io.BytesIO(page_bytes)).convert("RGB")
-        pw, ph     = page_img.width, page_img.height
+        crop_img = _extract_crop(page_b64, bbox)
+        if crop_img is None:
+            return False
 
-        ref_bytes  = base64.b64decode(logo_ref_b64)
-        ref_img    = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
-
-        # ── crop 영역 결정 ────────────────────────────────────────
-        if bbox and len(bbox) == 4:
-            x1, y1, x2, y2 = [int(v) for v in bbox]
-            # 범위 클리핑
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(pw, x2), min(ph, y2)
-            # 너무 작은 bbox는 패딩 확장 (최소 32×32)
-            pad = 10
-            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
-            x2, y2 = min(pw, x2 + pad), min(ph, y2 + pad)
-            crop_img = page_img.crop((x1, y1, x2, y2))
-            logger.debug(f"bbox crop: ({x1},{y1},{x2},{y2}) / 페이지 {pw}×{ph}")
-        else:
-            # bbox 없음 → 우측하단 fallback (보수적으로 허용 처리)
-            logger.debug("bbox 없음 → fallback crop (우측하단 28%×22%)")
-            x0 = int(pw * 0.72)
-            y0 = int(ph * 0.78)
-            crop_img = page_img.crop((x0, y0, pw, ph))
+        ref_bytes = base64.b64decode(logo_ref_b64)
+        ref_img   = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
 
         # 비교 크기 통일
         cmp_size = (128, 64)
-        crop_resized = crop_img.resize(cmp_size, Image.LANCZOS)
-        ref_resized  = ref_img.resize(cmp_size, Image.LANCZOS)
+        crop_np = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
+        ref_np  = np.array(ref_img.resize(cmp_size,  Image.LANCZOS))
 
-        crop_np = np.array(crop_resized)
-        ref_np  = np.array(ref_resized)
-
-        # ── 1단계: SSIM 비교 ──────────────────────────────────────
+        # ── 1단계: SSIM ───────────────────────────────────────────
         ssim_score = _compute_ssim(ref_np, crop_np)
-        logger.debug(f"SSIM={ssim_score:.3f}")
-
+        logger.debug(f"[전체로고] SSIM={ssim_score:.3f}")
         if ssim_score >= _LOGO_SIM_THRESHOLD:
-            logger.info(f"로고 재비교 SSIM 일치={ssim_score:.3f} → 위반 확정")
+            logger.info(f"전체 로고 SSIM 일치={ssim_score:.3f} → 위반 확정")
             return True
 
-        # ── 2단계: ORB feature match ──────────────────────────────
+        # ── 2단계: ORB ────────────────────────────────────────────
         orb_score = _compute_orb(ref_np, crop_np)
-        logger.debug(f"ORB={orb_score:.3f}")
-
+        logger.debug(f"[전체로고] ORB={orb_score:.3f}")
         result = orb_score >= _LOGO_SIM_THRESHOLD
         logger.info(
-            f"로고 재비교 SSIM={ssim_score:.3f} ORB={orb_score:.3f} "
-            f"→ {'위반 확정' if result else '허용'}"
+            f"전체 로고 SSIM={ssim_score:.3f} ORB={orb_score:.3f} "
+            f"→ {'위반 확정' if result else '불일치(심볼 단계 진행)'}"
         )
         return result
 
@@ -271,6 +285,166 @@ def _verify_logo_candidate(
         return False
     except Exception as e:
         logger.warning(f"로고 재비교 실패: {e} → 허용 처리")
+        return False
+
+
+# ── 심볼 비교: crop vs logo_symbol_reference ─────────────────────
+def _verify_symbol_candidate(
+    page_b64: str,
+    symbol_ref_b64: str,
+    bbox: Optional[list] = None,
+) -> bool:
+    """
+    심볼 레퍼런스(logo_symbol_reference.png)와 crop 영역을 비교.
+    전체 로고 비교보다 완화된 threshold 사용 (레이아웃 변화 대응).
+
+    비교 순서:
+      1. SSIM (grayscale)
+      2. ORB feature match
+      3. Template matching (cv2.matchTemplate)
+
+    반환값:
+      True  → 심볼 유사 (워드마크 추가 확인 필요)
+      False → 심볼 불일치 (허용 처리)
+    """
+    try:
+        import numpy as np
+        import cv2
+        from PIL import Image
+
+        crop_img = _extract_crop(page_b64, bbox, pad=15)
+        if crop_img is None:
+            return False
+
+        sym_bytes = base64.b64decode(symbol_ref_b64)
+        sym_img   = Image.open(io.BytesIO(sym_bytes)).convert("RGB")
+
+        # ── 정사각형 비교 크기 사용 (심볼 특성 보존) ──────────────
+        cmp_size = (96, 96)
+        crop_np = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
+        sym_np  = np.array(sym_img.resize(cmp_size,  Image.LANCZOS))
+
+        # 1단계: SSIM
+        ssim_score = _compute_ssim(sym_np, crop_np)
+        logger.debug(f"[심볼] SSIM={ssim_score:.3f}")
+        if ssim_score >= _SYMBOL_SIM_THRESHOLD:
+            logger.info(f"심볼 SSIM 일치={ssim_score:.3f} → 심볼 검출 확정")
+            return True
+
+        # 2단계: ORB
+        orb_score = _compute_orb(sym_np, crop_np)
+        logger.debug(f"[심볼] ORB={orb_score:.3f}")
+        if orb_score >= _SYMBOL_SIM_THRESHOLD:
+            logger.info(f"심볼 ORB 일치={orb_score:.3f} → 심볼 검출 확정")
+            return True
+
+        # 3단계: Template matching (심볼 크기 비율 유지)
+        try:
+            crop_gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+            sym_gray  = cv2.cvtColor(sym_np,  cv2.COLOR_RGB2GRAY)
+            # 심볼을 crop 절반 크기로 리사이즈해 sliding window 검색
+            h, w  = crop_gray.shape
+            th, tw = max(8, h // 2), max(8, w // 2)
+            templ = cv2.resize(sym_gray, (tw, th))
+            if templ.shape[0] <= crop_gray.shape[0] and templ.shape[1] <= crop_gray.shape[1]:
+                result_map = cv2.matchTemplate(crop_gray, templ, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, _ = cv2.minMaxLoc(result_map)
+                logger.debug(f"[심볼] Template={max_val:.3f}")
+                if max_val >= _SYMBOL_TEMPLATE_THRESHOLD:
+                    logger.info(f"심볼 Template 일치={max_val:.3f} → 심볼 검출 확정")
+                    return True
+        except Exception as _te:
+            logger.debug(f"Template matching 실패: {_te}")
+
+        logger.info(
+            f"심볼 SSIM={ssim_score:.3f} ORB={orb_score:.3f} → 불일치"
+        )
+        return False
+
+    except ImportError as e:
+        logger.warning(f"심볼 비교 라이브러리 미설치: {e} → False")
+        return False
+    except Exception as e:
+        logger.warning(f"심볼 비교 실패: {e} → False")
+        return False
+
+
+# ── 워드마크 근처 텍스트 존재 확인 ──────────────────────────────────
+def _has_wordmark_nearby(
+    page_b64: str,
+    bbox: Optional[list],
+    wordmark_candidates: Optional[list] = None,
+    ocr_service=None,
+) -> bool:
+    """
+    crop 영역(+ 아래쪽 확장 영역)에서 워드마크 텍스트가 존재하는지 확인.
+
+    1차: OCR 서비스로 텍스트 추출 (Google Vision / Tesseract)
+    2차: 기본 워드마크 후보 키워드 매칭
+
+    wordmark_candidates: 사전에서 추출한 회사명/영문명/약칭 목록
+    반환값: True → 워드마크 존재 (위반 확정), False → 텍스트 없음 (주의)
+    """
+    candidates = list(wordmark_candidates or _DEFAULT_WORDMARK_CANDIDATES)
+    # 기본 후보 항상 포함
+    for kw in _DEFAULT_WORDMARK_CANDIDATES:
+        if kw not in candidates:
+            candidates.append(kw)
+
+    try:
+        from PIL import Image
+        import numpy as np
+
+        page_bytes = base64.b64decode(page_b64)
+        page_img   = Image.open(io.BytesIO(page_bytes)).convert("RGB")
+        pw, ph = page_img.width, page_img.height
+
+        # bbox 주변 + 아래 확장 영역 crop (워드마크는 심볼 아래/옆에 위치)
+        if bbox and len(bbox) == 4:
+            x1, y1, x2, y2 = [int(v) for v in bbox]
+            # 가로 확장 10%, 아래쪽은 심볼 높이의 1.5배까지
+            sym_h = max(20, y2 - y1)
+            ex1 = max(0, x1 - 10)
+            ey1 = max(0, y1 - 5)
+            ex2 = min(pw, x2 + 10)
+            ey2 = min(ph, y2 + int(sym_h * 1.5))
+        else:
+            # bbox 없으면 우측하단 넓은 영역
+            ex1, ey1 = int(pw * 0.65), int(ph * 0.72)
+            ex2, ey2 = pw, ph
+
+        expanded_img = page_img.crop((ex1, ey1, ex2, ey2))
+
+        ocr_text = ""
+        # OCR 서비스가 있으면 우선 사용
+        if ocr_service is not None:
+            try:
+                ocr_text = ocr_service.from_image(expanded_img) or ""
+            except Exception:
+                pass
+
+        # Tesseract 폴백
+        if not ocr_text.strip():
+            try:
+                import pytesseract
+                ocr_text = pytesseract.image_to_string(
+                    expanded_img, config="--psm 7 --oem 1"
+                ) or ""
+            except Exception:
+                pass
+
+        if ocr_text.strip():
+            text_lower = ocr_text.lower()
+            for cand in candidates:
+                if cand.lower() in text_lower:
+                    logger.info(f"워드마크 OCR 검출: '{cand}' in '{ocr_text[:60].strip()}'")
+                    return True
+
+        logger.debug(f"워드마크 미검출 (OCR='{ocr_text[:40].strip()}')")
+        return False
+
+    except Exception as e:
+        logger.debug(f"워드마크 확인 실패: {e}")
         return False
 
 
@@ -375,11 +549,17 @@ class ClaudeVisionJudge:
         logo_b64: Optional[str],
         company_dict: Optional[dict] = None,
         rule_hits: Optional[dict] = None,
+        logo_symbol_b64: Optional[str] = None,
     ) -> List[dict]:
         if not page_images:
             return []
         if not self.enabled:
             return []
+
+        # 심볼 레퍼런스 저장 (후처리 단계에서 참조)
+        self._logo_symbol_b64 = logo_symbol_b64
+        # company_dict 저장 (워드마크 후보 추출용)
+        self._last_company_dict = company_dict
 
         content = []
         _cache_marked = False
@@ -541,24 +721,39 @@ class ClaudeVisionJudge:
 
             items = self._parse_items(raw, valid_pages)
 
-            # ── 로고 후처리: 공공기관 오탐 차단 + 재비교 로직 ──
-            items = self._post_process_logo(items, page_images, logo_b64)
+            # ── 로고 후처리: 공공기관 오탐 차단 + 전체/심볼 재비교 ──
+            logo_symbol_b64 = getattr(self, "_logo_symbol_b64", None)
+            items = self._post_process_logo(
+                items, page_images, logo_b64,
+                logo_symbol_b64=logo_symbol_b64,
+                company_dict=company_dict,
+            )
+            # ── 얼굴/인물사진 오탐 후처리 ──────────────────────
+            items = _post_process_faces(items)
 
             return items
         except Exception as e:
             logger.error(f"Claude Vision 오류 p{valid_pages}: {e}")
             return []
 
-    # ── 로고 후처리: 공공기관 필터 + 재비교 ─────────────────────
+    # ── 로고 후처리: 공공기관 필터 + 전체비교 + 심볼비교 ────────────
     def _post_process_logo(
         self,
         items: List[dict],
         page_images: List[dict],
         logo_b64: Optional[str],
+        logo_symbol_b64: Optional[str] = None,
+        company_dict: Optional[dict] = None,
     ) -> List[dict]:
         """
-        1. 공공기관 로고 오탐 → 허용으로 변경
-        2. 로고 위반/로고후보 → crop 재비교 → 불일치 시 허용 강등
+        4단계 로고 판정 파이프라인 (요구사항):
+
+        Case A: 전체 로고 일치                          → 위반
+        Case B: 전체 로고 불일치 + 심볼 일치 + 워드마크 → 위반
+        Case C: 심볼만 일치 (워드마크 없음)              → 주의
+        Case D: 심볼 불일치 (또는 심볼 레퍼런스 없음)    → 허용
+
+        심볼 레퍼런스(logo_symbol_b64) 없으면 기존 전체 비교 결과 유지.
         """
         if not items:
             return items
@@ -567,13 +762,23 @@ class ClaudeVisionJudge:
         page_b64_map = {pg["page"]: (pg["b64"], pg.get("media_type", "image/jpeg"))
                         for pg in page_images}
 
+        # 워드마크 후보 추출 (company_dict에서)
+        wordmark_candidates: list = list(_DEFAULT_WORDMARK_CANDIDATES)
+        if company_dict:
+            direct = company_dict.get("direct_identifiers", company_dict)
+            for key in ("company_names", "english_names", "abbreviations", "brand_names"):
+                for v in (direct.get(key) or company_dict.get(key) or []):
+                    v = str(v).strip()
+                    if v and v.lower() not in [c.lower() for c in wordmark_candidates]:
+                        wordmark_candidates.append(v)
+
         processed = []
         for it in items:
-            dtype = it.get("type", "")
-            content = it.get("content", "")
+            dtype    = it.get("type",     "")
+            content  = it.get("content",  "")
             judgment = it.get("judgment", "주의")
 
-            # ── 공공기관 로고 오탐 차단 ────────────────────────
+            # ── 공공기관 로고 오탐 차단 (최우선) ─────────────────
             if _is_logo_type(dtype) or _is_logo_type(content):
                 for kw in _PUBLIC_ORG_KEYWORDS:
                     if kw.lower() in content.lower() or kw.lower() in it.get("reason", "").lower():
@@ -583,37 +788,123 @@ class ClaudeVisionJudge:
                         logger.debug(f"공공기관 로고 오탐 차단: {content} (키워드: {kw})")
                         break
 
-            # ── 로고 후보/위반 → bbox crop 재비교 ──────────────
-            if judgment in ("위반", "주의") and _is_logo_type(dtype) and it.get("judgment") != "허용":
+            # 허용으로 이미 결정됐으면 이후 단계 스킵
+            if it.get("judgment") == "허용":
+                processed.append(it)
+                continue
+
+            # ── 로고/로고후보 재비교 파이프라인 ──────────────────
+            if judgment in ("위반", "주의") and _is_logo_type(dtype):
                 page_num = it.get("page", 0)
-                if logo_b64 and page_num in page_b64_map:
-                    b64, mtype = page_b64_map[page_num]
-                    # Claude가 반환한 bbox 파싱
-                    raw_bbox = it.get("bbox")
-                    bbox = None
-                    if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
-                        try:
-                            bbox = [float(v) for v in raw_bbox]
-                        except (TypeError, ValueError):
-                            bbox = None
-                    matched = _verify_logo_candidate(b64, logo_b64, bbox, mtype)
-                    if not matched:
-                        # 재비교 불일치 → 허용 강등
-                        original_judgment = it.get("judgment", "주의")
-                        it["judgment"] = "허용"
-                        it["reason"] = (
-                            f"[로고 재비교 불일치] Claude 1차 탐지: {original_judgment}이었으나 "
-                            f"레퍼런스 로고와 crop 재비교 결과 불일치 → 허용 처리"
-                        )
-                        it["recommendation"] = ""
-                        logger.info(f"로고 재비교 불일치 → 허용: p{page_num} '{content}'")
-                    else:
-                        logger.info(f"로고 재비교 일치 → 위반 확정: p{page_num} '{content}'")
-                elif not logo_b64:
-                    # 레퍼런스 없으면 위반→주의 강등 (기존 정책 유지)
+                b64_pair = page_b64_map.get(page_num)
+
+                if not b64_pair:
+                    # 페이지 이미지 없음 → 판정 유지
+                    processed.append(it)
+                    continue
+
+                b64, mtype = b64_pair
+
+                # bbox 파싱
+                raw_bbox = it.get("bbox")
+                bbox: Optional[list] = None
+                if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+                    try:
+                        bbox = [float(v) for v in raw_bbox]
+                    except (TypeError, ValueError):
+                        bbox = None
+
+                if not logo_b64 and not logo_symbol_b64:
+                    # 레퍼런스 전혀 없음 → 위반→주의 강등
                     if it.get("judgment") == "위반":
                         it["judgment"] = "주의"
                         it["reason"] = "[로고 레퍼런스 없음] 레퍼런스 없이 위반 확정 불가 → 주의"
+                    processed.append(it)
+                    continue
+
+                # ── Case A: 전체 로고 비교 ─────────────────────
+                full_match = False
+                if logo_b64:
+                    full_match = _verify_logo_candidate(b64, logo_b64, bbox, mtype)
+
+                if full_match:
+                    it["judgment"] = "위반"
+                    it["reason"] = (
+                        f"[Case A] 전체 로고 레퍼런스 일치 — 위반 확정"
+                    )
+                    logger.info(f"Case A: 전체 로고 일치 → 위반 확정: p{page_num} '{content}'")
+                    processed.append(it)
+                    continue
+
+                # ── Case B/C/D: 심볼 비교 단계 ──────────────────
+                if logo_symbol_b64:
+                    sym_match = _verify_symbol_candidate(b64, logo_symbol_b64, bbox)
+
+                    if sym_match:
+                        # 워드마크 확인
+                        ocr_svc = None
+                        try:
+                            from services.ocr_service import get_ocr
+                            ocr_svc = get_ocr()
+                        except Exception:
+                            pass
+
+                        has_wm = _has_wordmark_nearby(
+                            b64, bbox,
+                            wordmark_candidates=wordmark_candidates,
+                            ocr_service=ocr_svc,
+                        )
+
+                        if has_wm:
+                            # Case B: 심볼 + 워드마크 → 위반
+                            it["judgment"] = "위반"
+                            it["reason"] = (
+                                f"[Case B] 전체 로고 불일치 but 심볼 일치 + 워드마크 검출 "
+                                f"— 제안사 로고 위반 확정"
+                            )
+                            logger.info(
+                                f"Case B: 심볼+워드마크 일치 → 위반: p{page_num} '{content}'"
+                            )
+                        else:
+                            # Case C: 심볼만 일치 → 주의
+                            it["judgment"] = "주의"
+                            it["reason"] = (
+                                f"[Case C] 심볼 유사 but 워드마크 미검출 "
+                                f"— 단순 그래픽 오탐 가능성, 수동 확인 필요"
+                            )
+                            it["recommendation"] = (
+                                "심볼과 유사한 그래픽 요소 발견 — 워드마크 텍스트가 없으면 오탐 가능"
+                            )
+                            logger.info(
+                                f"Case C: 심볼만 일치(워드마크 없음) → 주의: p{page_num} '{content}'"
+                            )
+                    else:
+                        # Case D: 심볼 불일치 → 허용
+                        original_judgment = it.get("judgment", "주의")
+                        it["judgment"] = "허용"
+                        it["reason"] = (
+                            f"[Case D] 전체 로고 불일치 + 심볼 불일치 "
+                            f"(Claude 1차: {original_judgment}) — 허용 처리"
+                        )
+                        it["recommendation"] = ""
+                        logger.info(
+                            f"Case D: 심볼 불일치 → 허용: p{page_num} '{content}'"
+                        )
+                else:
+                    # 심볼 레퍼런스 없음 → 기존 전체비교 결과 유지
+                    # (전체 비교 실패 시 허용)
+                    original_judgment = it.get("judgment", "주의")
+                    it["judgment"] = "허용"
+                    it["reason"] = (
+                        f"[로고 재비교 불일치] Claude 1차: {original_judgment}이었으나 "
+                        f"전체 레퍼런스 불일치, 심볼 레퍼런스 없음 → 허용 처리"
+                    )
+                    it["recommendation"] = (
+                        "심볼 레퍼런스(logo_symbol_reference.png)를 등록하면 더 정확한 판정이 가능합니다"
+                    )
+                    logger.info(
+                        f"전체 불일치+심볼 레퍼런스 없음 → 허용: p{page_num} '{content}'"
+                    )
 
             processed.append(it)
 
@@ -690,6 +981,81 @@ def _is_logo_type(text: str) -> bool:
         return False
     t = text.lower()
     return any(kw in t for kw in ("로고", "logo", "ci", "bi", "브랜드", "brand", "심볼", "symbol", "로고후보"))
+
+
+# ── 얼굴/인물사진 후처리 필터 ────────────────────────────────────
+# 얼굴 타입 키워드
+_FACE_DTYPE_KW: tuple = ("인물", "사진", "얼굴", "face", "photo", "인물사진", "사람")
+
+# 실루엣/아이콘 판별 키워드 (reason/content 포함 시 허용)
+_SILHOUETTE_KW: tuple = (
+    "실루엣", "silhouette",
+    "아이콘", "icon",
+    "픽토그램", "pictogram",
+    "벡터", "vector",
+    "일러스트", "illust",
+    "캐릭터", "character",
+    "다이어그램", "diagram",
+    "단색", "monochrome",
+    "스케치", "sketch",
+    "그래픽", "graphic",
+    "이모지", "emoji",
+)
+
+# 실제 얼굴 판별 키워드 (포함 시 위반 유지)
+_REAL_FACE_KW: tuple = (
+    "피부색", "skin",
+    "이목구비", "얼굴 디테일",
+    "눈코입", "눈·코·입",
+    "사진 질감", "photo texture",
+    "실사", "real photo",
+)
+
+
+def _post_process_faces(items: List[dict]) -> List[dict]:
+    """
+    인물사진 타입 항목 후처리 (요구사항 4번).
+
+    처리 규칙:
+    - 실루엣/아이콘/벡터/픽토그램 특징 감지 → 허용 강등
+    - 실제 얼굴 특징(피부색, 이목구비) → 위반 유지
+    메시지: "실루엣/아이콘 이미지로 확인되어 허용 처리"
+    """
+    out = []
+    for it in items:
+        dtype    = (it.get("type")    or "").lower()
+        content  = (it.get("content") or "").lower()
+        reason   = (it.get("reason")  or "").lower()
+        judgment = it.get("judgment", "주의")
+
+        # 얼굴/인물 타입 아니면 그대로 통과
+        is_face = any(kw in dtype for kw in _FACE_DTYPE_KW)
+        if not is_face:
+            out.append(it)
+            continue
+
+        # 이미 허용 → 통과
+        if judgment == "허용":
+            out.append(it)
+            continue
+
+        combined = dtype + " " + content + " " + reason
+
+        # 실제 얼굴 특징이 명시되어 있으면 위반 유지
+        if any(kw in combined for kw in _REAL_FACE_KW):
+            out.append(it)
+            continue
+
+        # 실루엣/아이콘 특징 → 허용 강등
+        if any(kw in combined for kw in _SILHOUETTE_KW):
+            it = dict(it)
+            it["judgment"]       = "허용"
+            it["reason"]         = "실루엣/아이콘 이미지로 확인되어 허용 처리"
+            it["recommendation"] = ""
+            logger.debug(f"얼굴 오탐 허용 처리: '{it.get('content', '')}' (실루엣/아이콘)")
+
+        out.append(it)
+    return out
 
 
 # ── 싱글톤 ───────────────────────────────────────────────────────

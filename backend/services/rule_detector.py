@@ -403,3 +403,70 @@ def get_rule_detector() -> RuleDetector:
     global _inst
     if _inst is None: _inst = RuleDetector()
     return _inst
+
+
+# ══════════════════════════════════════════════════════════════════
+# classify_person_name() — 대표자명 오탐 방지 (요구사항 3번)
+#
+# 규칙:
+#   - 대표자 라벨이 있을 때만 "대표자명" 분류
+#   - 참여인력 라벨이 있으면 "참여인력명"
+#   - 그 외 → "기타 인명"
+#
+# 대표자 라벨: 대표자, 대표이사, CEO, 법인대표, 대표자명
+# 참여인력 라벨: 참여인력, PM, PL, 담당자, 책임자, 인력, 팀장, 수석
+# ══════════════════════════════════════════════════════════════════
+
+# 대표자 라벨 패턴 (이름 앞 20자 이내)
+_REP_LABEL_RE = re.compile(
+    r'(대표자명?|대표이사|CEO|C\.E\.O|법인대표|대표\s*[:：·])',
+    re.I,
+)
+
+# 참여인력 라벨 패턴
+_PERSONNEL_LABEL_RE = re.compile(
+    r'(참여인력|PM|PL|담당자|책임자|인력\s*[:：·]|팀장|수석|주임|'
+    r'참여자|투입인력|프로젝트\s*매니저)',
+    re.I,
+)
+
+
+def classify_person_name(name: str, context_text: str) -> str:
+    """
+    이름(name)이 주어진 문맥(context_text) 안에서 어떤 유형의 인명인지 분류.
+
+    반환값:
+        "대표자명"    — 대표자 라벨이 명확히 존재
+        "참여인력명"  — 참여인력 라벨이 명확히 존재
+        "기타 인명"   — 라벨 없음 (대표자명으로 분류 금지)
+
+    사용 위치:
+        - rule_detector._from_dict() 에서 representative_names 탐지 시 호출
+        - Vision 결과 후처리에서 이름 유형 재분류 시 호출
+    """
+    if not name or not context_text:
+        return "기타 인명"
+
+    # 이름 위치 탐지 (정규화된 이름으로도 탐색)
+    norm_name = _normalize_name(name)
+    positions = []
+    for m in re.finditer(re.escape(name), context_text, re.I):
+        positions.append(m.start())
+    if norm_name != name:
+        for m in re.finditer(re.escape(norm_name), context_text, re.I):
+            positions.append(m.start())
+
+    if not positions:
+        return "기타 인명"
+
+    # 이름 등장 위치 기준 앞 50자 윈도우에서 라벨 탐지
+    for pos in positions:
+        window_start = max(0, pos - 50)
+        window       = context_text[window_start: pos + len(name) + 10]
+
+        if _REP_LABEL_RE.search(window):
+            return "대표자명"
+        if _PERSONNEL_LABEL_RE.search(window):
+            return "참여인력명"
+
+    return "기타 인명"
