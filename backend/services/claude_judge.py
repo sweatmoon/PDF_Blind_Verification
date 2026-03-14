@@ -319,6 +319,120 @@ def _verify_logo_candidate(
         return False
 
 
+# ── 전체 로고 이미지에서 심볼 영역 자동 추출 ─────────────────────
+def _extract_symbol_from_logo(logo_b64: str) -> Optional[str]:
+    """
+    전체 로고 이미지에서 심볼 영역을 자동 추출해 base64로 반환.
+
+    추출 전략 (우선순위 순):
+
+    방법 A — 색상 기반 추출 (권장)
+      빨간색/진한 색상 픽셀 클러스터의 bounding box를 계산해
+      심볼 영역으로 사용. 해상도·여백 변화에 강건하다.
+      조건:
+        - 빨간색 마스크: H∈[0°,15°]∪[345°,360°], S≥40%, V≥30%
+        - 마스킹 픽셀 비율 ≥ 2% (너무 작으면 의미 없음)
+        - bounding box 가로 비율 ≤ 50% (심볼이 전체 로고의 절반 이하)
+
+    방법 B — 좌측 비율 분리 (폴백)
+      이미지 좌측 33%를 심볼 영역으로 사용.
+      색상 기반 추출 실패 시 대안.
+
+    반환값:
+      base64 문자열 (PNG) → 심볼 추출 성공
+      None                → 추출 실패 (라이브러리 없음, 이미지 오류 등)
+    """
+    if not logo_b64:
+        return None
+    try:
+        import numpy as np
+        from PIL import Image
+        import cv2
+
+        logo_bytes = base64.b64decode(logo_b64)
+        logo_img   = Image.open(io.BytesIO(logo_bytes)).convert("RGB")
+        logo_np    = np.array(logo_img)
+        h, w       = logo_np.shape[:2]
+
+        # ── 방법 A: 빨간색 픽셀 bounding box ─────────────────────
+        # BGR→HSV 변환 후 빨간색 범위 마스킹
+        bgr  = cv2.cvtColor(logo_np, cv2.COLOR_RGB2BGR)
+        hsv  = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+
+        # 빨간색 범위 1: H=[0,15] (0°~30°)
+        mask1 = cv2.inRange(hsv,
+                            np.array([0,  100, 80]),
+                            np.array([15, 255, 255]))
+        # 빨간색 범위 2: H=[165,180] (330°~360°)
+        mask2 = cv2.inRange(hsv,
+                            np.array([165, 100, 80]),
+                            np.array([180, 255, 255]))
+        red_mask = cv2.bitwise_or(mask1, mask2)
+
+        red_pixel_count  = int(np.sum(red_mask > 0))
+        total_pixels     = h * w
+        red_ratio        = red_pixel_count / max(total_pixels, 1)
+
+        if red_ratio >= 0.02:  # 빨간 픽셀이 2% 이상
+            # 빨간 픽셀들의 좌표 추출
+            ys, xs = np.where(red_mask > 0)
+            y1_r, y2_r = int(ys.min()), int(ys.max())
+            x1_r, x2_r = int(xs.min()), int(xs.max())
+
+            # 심볼이 로고 너비의 50% 이하인 경우만 유효
+            sym_w = x2_r - x1_r
+            if sym_w <= w * 0.5:
+                # 약간 패딩 추가 (심볼 경계를 넉넉하게)
+                pad = max(4, int(min(h, sym_w) * 0.1))
+                x1_r = max(0, x1_r - pad)
+                y1_r = max(0, y1_r - pad)
+                x2_r = min(w, x2_r + pad)
+                y2_r = min(h, y2_r + pad)
+
+                symbol_img = logo_img.crop((x1_r, y1_r, x2_r, y2_r))
+                buf = io.BytesIO()
+                symbol_img.save(buf, format="PNG")
+                sym_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                logger.info(
+                    f"심볼 자동 추출 (방법 A — 색상 기반): "
+                    f"bbox=({x1_r},{y1_r},{x2_r},{y2_r}), "
+                    f"빨간픽셀비율={red_ratio:.1%}, "
+                    f"심볼크기={x2_r-x1_r}×{y2_r-y1_r}"
+                )
+                return sym_b64
+            else:
+                logger.debug(
+                    f"방법 A: 빨간 영역이 너무 넓음 (sym_w={sym_w}, w={w}) → 방법 B 시도"
+                )
+        else:
+            logger.debug(
+                f"방법 A: 빨간 픽셀 부족 ({red_ratio:.1%} < 2%) → 방법 B 시도"
+            )
+
+        # ── 방법 B: 좌측 33% 분리 (폴백) ─────────────────────────
+        split_x = int(w * 0.33)
+        if split_x >= 8:  # 너무 작으면 의미 없음
+            symbol_img = logo_img.crop((0, 0, split_x, h))
+            buf = io.BytesIO()
+            symbol_img.save(buf, format="PNG")
+            sym_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            logger.info(
+                f"심볼 자동 추출 (방법 B — 좌측 33%): "
+                f"size={split_x}×{h}"
+            )
+            return sym_b64
+
+        logger.warning("심볼 자동 추출 실패: 이미지 크기 부족")
+        return None
+
+    except ImportError as e:
+        logger.debug(f"심볼 추출 라이브러리 미설치: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"심볼 자동 추출 오류: {e}")
+        return None
+
+
 # ── 심볼 비교: crop vs logo_symbol_reference ─────────────────────
 def _verify_symbol_candidate(
     page_b64: str,
@@ -779,12 +893,15 @@ class ClaudeVisionJudge:
         """
         4단계 로고 판정 파이프라인 (요구사항):
 
-        Case A: 전체 로고 일치                          → 위반
-        Case B: 전체 로고 불일치 + 심볼 일치 + 워드마크 → 위반
-        Case C: 심볼만 일치 (워드마크 없음)              → 주의
-        Case D: 심볼 불일치 (또는 심볼 레퍼런스 없음)    → 허용
+        Case A:      전체 로고 일치                              → 위반
+        Case B:      전체 로고 불일치 + 심볼 일치 + 워드마크      → 위반
+        Case C:      심볼만 일치 (워드마크 없음)                  → 주의
+        Case D:      심볼 불일치                                  → 허용
 
-        심볼 레퍼런스(logo_symbol_b64) 없으면 기존 전체 비교 결과 유지.
+        심볼 레퍼런스(logo_symbol_b64) 없으면:
+          → _extract_symbol_from_logo()로 전체 로고에서 자동 추출
+          → 추출 성공 시 Case B/C/D-Auto로 동일 흐름 수행
+          → 추출 실패 시 허용 처리 (레퍼런스 부족)
         """
         if not items:
             return items
@@ -922,20 +1039,81 @@ class ClaudeVisionJudge:
                             f"Case D: 심볼 불일치 → 허용: p{page_num} '{content}'"
                         )
                 else:
-                    # 심볼 레퍼런스 없음 → 기존 전체비교 결과 유지
-                    # (전체 비교 실패 시 허용)
-                    original_judgment = it.get("judgment", "주의")
-                    it["judgment"] = "허용"
-                    it["reason"] = (
-                        f"[로고 재비교 불일치] Claude 1차: {original_judgment}이었으나 "
-                        f"전체 레퍼런스 불일치, 심볼 레퍼런스 없음 → 허용 처리"
-                    )
-                    it["recommendation"] = (
-                        "심볼 레퍼런스(logo_symbol_reference.png)를 등록하면 더 정확한 판정이 가능합니다"
-                    )
-                    logger.info(
-                        f"전체 불일치+심볼 레퍼런스 없음 → 허용: p{page_num} '{content}'"
-                    )
+                    # ── 심볼 레퍼런스 없음 → 전체 로고에서 자동 추출 후 재시도 ──
+                    auto_sym_b64 = _extract_symbol_from_logo(logo_b64) if logo_b64 else None
+
+                    if auto_sym_b64:
+                        # 자동 추출 성공 → 심볼 비교 수행 (Case B/C/D)
+                        logger.info(
+                            f"심볼 자동 추출 성공 → 재비교 수행: p{page_num} '{content}'"
+                        )
+                        sym_match = _verify_symbol_candidate(b64, auto_sym_b64, bbox)
+
+                        if sym_match:
+                            ocr_svc = None
+                            try:
+                                from services.ocr_service import get_ocr
+                                ocr_svc = get_ocr()
+                            except Exception:
+                                pass
+
+                            has_wm = _has_wordmark_nearby(
+                                b64, bbox,
+                                wordmark_candidates=wordmark_candidates,
+                                ocr_service=ocr_svc,
+                            )
+
+                            if has_wm:
+                                # Case B (자동 추출): 심볼 + 워드마크 → 위반
+                                it["judgment"] = "위반"
+                                it["reason"] = (
+                                    f"[Case B-Auto] 전체 로고 불일치 but "
+                                    f"자동 추출 심볼 일치 + 워드마크 검출 — 위반 확정"
+                                )
+                                logger.info(
+                                    f"Case B-Auto: 자동추출 심볼+워드마크 → 위반: "
+                                    f"p{page_num} '{content}'"
+                                )
+                            else:
+                                # Case C (자동 추출): 심볼만 일치 → 주의
+                                it["judgment"] = "주의"
+                                it["reason"] = (
+                                    f"[Case C-Auto] 자동 추출 심볼 유사 but 워드마크 미검출 "
+                                    f"— 수동 확인 필요"
+                                )
+                                it["recommendation"] = (
+                                    "자동 추출 심볼과 유사 — 워드마크 미검출로 주의 처리, "
+                                    "수동 검토 권장"
+                                )
+                                logger.info(
+                                    f"Case C-Auto: 자동추출 심볼만 일치(워드마크 없음) → 주의: "
+                                    f"p{page_num} '{content}'"
+                                )
+                        else:
+                            # Case D (자동 추출): 심볼 불일치 → 허용
+                            original_judgment = it.get("judgment", "주의")
+                            it["judgment"] = "허용"
+                            it["reason"] = (
+                                f"[Case D-Auto] 전체 로고 불일치 + 자동 추출 심볼 불일치 "
+                                f"(Claude 1차: {original_judgment}) — 허용 처리"
+                            )
+                            it["recommendation"] = ""
+                            logger.info(
+                                f"Case D-Auto: 자동추출 심볼 불일치 → 허용: "
+                                f"p{page_num} '{content}'"
+                            )
+                    else:
+                        # 자동 추출도 실패 → 전체 레퍼런스 불일치 그대로 허용
+                        original_judgment = it.get("judgment", "주의")
+                        it["judgment"] = "허용"
+                        it["reason"] = (
+                            f"[로고 재비교 불일치] Claude 1차: {original_judgment}이었으나 "
+                            f"전체 레퍼런스 불일치, 심볼 자동 추출 실패 → 허용 처리"
+                        )
+                        it["recommendation"] = ""
+                        logger.info(
+                            f"전체 불일치+심볼 자동 추출 실패 → 허용: p{page_num} '{content}'"
+                        )
 
             processed.append(it)
 

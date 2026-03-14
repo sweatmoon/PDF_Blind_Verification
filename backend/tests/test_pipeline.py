@@ -411,21 +411,171 @@ def test_tc5_symbol_based_logo_verdict():
     assert "Case D" in items[0]["reason"], f"Case D reason 누락: {items[0]['reason']}"
     print("  ✔ Case D: 전체 불일치 + 심볼 불일치 → 허용")
 
-    # ── 심볼 레퍼런스 없는 경우: 전체 비교 실패 → 허용 (심볼 등록 권장) ──
-    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False):
+    # ── 심볼 레퍼런스 없는 경우 (자동 추출 실패) → 허용 ──────────────
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._extract_symbol_from_logo", return_value=None):
         items = judge._post_process_logo(
             [_make_logo_item("위반")],
             _page_images, _logo_b64, logo_symbol_b64=None,  # 심볼 레퍼런스 없음
         )
     assert items[0]["judgment"] == "허용", (
-        f"No-symbol 실패: 심볼 레퍼런스 없음 → 허용이어야 하는데 '{items[0]['judgment']}'"
+        f"No-symbol 실패: 심볼 레퍼런스 없음(자동추출 실패) → 허용이어야 하는데 '{items[0]['judgment']}'"
     )
-    assert "심볼 레퍼런스" in items[0]["recommendation"] or \
-           "심볼 레퍼런스" in items[0]["reason"], \
+    assert "자동 추출 실패" in items[0]["reason"] or "허용 처리" in items[0]["reason"], \
         f"No-symbol reason 누락: {items[0]['reason']}"
-    print("  ✔ No-symbol: 심볼 레퍼런스 없음 → 허용 (등록 권장)")
+    print("  ✔ No-symbol: 심볼 레퍼런스 없음 + 자동 추출 실패 → 허용")
 
     print("✅ TC5 통과: 심볼 기반 로고 판정 Case A/B/C/D + No-symbol 모두 정상")
+
+
+# ────────────────────────────────────────────────────────────────────
+# TC7: 심볼 자동 추출 검증
+# ────────────────────────────────────────────────────────────────────
+def test_tc7_symbol_auto_extraction():
+    """
+    _extract_symbol_from_logo() 자동 추출 로직 검증:
+
+    (A) 빨간색 심볼 있는 로고  → 방법 A (색상 기반) 추출 성공
+    (B) 빨간색 없는 로고       → 방법 B (좌측 33%) 추출 성공
+    (C) 추출 성공 시 _post_process_logo()가 Case B/C/D-Auto 분기 진행
+    (D) 추출 실패 시 허용 처리 (자동 추출 실패 메시지 포함)
+    """
+    import unittest.mock as _mock
+    import base64, io
+    from services.claude_judge import _extract_symbol_from_logo, ClaudeVisionJudge
+
+    # ──────────────────────────────────────────────────
+    # 테스트용 이미지 생성 헬퍼
+    # ──────────────────────────────────────────────────
+    def _make_logo_b64(width=200, height=60, red_region=True):
+        """
+        테스트용 로고 이미지 생성.
+        red_region=True  → 좌측 40px에 빨간 픽셀 (방법 A 대상)
+        red_region=False → 균일 회색 이미지 (방법 B 대상)
+        """
+        try:
+            from PIL import Image as _PIL
+            import numpy as np
+            img = _PIL.new("RGB", (width, height), (220, 220, 220))
+            if red_region:
+                # 좌측 40px 영역을 빨간색으로
+                pixels = img.load()
+                for y in range(height):
+                    for x in range(40):
+                        pixels[x, y] = (200, 30, 30)  # 빨간색
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            return base64.b64encode(buf.getvalue()).decode()
+        except ImportError:
+            return base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100).decode()
+
+    # ── (A) 방법 A: 빨간 심볼 → 색상 기반 추출 ──────────────────────
+    try:
+        import cv2  # noqa: F401  (cv2 필요)
+        import numpy as np  # noqa: F401
+
+        red_logo_b64 = _make_logo_b64(red_region=True)
+        sym_b64 = _extract_symbol_from_logo(red_logo_b64)
+        assert sym_b64 is not None, "TC7-A 실패: 빨간 심볼 로고에서 추출 결과가 None"
+        # 추출된 심볼이 유효한 base64+PNG인지 확인
+        sym_bytes = base64.b64decode(sym_b64)
+        assert sym_bytes[:4] == b"\x89PNG", f"TC7-A 실패: 추출 결과가 PNG가 아님 (헤더: {sym_bytes[:4]})"
+        print("  ✔ TC7-A: 빨간 심볼 → 방법 A(색상 기반) 추출 성공")
+    except ImportError:
+        print("  ⚠ TC7-A: cv2 미설치 → 스킵 (라이브러리 없음)")
+
+    # ── (B) 방법 B: 빨간색 없는 로고 → 좌측 33% 폴백 ────────────────
+    try:
+        import cv2  # noqa: F401
+        grey_logo_b64 = _make_logo_b64(red_region=False)
+        # 방법 A가 실패하도록 빨간 픽셀 비율을 낮춘 이미지 사용 (모두 회색)
+        sym_b64 = _extract_symbol_from_logo(grey_logo_b64)
+        assert sym_b64 is not None, "TC7-B 실패: 회색 로고에서 방법 B 추출 결과가 None"
+        sym_bytes = base64.b64decode(sym_b64)
+        assert sym_bytes[:4] == b"\x89PNG", "TC7-B 실패: 추출 결과가 PNG가 아님"
+        print("  ✔ TC7-B: 빨간색 없는 로고 → 방법 B(좌측 33%) 추출 성공")
+    except ImportError:
+        print("  ⚠ TC7-B: cv2 미설치 → 스킵")
+
+    # ── (C) 자동 추출 성공 시 _post_process_logo Case B-Auto 분기 ────
+    judge = ClaudeVisionJudge.__new__(ClaudeVisionJudge)
+    try:
+        from PIL import Image as _PIL2
+        buf2 = io.BytesIO()
+        _PIL2.new("RGB", (10, 10), (128, 128, 128)).save(buf2, "PNG")
+        dummy_b64 = base64.b64encode(buf2.getvalue()).decode()
+    except ImportError:
+        dummy_b64 = base64.b64encode(b"dummy").decode()
+
+    _page_images = [{"page": 1, "b64": dummy_b64, "media_type": "image/jpeg"}]
+    _logo_b64    = dummy_b64
+
+    def _make_logo_item(judgment="위반"):
+        return {
+            "page": 1, "type": "로고", "content": "ACTIVO",
+            "judgment": judgment, "reason": "1차 탐지",
+            "recommendation": "", "bbox": [10, 10, 100, 50],
+        }
+
+    # 자동 추출 성공 + 심볼 일치 + 워드마크 있음 → Case B-Auto(위반)
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._extract_symbol_from_logo", return_value=dummy_b64), \
+         _mock.patch("services.claude_judge._verify_symbol_candidate", return_value=True), \
+         _mock.patch("services.claude_judge._has_wordmark_nearby", return_value=True):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, logo_symbol_b64=None,
+        )
+    assert items[0]["judgment"] == "위반", (
+        f"TC7-C 실패: 자동추출+심볼+워드마크 → 위반이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "B-Auto" in items[0]["reason"], f"TC7-C reason 누락 'B-Auto': {items[0]['reason']}"
+    print("  ✔ TC7-C: 자동 추출 성공 + 심볼+워드마크 → Case B-Auto 위반")
+
+    # 자동 추출 성공 + 심볼 일치 + 워드마크 없음 → Case C-Auto(주의)
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._extract_symbol_from_logo", return_value=dummy_b64), \
+         _mock.patch("services.claude_judge._verify_symbol_candidate", return_value=True), \
+         _mock.patch("services.claude_judge._has_wordmark_nearby", return_value=False):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, logo_symbol_b64=None,
+        )
+    assert items[0]["judgment"] == "주의", (
+        f"TC7-C2 실패: 자동추출+심볼만 → 주의이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "C-Auto" in items[0]["reason"], f"TC7-C2 reason 누락 'C-Auto': {items[0]['reason']}"
+    print("  ✔ TC7-C2: 자동 추출 성공 + 심볼만 일치 → Case C-Auto 주의")
+
+    # 자동 추출 성공 + 심볼 불일치 → Case D-Auto(허용)
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._extract_symbol_from_logo", return_value=dummy_b64), \
+         _mock.patch("services.claude_judge._verify_symbol_candidate", return_value=False):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, logo_symbol_b64=None,
+        )
+    assert items[0]["judgment"] == "허용", (
+        f"TC7-C3 실패: 자동추출+심볼불일치 → 허용이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "D-Auto" in items[0]["reason"], f"TC7-C3 reason 누락 'D-Auto': {items[0]['reason']}"
+    print("  ✔ TC7-C3: 자동 추출 성공 + 심볼 불일치 → Case D-Auto 허용")
+
+    # ── (D) 자동 추출 실패 → 허용 ──────────────────────────────────
+    with _mock.patch("services.claude_judge._verify_logo_candidate", return_value=False), \
+         _mock.patch("services.claude_judge._extract_symbol_from_logo", return_value=None):
+        items = judge._post_process_logo(
+            [_make_logo_item("위반")],
+            _page_images, _logo_b64, logo_symbol_b64=None,
+        )
+    assert items[0]["judgment"] == "허용", (
+        f"TC7-D 실패: 자동 추출 실패 → 허용이어야 하는데 '{items[0]['judgment']}'"
+    )
+    assert "자동 추출 실패" in items[0]["reason"] or "허용 처리" in items[0]["reason"], \
+        f"TC7-D reason 누락: {items[0]['reason']}"
+    print("  ✔ TC7-D: 자동 추출 실패 → 허용 (fallback)")
+
+    print("✅ TC7 통과: 심볼 자동 추출 — 방법 A/B + Case B/C/D-Auto + 추출 실패 허용 모두 정상")
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -553,6 +703,7 @@ if __name__ == "__main__":
         ("TC4 이름목록 분류",          test_tc4_name_list_not_representative),
         ("TC5 심볼기반 로고 판정",     test_tc5_symbol_based_logo_verdict),
         ("TC6 인물사진 오탐 방지",     test_tc6_person_photo_false_positive),
+        ("TC7 심볼 자동 추출",         test_tc7_symbol_auto_extraction),
     ]
 
     passed = 0
