@@ -294,15 +294,11 @@ class ClaudeVisionJudge:
             if rep:
                 lines.append(f"대표자: {', '.join(rep)}")
 
-            # ★★★ 참여인력 실명 목록 — 최우선 위반 트리거 (별도 블록으로 강조)
-            personnel = _get("personnel_names")
-            if personnel:
-                # 사전 이름은 다른 정보와 섞지 않고 별도 텍스트 블록으로 강조 전달
-                lines.append(
-                    f"【절대 위반 트리거 — 실명 목록】\n"
-                    f"아래 이름 중 하나라도 이미지 어디에서든 보이면 OOO 처리 여부와 무관하게 즉시 위반으로 판정하라.\n"
-                    f"이름: {', '.join(personnel)}"
-                )
+            # ★★★ 참여인력 실명 목록은 배치 전체에 전달하지 않음 ★★★
+            # 이유: 442명 전체를 배치에 뿌리면 Claude가 O O O 마스킹 패턴을 보고
+            # "실명이 숨겨져 있다"고 판단하여 없는 위반을 만들어냄 (27페이지 오탐 원인)
+            # 대신 텍스트 레이어에서 실제 탐지된 이름만 해당 페이지 힌트(rule_hits)로 전달함
+            # personnel = _get("personnel_names")  # 의도적으로 비활성화
 
             emails = _get("emails")
             if emails:
