@@ -270,6 +270,24 @@ class ServerPipeline:
 
         rule_total = sum(len(v) for v in rule_hits_by_page.values())
         logger.info(f"[{job_id}] 규칙 탐지 완료: {rule_total}건 (OCR 포함)")
+
+        # ── OCR 품질 로그 (요구사항 7번) ────────────────────────────
+        for i in range(total):
+            pymupdf_len = len(raw_texts.get(i, "").strip())
+            _ocr_used   = i in ocr_pages
+            _ocr_engine = ("GoogleVision" if gv_on else "Tesseract") if _ocr_used else "none"
+            _ocr_len    = len(raw_texts.get(i, "").strip()) if _ocr_used else 0
+            _rule_cnt   = len(rule_hits_by_page.get(str(i + 1), []))
+            logger.debug(
+                f"[{job_id}] page={i+1} | "
+                f"pymupdf_text={pymupdf_len} | "
+                f"ocr_used={_ocr_used} | "
+                f"ocr_engine={_ocr_engine} | "
+                f"ocr_len={_ocr_len} | "
+                f"rule_hits={_rule_cnt} | "
+                f"vision_items=pending"   # vision은 아직 미실행
+            )
+
         prog(50, f"규칙 탐지 {rule_total}건 · 이미지 변환 시작…")
 
         # ── 4. 페이지 이미지 변환 (Claude Vision용, 배치 병렬) ───
@@ -349,6 +367,20 @@ class ServerPipeline:
 
             logger.info(f"[{job_id}] Claude Vision 완료: {len(all_vision_items)}건")
 
+        # ── Vision 완료 후 페이지별 vision_items 카운트 보완 로그 ──────
+        if all_vision_items:
+            _vision_per_page: dict[int, int] = {}
+            for _vi in all_vision_items:
+                try:
+                    _vp = int(_vi.get("page", 0))
+                except Exception:
+                    _vp = 0
+                _vision_per_page[_vp] = _vision_per_page.get(_vp, 0) + 1
+            for _vp, _vc in sorted(_vision_per_page.items()):
+                logger.debug(
+                    f"[{job_id}] page={_vp} | vision_items={_vc}"
+                )
+
         prog(90, "결과 합산 중…")
 
         # ── 6. 규칙 + Vision 합산 ──────────────────────────────
@@ -376,12 +408,71 @@ class ServerPipeline:
         return report
 
 
-# ── 결과 합산 ────────────────────────────────────────────────────
-def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int) -> dict:
-    """제대로 하면 규칙 탐지(OCR 포함) + Vision 결과를 페이지별로 합산"""
-    page_map: dict[int, list] = {}
+# ══════════════════════════════════════════════════════════════════
+# _merge_results 분리 구조 (요구사항 5번)
+#
+#  단계 순서:
+#   1. normalize_vision_items()      — 더미·중복 제거, 기본 정규화
+#   2. apply_text_fp_filters()       — 일반명사/기관명 예외 (비로고 전용)
+#   3. apply_logo_filters()          — 로고 공공기관 차단 (로고 전용)
+#   4. apply_face_filters()          — 실루엣/아이콘 허용 (얼굴 전용)
+#   5. merge_rule_and_vision()       — rule_hits 병합 + 우선순위 verdict
+#   6. finalize_page_map()           — 최종 page_map 반환
+#
+#  우선순위 (요구사항 6번):
+#   1순위: 사전 등록 실명 rule
+#   2순위: 이메일/URL rule
+#   3순위: 로고 후처리 (rule verdict 변경 금지)
+#   4순위: Claude Vision 판정
+#   5순위: OCR 텍스트 rule
+# ══════════════════════════════════════════════════════════════════
 
-    # Vision 항목 처리
+# ── 더미 타입/컨텐츠 상수 ─────────────────────────────────────────
+_DUMMY_TYPES: tuple = (
+    "텍스트 추출 탐지", "텍스트추출탐지", "텍스트 탐지", "텍스트탐지",
+    "텍스트 탐지 실명", "텍스트탐지실명", "참여인력 실명", "텍스트 실명",
+)
+_DUMMY_CONTENTS: tuple = (
+    "텍스트 추출로 확인된 위반 요소 존재",
+    "텍스트 추출 위반 확인",
+    "텍스트 추출로 확인된 위반",
+    "텍스트 추출로 탐지된 사전 등록 실명",
+    "사전 등록 실명 목록의 이름들이 텍스트 추출로 탐지됨",
+    "텍스트 추출로 사전 등록 실명이 탐지됨",
+)
+_DUMMY_KEYWORDS: tuple = (
+    "텍스트 추출로 탐지된", "사전 등록 실명 목록", "텍스트 추출로 사전 등록"
+)
+
+# 얼굴/인물 타입 키워드
+_FACE_DTYPES_KW: tuple = ("인물", "사진", "얼굴", "face", "photo", "인물사진", "사람")
+
+# 실루엣/아이콘 허용 키워드 (reason/content에 포함 시 허용)
+_ICON_ALLOW_KW: tuple = (
+    "실루엣", "silhouette", "아이콘", "icon", "픽토그램", "pictogram",
+    "벡터", "vector", "일러스트", "illust", "캐릭터", "character",
+    "다이어그램", "diagram", "단색", "monochrome", "스케치", "sketch",
+)
+
+# 공공기관 로고 허용 키워드 (하드코딩 보조)
+_PUBLIC_ORG_KW_EXTRA: tuple = (
+    "공단", "공사", "위원회", "연구원", "연구소", "진흥원", "협회", "학회",
+    "재단", "센터", "국토교통부", "행정안전부", "보건복지부", "국가철도공단",
+)
+
+
+# ─────────────────────────────────────────────────────────────────
+# 1단계: Vision 결과 정규화 (더미 제거 + 정수 페이지 + 중복 제거)
+# ─────────────────────────────────────────────────────────────────
+def normalize_vision_items(vision_items: list) -> list:
+    """
+    - 더미 타입/컨텐츠 항목 제거
+    - page → int 변환
+    - 같은 페이지 내 동일 (type, content) 중복 제거
+    반환: 정규화된 item 리스트 (각 item에 _page_int 키 추가)
+    """
+    seen: set = set()
+    out = []
     for it in vision_items:
         try:
             p = int(it.get("page", 0))
@@ -389,160 +480,365 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
             p = 1
         if p < 1:
             p = 1
-        content = it.get("content", "")
+
+        content = (it.get("content") or "").strip()
+        dtype   = (it.get("type")    or "기타").strip()
+
+        # 더미 필터
+        if dtype in _DUMMY_TYPES:
+            continue
+        if content in _DUMMY_CONTENTS:
+            continue
+        if any(kw in content for kw in _DUMMY_KEYWORDS):
+            continue
+
+        # 중복 제거 (페이지 + 타입 + 컨텐츠 소문자)
+        key = (p, dtype, content.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+
+        it = dict(it)          # 원본 변형 방지
+        it["_page_int"] = p
+        out.append(it)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────
+# 2단계: 텍스트 오탐 필터 (비로고 타입 전용)
+# ─────────────────────────────────────────────────────────────────
+def apply_text_fp_filters(items: list) -> list:
+    """
+    로고 타입이 아닌 항목에만 적용:
+    - 일반 명사(_COMMON_WORDS) → 허용
+    - 2글자 이하 + reason에 기관명 키워드 → 허용
+    로고 타입 항목은 이 함수를 완전히 건너뜀 (요구사항 2번)
+    """
+    from services.claude_judge import _is_logo_type
+    from services.rule_detector import _COMMON_WORDS as _CW
+    import re as _re
+
+    _NAME_DTYPES = frozenset((
+        "참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명"
+    ))
+    _ORG_RE = _re.compile(
+        r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|'
+        r'건강보험|국민연금|서민금융|대국민|안전처|안전부'
+    )
+
+    out = []
+    for it in items:
         dtype   = it.get("type", "기타")
+        content = it.get("content", "")
+        cs      = content.strip()
 
-        # ── "텍스트 추출 탐지" 더미 항목 필터링 ──────────────────────
-        _DUMMY_TYPES = (
-            "텍스트 추출 탐지", "텍스트추출탐지", "텍스트 탐지", "텍스트탐지",
-            "텍스트 탐지 실명", "텍스트탐지실명", "참여인력 실명", "텍스트 실명",
-        )
-        _DUMMY_CONTENTS = (
-            "텍스트 추출로 확인된 위반 요소 존재",
-            "텍스트 추출 위반 확인",
-            "텍스트 추출로 확인된 위반",
-            "텍스트 추출로 탐지된 사전 등록 실명",
-            "사전 등록 실명 목록의 이름들이 텍스트 추출로 탐지됨",
-            "텍스트 추출로 사전 등록 실명이 탐지됨",
-        )
-        _DUMMY_KEYWORDS = ("텍스트 추출로 탐지된", "사전 등록 실명 목록", "텍스트 추출로 사전 등록")
-        _content_strip = content.strip()
-        if (dtype in _DUMMY_TYPES
-                or _content_strip in _DUMMY_CONTENTS
-                or any(kw in _content_strip for kw in _DUMMY_KEYWORDS)):
+        # 로고 타입 → 텍스트 예외 규칙 완전 스킵
+        if _is_logo_type(dtype) or _is_logo_type(cs):
+            out.append(it)
             continue
 
-        # vision끼리 대소문자 무시 중복 제거
-        already = any(
-            d["detected_text"].lower() == content.lower() and d["detection_type"] == dtype
-            for d in page_map.get(p, [])
+        is_name_dtype = (
+            dtype in _NAME_DTYPES
+            or "인력" in dtype or "이름" in dtype or "명" in dtype
         )
-        if already:
+
+        # ① 일반 명사 체크
+        if cs in _CW and is_name_dtype:
+            it = dict(it)
+            it["judgment"] = "허용"
+            it["reason"]   = (
+                f"맥락상 일반 명사로 판단 – 인명 오탐 제외 "
+                f"('{cs}'은 고유 인명이 아님)"
+            )
+            it["recommendation"] = "검증 불필요 – 일반 명사/단어로 확인됨"
+            it["_fp_filtered"]   = "common_word"
+            out.append(it)
             continue
 
-        # ── 로고 타입 여부 사전 체크 ──────────────────────────────────────────
-        from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
-        _is_logo = _is_logo_type(dtype) or _is_logo_type(content)
-
-        # ── 일반 명사 체크 (로고 타입이면 스킵 — 로고는 텍스트 예외 규칙 미적용)
-        from services.rule_detector import _COMMON_WORDS as _CW
-        import re as _re
-        content_stripped = content.strip()
-        _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
-        if not _is_logo:
-            if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
-                page_map.setdefault(p, []).append({
-                    "detection_type":  dtype,
-                    "detected_text":   content,
-                    "verdict":         "허용",
-                    "reason":          f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{content_stripped}'은 고유 인명이 아님)",
-                    "recommendation":  "검증 불필요 – 일반 명사/단어로 확인됨",
-                    "confidence":      0.98,
-                    "source":          "vision",
-                })
+        # ② 2글자 이하 + 기관명 맥락
+        if (len(cs) <= 2
+                and dtype in ("참여인력명", "인력명", "업체명", "대표자명")
+                or (len(cs) <= 2 and ("인력" in dtype or "이름" in dtype))):
+            reason_text = (it.get("reason") or "") + " " + (it.get("recommendation") or "")
+            if _ORG_RE.search(reason_text):
+                it = dict(it)
+                it["judgment"] = "허용"
+                it["reason"]   = (
+                    f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 "
+                    f"(reason: {reason_text[:60]})"
+                )
+                it["recommendation"] = "기관명 복합어로 확인됨, 검증 불필요"
+                it["_fp_filtered"]   = "org_compound"
+                out.append(it)
                 continue
 
-            # 2글자 이하 인력명: reason에 기관명 키워드가 있으면 허용으로 처리 (결과에 표시)
-            if len(content_stripped) <= 2 and (dtype in ("참여인력명", "인력명", "업체명", "대표자명") or "인력" in dtype or "이름" in dtype):
-                reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
-                if _re.search(r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|건강보험|국민연금|서민금융|대국민|안전처|안전부', reason_text):
-                    page_map.setdefault(p, []).append({
-                        "detection_type":  dtype,
-                        "detected_text":   content,
-                        "verdict":         "허용",
-                        "reason":          f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 (reason: {reason_text[:60]})",
-                        "recommendation":  "기관명 복합어로 확인됨, 검증 불필요",
-                        "confidence":      0.97,
-                        "source":          "vision",
-                    })
-                    continue
+        out.append(it)
+    return out
 
-        # ── 공공기관 로고 오탐 추가 차단 (claude_judge 통과 후에도 재확인) ──────
-        # DB allowed_terms의 공공기관 목록도 함께 참조
-        if _is_logo and it.get("judgment") != "허용":
-            # 1) 하드코딩 공공기관 키워드
-            _logo_allowed = False
-            for _kw in _PUBLIC_ORG_KEYWORDS:
-                if (_kw.lower() in content.lower()
-                        or _kw.lower() in it.get("reason", "").lower()):
-                    _logo_allowed = True
-                    _logo_kw = _kw
-                    break
-            # 2) DB allowed_terms에서 official_institutions 참조
-            if not _logo_allowed:
-                from core.config import load_dict as _ld
-                _db_dict = _ld()
-                _allowed_terms = _db_dict.get("allowed_terms", {})
-                _official = _allowed_terms.get("official_institutions", [])
-                for _oi in _official:
-                    if _oi and _oi.strip().lower() in content.lower():
-                        _logo_allowed = True
-                        _logo_kw = _oi.strip()
-                        break
-            if _logo_allowed:
-                it["judgment"] = "허용"
-                it["reason"] = f"공공기관/발주기관 로고 오탐 차단 ({_logo_kw})"
-                it["recommendation"] = ""
 
+# ─────────────────────────────────────────────────────────────────
+# 3단계: 로고 전용 필터 (요구사항 1번)
+# ─────────────────────────────────────────────────────────────────
+def apply_logo_filters(items: list) -> list:
+    """
+    로고 타입 항목에만 적용:
+    - 공공기관 키워드 → 허용 (하드코딩 + DB official_institutions)
+    - 제안사 로고(위반/주의) → 판정 유지
+    메시지 규칙 (요구사항 8번):
+    - 허용: "발주기관/공공기관 로고로 확인되어 허용 처리"
+    - 위반: "레퍼런스 로고 재비교 일치 – 위반 확정" (변경 없음)
+    """
+    from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
+    from core.config import load_dict as _ld
+
+    # DB official_institutions 로드 (1회)
+    _db_official: list = []
+    try:
+        _db_official = _ld().get("allowed_terms", {}).get("official_institutions", [])
+    except Exception:
+        pass
+
+    # 전체 공공기관 키워드 = 하드코딩 + extra + DB
+    _all_pub_kw = list(_PUBLIC_ORG_KEYWORDS) + list(_PUBLIC_ORG_KW_EXTRA)
+    _all_pub_kw += [str(x).strip() for x in _db_official if x]
+
+    out = []
+    for it in items:
+        dtype   = it.get("type", "기타")
+        content = (it.get("content") or "").strip()
+
+        # 로고 타입 아니면 그대로 통과
+        if not (_is_logo_type(dtype) or _is_logo_type(content)):
+            out.append(it)
+            continue
+
+        # 이미 허용으로 처리된 경우 reason 메시지 정비 후 통과
+        if it.get("judgment") == "허용":
+            it = dict(it)
+            # 잘못된 메시지("일반 명사" 등)가 들어 있으면 교체 (요구사항 8번)
+            reason = it.get("reason", "")
+            if "일반 명사" in reason or "기관명의 일부" in reason:
+                it["reason"] = "레퍼런스 로고 재비교 불일치로 허용 처리"
+            out.append(it)
+            continue
+
+        # 공공기관 키워드 검사
+        reason_ctx = (it.get("reason") or "") + " " + content
+        matched_kw = None
+        for kw in _all_pub_kw:
+            if kw and kw.lower() in reason_ctx.lower():
+                matched_kw = kw
+                break
+
+        if matched_kw:
+            it = dict(it)
+            it["judgment"]       = "허용"
+            it["reason"]         = f"발주기관/공공기관 로고로 확인되어 허용 처리 ({matched_kw})"
+            it["recommendation"] = ""
+        # 제안사 로고(위반/주의)는 판정 그대로 유지
+
+        out.append(it)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────
+# 4단계: 얼굴/인물사진 오탐 필터 (요구사항 4번)
+# ─────────────────────────────────────────────────────────────────
+def apply_face_filters(items: list) -> list:
+    """
+    인물사진 타입 항목에만 적용:
+    - 실루엣/아이콘/벡터/픽토그램 특징 → 허용
+    - 실제 얼굴 특징(피부색, 이목구비) → 위반 유지
+    메시지 규칙 (요구사항 8번):
+    허용: "실루엣/아이콘 이미지로 확인되어 허용 처리"
+    """
+    out = []
+    for it in items:
+        dtype   = it.get("type", "")
+        content = (it.get("content") or "")
+        reason  = (it.get("reason") or "")
+        judgment = it.get("judgment", "주의")
+
+        # 얼굴/인물 타입 아니면 통과
+        is_face_type = any(kw in dtype for kw in _FACE_DTYPES_KW)
+        if not is_face_type:
+            out.append(it)
+            continue
+
+        # 이미 허용이면 통과
+        if judgment == "허용":
+            out.append(it)
+            continue
+
+        # 실루엣/아이콘 특징 → 허용 강등
+        combined = (dtype + " " + content + " " + reason).lower()
+        if any(kw in combined for kw in _ICON_ALLOW_KW):
+            it = dict(it)
+            it["judgment"]       = "허용"
+            it["reason"]         = "실루엣/아이콘 이미지로 확인되어 허용 처리"
+            it["recommendation"] = ""
+            it["_fp_filtered"]   = "icon_silhouette"
+
+        out.append(it)
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────
+# 5단계: Rule + Vision 병합 (요구사항 6번 우선순위)
+# ─────────────────────────────────────────────────────────────────
+def merge_rule_and_vision(
+    vision_items: list,
+    rule_hits_by_page: dict,
+) -> dict:
+    """
+    Vision 항목 → page_map 구성 후 rule_hits 병합.
+
+    우선순위:
+    1순위: 사전 등록 실명 rule (source='rule', type='참여인력명'/'대표자명')
+    2순위: 이메일/URL rule
+    3순위: 로고 후처리 결과 (rule verdict 변경 금지)
+    4순위: Claude Vision 판정
+    5순위: OCR rule (source='ocr')
+    """
+    from services.claude_judge import _is_logo_type
+
+    _WEIGHT = {"위반": 2, "주의": 1, "허용": 0}
+
+    # 우선순위 가중치 — rule 소스별
+    def _rule_priority(h: dict) -> int:
+        src  = h.get("source", "rule")
+        typ  = h.get("type", "")
+        jdg  = h.get("judgment", "주의")
+        # 사전 등록 실명 rule → 최고 우선순위
+        if src in ("rule",) and typ in ("참여인력명", "대표자명", "업체명"):
+            return 10
+        # 이메일/URL
+        if src == "rule" and any(k in typ for k in ("이메일", "URL", "도메인")):
+            return 9
+        # OCR 기반 rule
+        if src.startswith("ocr"):
+            return 5
+        return 7   # 일반 rule
+
+    page_map: dict[int, list] = {}
+
+    # Vision → page_map
+    for it in vision_items:
+        p = it.get("_page_int", 1)
         page_map.setdefault(p, []).append({
-            "detection_type":  dtype,
-            "detected_text":   content,
-            "verdict":         it.get("judgment", "주의"),
-            "reason":          it.get("reason", ""),
-            "recommendation":  it.get("recommendation", ""),
-            "confidence":      0.9,
+            "detection_type":  it.get("type",           "기타"),
+            "detected_text":   it.get("content",        ""),
+            "verdict":         it.get("judgment",        "주의"),
+            "reason":          it.get("reason",          ""),
+            "recommendation":  it.get("recommendation",  ""),
+            "confidence":      it.get("confidence",      0.9),
             "source":          "vision",
+            "_fp_filtered":    it.get("_fp_filtered",    ""),
+            "_is_logo":        (
+                _is_logo_type(it.get("type", ""))
+                or _is_logo_type(it.get("content", ""))
+            ),
         })
 
-    # 규칙 항목 처리: Vision과 같은 텍스트면 source를 합치, 없으면 신규 추가
+    # rule_hits 병합
     for page_str, hits in rule_hits_by_page.items():
         try:
             p = int(page_str)
         except ValueError:
             continue
+
         for h in hits:
-            content = h.get("content", "").lower()
-            rule_src = h.get("source", "rule")  # 'ocr' or 'rule'
-            # vision과 중복 여부 확인
+            h_content  = (h.get("content") or "").lower()
+            h_judgment = h.get("judgment", "주의")
+            rule_src   = h.get("source", "rule")
+
+            # 기존 vision 항목과 텍스트 매칭
             matched_idx = None
             for idx, d in enumerate(page_map.get(p, [])):
                 vc = d["detected_text"].lower()
-                if content and vc and (
-                    content == vc or
-                    (content in vc and len(content) >= 4 and len(content) / len(vc) > 0.5) or
-                    (vc in content and len(vc) >= 4 and len(vc) / len(content) > 0.5)
+                if h_content and vc and (
+                    h_content == vc
+                    or (h_content in vc and len(h_content) >= 4
+                        and len(h_content) / len(vc) > 0.5)
+                    or (vc in h_content and len(vc) >= 4
+                        and len(vc) / len(h_content) > 0.5)
                 ):
                     matched_idx = idx
                     break
+
             if matched_idx is not None:
-                # 중복 항목: source에 rule 추가
                 existing = page_map[p][matched_idx]
-                existing_src = existing.get("source", "vision")
-                if existing_src == "vision":
+                # source 통합
+                if existing.get("source") == "vision":
                     existing["source"] = f"{rule_src}+vision"
-                # ★ 로고 타입 항목은 rule이 verdict를 절대 덮어쓰지 못함
-                #   (로고로 판정된 객체는 텍스트 예외 규칙과 무관하게 판정 유지)
-                from services.claude_judge import _is_logo_type as _ilt
-                if _ilt(existing.get("detection_type", "")):
-                    pass  # 로고 항목: 기존 판정(위반/주의/허용 모두) 보존 — rule 덮어쓰기 금지
+
+                # ★ 로고 타입 → rule verdict 변경 절대 금지 (요구사항 6번)
+                if existing.get("_is_logo"):
+                    continue
+
+                # rule 우선순위 vs 기존 verdict
+                r_prio = _rule_priority(h)
+                if r_prio >= 9:
+                    # 최고 우선순위 rule(사전 실명/이메일/URL) → 무조건 강한 쪽
+                    if _WEIGHT.get(h_judgment, 0) > _WEIGHT.get(existing["verdict"], 0):
+                        existing["verdict"] = h_judgment
                 else:
-                    # 판정은 더 강한 쪽으로
-                    weight = {"위반": 2, "주의": 1, "허용": 0}
-                    if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
-                        existing["verdict"] = h.get("judgment", "주의")
+                    # 일반 rule → 더 강한 쪽
+                    if _WEIGHT.get(h_judgment, 0) > _WEIGHT.get(existing["verdict"], 0):
+                        existing["verdict"] = h_judgment
             else:
-                # source: 'ocr'이면 OCR로 읽은 텍스트에서 탐지, 'rule'이면 PyMuPDF 텍스트에서 탐지
+                # 신규 항목
                 page_map.setdefault(p, []).append({
-                    "detection_type":  h.get("type", "기타"),
-                    "detected_text":   h.get("content", ""),
-                    "verdict":         h.get("judgment", "주의"),
-                    "reason":          h.get("reason", ""),
-                    "recommendation":  h.get("recommendation", ""),
-                    "confidence":      h.get("confidence", 0.95),
+                    "detection_type":  h.get("type",           "기타"),
+                    "detected_text":   h.get("content",        ""),
+                    "verdict":         h_judgment,
+                    "reason":          h.get("reason",          ""),
+                    "recommendation":  h.get("recommendation",  ""),
+                    "confidence":      h.get("confidence",      0.95),
                     "source":          rule_src,
+                    "_fp_filtered":    "",
+                    "_is_logo":        False,
                 })
 
     return page_map
+
+
+# ─────────────────────────────────────────────────────────────────
+# 6단계: 내부 키 정리 후 최종 page_map 반환
+# ─────────────────────────────────────────────────────────────────
+def finalize_page_map(page_map: dict) -> dict:
+    """_page_int, _fp_filtered, _is_logo 등 내부 키 제거"""
+    _internal = ("_page_int", "_fp_filtered", "_is_logo")
+    final: dict[int, list] = {}
+    for p, dets in page_map.items():
+        cleaned = []
+        for d in dets:
+            d2 = {k: v for k, v in d.items() if k not in _internal}
+            cleaned.append(d2)
+        final[p] = cleaned
+    return final
+
+
+# ─────────────────────────────────────────────────────────────────
+# 최종 진입점: _merge_results (6단계 파이프라인 호출)
+# ─────────────────────────────────────────────────────────────────
+def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int) -> dict:
+    """
+    규칙 탐지(OCR 포함) + Vision 결과 페이지별 합산.
+    내부적으로 6단계 함수로 분리 실행.
+    """
+    # 1. 정규화
+    items = normalize_vision_items(vision_items)
+    # 2. 텍스트 오탐 필터 (비로고 전용)
+    items = apply_text_fp_filters(items)
+    # 3. 로고 필터 (로고 전용)
+    items = apply_logo_filters(items)
+    # 4. 얼굴 필터
+    items = apply_face_filters(items)
+    # 5. rule 병합
+    page_map = merge_rule_and_vision(items, rule_hits_by_page)
+    # 6. 내부 키 정리
+    return finalize_page_map(page_map)
 
 
 def _build_report(job_id: str, filename: str, total_pages: int,

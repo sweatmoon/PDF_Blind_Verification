@@ -373,229 +373,139 @@ class PPTServerPipeline:
         return report
 
 
-# ── 결과 합산 (server_pipeline과 동일) ──────────────────────────
+# ── 결과 합산 (server_pipeline 공유 함수 재사용 + PPT 전용 크롭 처리) ──────────
 def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: int,
                    page_has_cropped: dict = None) -> dict:
     """
     page_has_cropped: {page_number(1-based): True} — 해당 페이지에 크롭 이미지가 있음
-    Vision AI가 위반으로 탐지해도 크롭 이미지가 있는 페이지의 로고/업체명은 주의로 강등
+    Vision AI가 위반으로 탐지해도 크롭 이미지가 있는 페이지의 로고/업체명은 주의로 강등.
+
+    server_pipeline의 6단계 공유 함수를 재사용하여 동일한 로직 보장:
+      1. normalize_vision_items()
+      2. apply_text_fp_filters()
+      3. apply_logo_filters()
+      4. apply_face_filters()
+      5+6. PPT 전용 크롭 강등 처리 후 merge_rule_and_vision() + finalize_page_map()
     """
-    page_map: dict[int, list] = {}
+    from services.server_pipeline import (
+        normalize_vision_items,
+        apply_text_fp_filters,
+        apply_logo_filters,
+        apply_face_filters,
+        finalize_page_map,
+    )
+    from services.claude_judge import _is_logo_type
+
     _cropped_pages = page_has_cropped or {}
+    _WEIGHT = {"위반": 2, "주의": 1, "허용": 0}
 
-    # allowed_terms 전체 목록 로드 (Vision 탐지 결과 허용 처리용)
-    from core.config import load_dict as _load_dict
-    _dict = _load_dict()
-    _allowed_flat: set[str] = set()
-    for _subcat_vals in _dict.get("allowed_terms", {}).values():
-        for _t in _subcat_vals:
-            if _t:
-                _allowed_flat.add(_t.strip().lower())
+    # ── 1~4단계: 공유 필터 파이프라인 ────────────────────────────
+    items = normalize_vision_items(vision_items)
+    items = apply_text_fp_filters(items)
+    items = apply_logo_filters(items)
+    items = apply_face_filters(items)
 
-    # 공공기관 등 고정 허용 기관명 키워드 (allowed_terms에 없어도 기본 허용)
-    _FIXED_ALLOWED_ORGS = {
-        "국민건강보험", "국민건강보험공단", "국민연금", "국민연금공단",
-        "건강보험심사평가원", "국가철도공단", "한국도로공사", "한국토지주택공사",
-        "국토교통부", "행정안전부", "과학기술정보통신부", "교육부", "고용노동부",
-        "보건복지부", "환경부", "문화체육관광부", "농림축산식품부", "산업통상자원부",
-        "중소벤처기업부", "국방부", "경찰청", "소방청", "기상청", "통계청",
-        "조달청", "특허청", "식품의약품안전처", "금융위원회", "공정거래위원회",
-        "한국전력공사", "한국수자원공사", "한국농어촌공사", "한국가스공사",
-        "한국철도공사", "코레일", "한국공항공사", "인천국제공항공사",
-        "NIA", "NIPA", "KISA", "ETRI", "KAIST", "KIST",
-        "정부24", "민원24", "나라장터", "디지털서비스",
-    }
-
-    for it in vision_items:
-        try:
-            p = int(it.get("page", 0))
-        except (ValueError, TypeError):
-            p = 1
-        if p < 1:
-            p = 1
-        content = it.get("content", "")
+    # ── 5단계(PPT 확장): 크롭 이미지 페이지 로고/업체명 위반→주의 강등 ──
+    adjusted = []
+    for it in items:
+        p       = it.get("_page_int", 1)
         dtype   = it.get("type", "기타")
+        verdict = it.get("judgment", "주의")
+        _cropped = False
+        if (_cropped_pages.get(p)
+                and verdict == "위반"
+                and any(kw in dtype for kw in ("로고", "업체", "회사", "브랜드"))):
+            it = dict(it)
+            it["judgment"] = "주의"
+            it["reason"] = (it.get("reason") or "") + " [크롭 영역 밖 – 화면에 보이지 않음]"
+            it["recommendation"] = "크롭된 이미지의 숨겨진 영역에서 검출 – 직접 노출 아님, 이미지 재편집 권장"
+            it["_ppt_cropped"] = True
+        adjusted.append(it)
 
-        # ── "텍스트 추출 탐지" 더미 항목 필터링 ──────────────────────
-        # Claude가 rule_hits 힌트를 받아서 구체적인 이름 대신 요약 문구를 반환하는 경우 제외
-        _DUMMY_TYPES = (
-            "텍스트 추출 탐지", "텍스트추출탐지", "텍스트 탐지", "텍스트탐지",
-            "텍스트 탐지 실명", "텍스트탐지실명", "참여인력 실명", "텍스트 실명",
-        )
-        _DUMMY_CONTENTS = (
-            "텍스트 추출로 확인된 위반 요소 존재",
-            "텍스트 추출 위반 확인",
-            "텍스트 추출로 확인된 위반",
-            "텍스트 추출로 탐지된 사전 등록 실명",
-            "사전 등록 실명 목록의 이름들이 텍스트 추출로 탐지됨",
-            "텍스트 추출로 사전 등록 실명이 탐지됨",
-        )
-        # content에 특정 키워드가 포함된 더미 패턴도 제거
-        _DUMMY_KEYWORDS = ("텍스트 추출로 탐지된", "사전 등록 실명 목록", "텍스트 추출로 사전 등록")
-        _content_strip = content.strip()
-        if (dtype in _DUMMY_TYPES
-                or _content_strip in _DUMMY_CONTENTS
-                or any(kw in _content_strip for kw in _DUMMY_KEYWORDS)):
-            continue
+    # ── 6단계(PPT 전용): Vision→page_map 구성 + rule_hits 병합 ──
+    page_map: dict[int, list] = {}
 
-        already = any(
-            d["detected_text"].lower() == content.lower() and d["detection_type"] == dtype
-            for d in page_map.get(p, [])
-        )
-        if already:
-            continue
-
-        # ── 로고 타입 여부 사전 체크 ──────────────────────────────────────────
-        from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
-        _is_logo = _is_logo_type(dtype) or _is_logo_type(content)
-
-        # ── 일반 명사 체크: _COMMON_WORDS에 해당하면 허용으로 처리
-        # ⚠ 로고 타입 항목은 로고로 판단된 객체은 텍스트 예외규칙 미적용
-        import re as _re
-        from services.rule_detector import _COMMON_WORDS as _CW
-        content_stripped = content.strip()
-
-        # 인력명/이름 관련 모든 type에 대해 _COMMON_WORDS 체크
-        _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
-        if not _is_logo:
-            if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
-                page_map.setdefault(p, []).append({
-                    "detection_type":  dtype,
-                    "detected_text":   content,
-                    "verdict":         "허용",
-                    "reason":          f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{content_stripped}'은 고유 인명이 아님)",
-                    "recommendation":  "검증 불필요 – 일반 명사/단어로 확인됨",
-                    "confidence":      0.98,
-                    "source":          "vision",
-                    "cropped":         False,
-                })
-                continue
-
-            # 2글자 이하 인력명: 허용 기관명 포함 여부로 오탐 필터
-            # Vision AI가 '국민' 검출 시 reason에 '국민건강보험공단' 같은 기관명이 언급된 경우 허용으로 처리
-            if len(content_stripped) <= 2 and (dtype in ("참여인력명", "인력명", "업체명", "대표자명") or "인력" in dtype or "이름" in dtype):
-                reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
-                _ORG_KEYWORDS = (
-                    r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|'
-                    r'건강보험|국민연금|서민금융|대국민|안전처|안전부'
-                )
-                if _re.search(_ORG_KEYWORDS, reason_text):
-                    # skip 대신 허용으로 결과에 추가
-                    page_map.setdefault(p, []).append({
-                        "detection_type":  dtype,
-                        "detected_text":   content,
-                        "verdict":         "허용",
-                        "reason":          f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 (reason: {reason_text[:60]})",
-                        "recommendation":  "기관명 복합어로 확인됨, 검증 불필요",
-                        "confidence":      0.97,
-                        "source":          "vision",
-                        "cropped":         False,
-                    })
-                    continue
-
-        # ── 공공기관 로고 오탐 추가 차단 (claude_judge 통과 후에도 재확인) ──────
-        # DB allowed_terms의 official_institutions 목록도 함께 참조
-        if _is_logo and it.get("judgment") != "허용":
-            # 1) 하드코딩 공공기관 키워드
-            _logo_allowed = False
-            _logo_kw = ""
-            for _kw in _PUBLIC_ORG_KEYWORDS:
-                if (_kw.lower() in content.lower()
-                        or _kw.lower() in it.get("reason", "").lower()):
-                    _logo_allowed = True
-                    _logo_kw = _kw
-                    break
-            # 2) DB allowed_terms official_institutions 참조
-            if not _logo_allowed:
-                _db_dict_logo = _dict  # 이미 로드된 _dict 재사용
-                _official = _db_dict_logo.get("allowed_terms", {}).get("official_institutions", [])
-                for _oi in _official:
-                    if _oi and _oi.strip().lower() in content.lower():
-                        _logo_allowed = True
-                        _logo_kw = _oi.strip()
-                        break
-            if _logo_allowed:
-                it["judgment"] = "허용"
-                it["reason"] = f"공공기관/발주기관 로고 오탐 차단 ({_logo_kw})"
-                it["recommendation"] = ""
-
-        # ── 크롭 이미지가 있는 페이지의 Vision 탐지 → 로고/업체명 위반 → 주의 강등
-        vision_verdict = it.get("judgment", "주의")
-        vision_cropped = False
-        if _cropped_pages.get(p) and vision_verdict == "위반" and any(
-            kw in dtype for kw in ("로고", "업체", "회사", "브랜드")
-        ):
-            vision_verdict = "주의"
-            vision_cropped = True
-
+    for it in adjusted:
+        p = it.get("_page_int", 1)
         page_map.setdefault(p, []).append({
-            "detection_type":  dtype,
-            "detected_text":   content,
-            "verdict":         vision_verdict,
-            "reason":          it.get("reason", "") + (" [크롭 영역 밖 – 화면에 보이지 않음]" if vision_cropped else ""),
-            "recommendation":  "크롭된 이미지의 숨겨진 영역에서 검출 – 직접 노출 아님, 이미지 재편집 권장" if vision_cropped else it.get("recommendation", ""),
-            "confidence":      0.9,
+            "detection_type":  it.get("type",           "기타"),
+            "detected_text":   it.get("content",        ""),
+            "verdict":         it.get("judgment",        "주의"),
+            "reason":          it.get("reason",          ""),
+            "recommendation":  it.get("recommendation",  ""),
+            "confidence":      it.get("confidence",      0.9),
             "source":          "vision",
-            "cropped":         vision_cropped,
+            "cropped":         it.get("_ppt_cropped",    False),
+            "_fp_filtered":    it.get("_fp_filtered",    ""),
+            "_is_logo":        (
+                _is_logo_type(it.get("type", ""))
+                or _is_logo_type(it.get("content", ""))
+            ),
         })
 
+    # rule_hits 병합
     for page_str, hits in rule_hits_by_page.items():
         try:
             p = int(page_str)
         except ValueError:
             continue
+
         for h in hits:
-            content = h.get("content", "").lower()
-            # vision과 같은 텍스트가 있으면 source를 rule+vision으로 업데이트
+            h_content  = (h.get("content") or "").lower()
+            h_judgment = h.get("judgment", "주의")
+            rule_src   = h.get("source", "rule")
+
             matched_idx = None
             for idx, d in enumerate(page_map.get(p, [])):
                 vc = d["detected_text"].lower()
-                if content and vc and (
-                    content == vc or
-                    (content in vc and len(content) >= 4 and len(content) / len(vc) > 0.5) or
-                    (vc in content and len(vc) >= 4 and len(vc) / len(content) > 0.5)
+                if h_content and vc and (
+                    h_content == vc
+                    or (h_content in vc and len(h_content) >= 4 and len(h_content) / len(vc) > 0.5)
+                    or (vc in h_content and len(vc) >= 4 and len(vc) / len(h_content) > 0.5)
                 ):
                     matched_idx = idx
                     break
+
             if matched_idx is not None:
-                # 중복 항목: source에 rule 추가
                 existing = page_map[p][matched_idx]
-                existing_src = existing.get("source", "vision")
-                rule_src = h.get("source", "rule")  # 'rule' or 'ocr'
-                if existing_src == "vision":
+                if existing.get("source") == "vision":
                     existing["source"] = f"{rule_src}+vision"
-                # ★ 로고 타입 항목은 rule이 verdict를 절대 덮어쓰지 못함
-                #   (로고로 판정된 객체는 텍스트 예외 규칙과 무관하게 판정 유지)
-                from services.claude_judge import _is_logo_type as _ilt
-                if _ilt(existing.get("detection_type", "")):
-                    pass  # 로고 항목: 기존 판정(위반/주의/허용 모두) 보존 — rule 덮어쓰기 금지
-                # cropped=True 인 rule 항목이면 Vision 판정도 주의로 강등
-                elif h.get("cropped", False):
-                    weight_e = {"위반": 2, "주의": 1, "허용": 0}
-                    if weight_e.get(existing["verdict"], 0) > 1:  # 위반이면 주의로 내림
+
+                # ★ 로고 타입 → rule verdict 변경 절대 금지
+                if existing.get("_is_logo"):
+                    continue
+
+                # cropped=True 인 rule 항목 → 위반이면 주의로 강등
+                if h.get("cropped", False):
+                    if _WEIGHT.get(existing["verdict"], 0) > 1:
                         existing["verdict"] = "주의"
                         existing["cropped"] = True
                         existing["reason"] = (existing.get("reason") or "") + " [크롭 영역 밖 – 화면에 보이지 않음]"
                         existing["recommendation"] = "크롭된 이미지의 숨겨진 영역에서 검출 – 직접 노출 아님, 이미지 재편집 권장"
                 else:
-                    # 판정은 더 강한 쪽으로
-                    weight = {"위반": 2, "주의": 1, "허용": 0}
-                    if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
-                        existing["verdict"] = h.get("judgment", "주의")
+                    if _WEIGHT.get(h_judgment, 0) > _WEIGHT.get(existing["verdict"], 0):
+                        existing["verdict"] = h_judgment
             else:
-                # 새 항목 추가
                 page_map.setdefault(p, []).append({
-                    "detection_type":  h.get("type", "기타"),
-                    "detected_text":   h.get("content", ""),
-                    "verdict":         h.get("judgment", "주의"),
-                    "reason":          h.get("reason", ""),
-                    "recommendation":  h.get("recommendation", ""),
-                    "confidence":      h.get("confidence", 0.95),
-                    "source":          h.get("source", "rule"),
+                    "detection_type":  h.get("type",           "기타"),
+                    "detected_text":   h.get("content",        ""),
+                    "verdict":         h_judgment,
+                    "reason":          h.get("reason",          ""),
+                    "recommendation":  h.get("recommendation",  ""),
+                    "confidence":      h.get("confidence",      0.95),
+                    "source":          rule_src,
                     "cropped":         h.get("cropped", False),
+                    "_fp_filtered":    "",
+                    "_is_logo":        False,
                 })
 
-    return page_map
+    # 내부 키 제거 (+ PPT 전용 _ppt_cropped)
+    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int")
+    final: dict[int, list] = {}
+    for p, dets in page_map.items():
+        final[p] = [{k: v for k, v in d.items() if k not in _internal} for d in dets]
+
+    return final
 
 
 def _build_report(job_id, filename, total_slides, page_map, elapsed,
