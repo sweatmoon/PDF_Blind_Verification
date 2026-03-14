@@ -17,6 +17,19 @@ from core.config import get_logger
 logger = get_logger("ppt_service")
 
 
+def _iter_group_shapes(group_shape):
+    """그룹 도형을 재귀적으로 순회해 모든 하위 shape 반환 (중첩 그룹 지원)"""
+    try:
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+        for child in group_shape.shapes:
+            if child.shape_type == MSO_SHAPE_TYPE.GROUP:
+                yield from _iter_group_shapes(child)  # 재귀
+            else:
+                yield child
+    except Exception:
+        pass
+
+
 @dataclass
 class SlideData:
     slide_number: int          # 1-based
@@ -97,22 +110,18 @@ class PPTService:
             # 텍스트박스 / 도형
             if shape.has_text_frame:
                 for para in shape.text_frame.paragraphs:
-                    line = ""
+                    # ★ para.text 우선 사용: runs가 없어도 전체 텍스트 반환
+                    #   (runs만 순회하면 runs=[] 단락의 텍스트가 완전 누락됨)
+                    line = para.text or ""
+
+                    # 하이퍼링크는 runs에서만 추출 가능
                     for run in para.runs:
-                        t = run.text or ""
-                        line += t
-                        # 하이퍼링크
                         try:
                             if run.hyperlink and run.hyperlink.address:
                                 hyperlinks.append(run.hyperlink.address)
                         except Exception:
                             pass
-                    # 단락 자체 하이퍼링크
-                    try:
-                        if para.runs and para.runs[0].hyperlink and para.runs[0].hyperlink.address:
-                            pass  # 이미 위에서 수집
-                    except Exception:
-                        pass
+
                     if line.strip():
                         src = "note" if shape.shape_type == 13 else "textbox"
                         text_items.append((src, line.strip()))
@@ -151,23 +160,39 @@ class PPTService:
             except Exception:
                 pass
 
-            # 그룹 shape 안 이미지 재귀 처리
+            # 그룹 shape 안 텍스트 + 이미지 재귀 처리
             try:
                 from pptx.enum.shapes import MSO_SHAPE_TYPE
                 if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-                    for child in shape.shapes:
+                    for child in _iter_group_shapes(shape):
+                        # 텍스트박스
+                        if child.has_text_frame:
+                            for para in child.text_frame.paragraphs:
+                                line = para.text or ""
+                                for run in para.runs:
+                                    try:
+                                        if run.hyperlink and run.hyperlink.address:
+                                            hyperlinks.append(run.hyperlink.address)
+                                    except Exception:
+                                        pass
+                                if line.strip():
+                                    text_items.append(("textbox", line.strip()))
+                        # 이미지
                         if child.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                            img_blob = child.image.blob
-                            img_ext  = child.image.ext
-                            pil_img  = Image.open(io.BytesIO(img_blob))
-                            w, h     = pil_img.size
-                            images.append({
-                                "data": img_blob,
-                                "ext":  img_ext,
-                                "w":    w,
-                                "h":    h,
-                                "pil":  pil_img,
-                            })
+                            try:
+                                img_blob = child.image.blob
+                                img_ext  = child.image.ext
+                                pil_img  = Image.open(io.BytesIO(img_blob))
+                                w, h     = pil_img.size
+                                images.append({
+                                    "data": img_blob,
+                                    "ext":  img_ext,
+                                    "w":    w,
+                                    "h":    h,
+                                    "pil":  pil_img,
+                                })
+                            except Exception:
+                                pass
             except Exception:
                 pass
 
