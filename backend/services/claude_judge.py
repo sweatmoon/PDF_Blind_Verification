@@ -1630,18 +1630,15 @@ _REAL_PHOTO_KW: tuple = (
     "인물 사진",
 )
 
-# ★ 그래픽/아이콘 확정 키워드 (하나라도 있으면 반드시 허용)
+# ★ 그래픽/아이콘 확정 키워드 (content에만 적용 — reason 제외)
+# 주의: "그래픽", "캐릭터" 등 범용 단어는 제외 (실제사진 reason에도 등장)
 _GRAPHIC_KW: tuple = (
     "실루엣", "silhouette",
     "아이콘", "icon",
     "픽토그램", "pictogram",
     "벡터", "vector",
     "일러스트", "illust",
-    "캐릭터", "character",
-    "다이어그램", "diagram",
-    "단색", "monochrome",
     "스케치", "sketch",
-    "그래픽", "graphic",
     "이모지", "emoji",
     "아이콘 형태", "icon style",
     "사람 아이콘", "person icon",
@@ -1963,10 +1960,14 @@ def _post_process_faces(
         page_b64 = page_b64_map.get(page_num) if page_num is not None else None
 
         if page_b64 is not None:
-            # ── 선체크: content/reason에 아이콘 키워드 있으면 MediaPipe 전에 즉시 허용 ──
-            # Claude가 이미 "아이콘", "실루엣" 등으로 설명한 경우 오탐 방지
-            combined_pre = dtype + " " + content + " " + reason
-            if any(kw in combined_pre for kw in _GRAPHIC_KW):
+            # ── 선체크: content에만 아이콘 키워드 적용 (reason 제외) ──────────
+            # reason에는 "그래픽", "시각적" 등 범용 표현이 포함될 수 있어 오허용 발생
+            # content는 Claude가 명시적으로 설명한 탐지 대상 텍스트 → 신뢰도 높음
+            # 단, _REAL_PHOTO_KW가 content에 있으면 선체크 생략 (실사 사진 보호)
+            content_only = dtype + " " + content
+            has_real_photo_kw = any(kw in content_only for kw in _REAL_PHOTO_KW)
+            has_graphic_kw    = any(kw in content_only for kw in _GRAPHIC_KW)
+            if has_graphic_kw and not has_real_photo_kw:
                 it = dict(it)
                 it["judgment"]        = "허용"
                 it["reason"]          = "그래픽/아이콘 키워드 확인 → MediaPipe 생략 후 즉시 허용"
@@ -2029,10 +2030,12 @@ def _post_process_faces(
                 continue
 
         # ── 2단계: 키워드 폴백 (page_images 없거나 page 불일치) ──────────────
-        combined = dtype + " " + content + " " + reason
+        # content에만 키워드 적용 (reason 제외 — 오허용 방지)
+        combined_content = dtype + " " + content
 
-        # ① 그래픽/아이콘 키워드 → 허용
-        if any(kw in combined for kw in _GRAPHIC_KW):
+        # ① 그래픽/아이콘 키워드 → 허용 (실사 키워드 없을 때만)
+        has_real = any(kw in combined_content for kw in _REAL_PHOTO_KW)
+        if any(kw in combined_content for kw in _GRAPHIC_KW) and not has_real:
             it = dict(it)
             it["judgment"]       = "허용"
             it["reason"]         = "그래픽/아이콘/일러스트 확인 → 허용 (page_images 없어 키워드 폴백)"
@@ -2042,7 +2045,7 @@ def _post_process_faces(
             continue
 
         # ② 실제 사진 키워드 → 위반 유지
-        if any(kw in combined for kw in _REAL_PHOTO_KW):
+        if any(kw in combined_content for kw in _REAL_PHOTO_KW):
             it = dict(it)
             it["judgment"]   = "위반"
             # ★ 타입은 Claude가 반환한 원래 타입(person_candidate 등) 유지
