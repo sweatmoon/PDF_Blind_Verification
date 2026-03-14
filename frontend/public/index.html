@@ -1819,7 +1819,7 @@ function renderPageList(pages, filter = 'all') {
           ? `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium flex-shrink-0"><i class="fas fa-robot" style="font-size:9px"></i> AI</span>`
           : src === 'ocr'
           ? `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium flex-shrink-0"><i class="fas fa-eye" style="font-size:9px"></i> OCR</span>`
-          : `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium flex-shrink-0"><i class="fas fa-list-check" style="font-size:9px"></i> 규칙</span>`;
+          : `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium flex-shrink-0"><i class="fas fa-list-check" style="font-size:9px"></i> 텍스트</span>`;
         return `<div class="text-xs px-2.5 py-2 rounded border ${vcls} mb-1">
           <div class="flex items-center justify-between gap-2 mb-0.5">
             <span class="font-mono break-all">${d.detected_text ? `"${(d.detected_text).slice(0,150)}"` : (d.image_description ? `[이미지] ${d.image_description}` : '—')}</span>
@@ -1922,7 +1922,7 @@ function renderAllDetections(pages) {
       ? `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium"><i class="fas fa-robot" style="font-size:9px"></i> AI</span>`
       : src === 'ocr'
       ? `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium"><i class="fas fa-eye" style="font-size:9px"></i> OCR</span>`
-      : `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium"><i class="fas fa-list-check" style="font-size:9px"></i> 규칙</span>`;
+      : `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium"><i class="fas fa-list-check" style="font-size:9px"></i> 텍스트</span>`;
     return `<tr>
       <td class="px-3 py-2 text-slate-500">${d.page_label}</td>
       <td class="px-3 py-2">${d.detection_type||''}</td>
@@ -3187,15 +3187,23 @@ function dbRenderPages(report, filter) {
       const typeBg    = worstV==='위반'?'bg-red-50 border-red-100':worstV==='주의'?'bg-amber-50 border-amber-100':'bg-green-50 border-green-100';
       const typeIcon  = worstV==='위반'?'fa-circle-xmark':worstV==='주의'?'fa-circle-exclamation':'fa-circle-check';
       const countBadge = its.length > 1 ? `<span class="ml-1 text-xs bg-white border rounded-full px-1.5 py-0.5 font-medium ${typeColor}">${its.length}건</span>` : '';
-      const itemsHtml = its.map(it => `
+      const itemsHtml = its.map(it => {
+        const src = it.source || 'rule';
+        const srcBadge = src === 'vision'
+          ? `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium"><i class="fas fa-robot" style="font-size:9px"></i> AI</span>`
+          : src === 'ocr'
+          ? `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium"><i class="fas fa-eye" style="font-size:9px"></i> OCR</span>`
+          : `<span class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium"><i class="fas fa-list-check" style="font-size:9px"></i> 텍스트</span>`;
+        return `
         <div class="ml-4 pl-3 border-l-2 border-slate-200 mb-2 last:mb-0">
           <div class="flex items-start gap-1.5 flex-wrap">
             <span class="text-xs font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 break-all">${esc(it.content||'')}</span>
             <span class="text-xs px-1.5 py-0.5 rounded-full border ${(verdictBg[it.judgment]||'')}">${it.judgment}</span>
+            ${srcBadge}
           </div>
           ${it.reason ? `<p class="text-xs text-slate-500 mt-1">${esc(it.reason)}</p>` : ''}
           ${it.recommendation ? `<p class="text-xs text-indigo-600 mt-0.5">→ ${esc(it.recommendation)}</p>` : ''}
-        </div>`).join('');
+        </div>`; }).join('');
       return `<div class="border rounded-lg ${typeBg} p-2.5 mb-2 last:mb-0">
         <div class="flex items-center gap-1.5 mb-1.5">
           <i class="fas ${typeIcon} ${typeColor} text-xs"></i>
@@ -3262,7 +3270,7 @@ function dbRenderAll(report) {
       ? `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium"><i class="fas fa-robot" style="font-size:9px"></i> AI</span>`
       : src === 'ocr'
       ? `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium"><i class="fas fa-eye" style="font-size:9px"></i> OCR</span>`
-      : `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium"><i class="fas fa-list-check" style="font-size:9px"></i> 규칙</span>`;
+      : `<span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 text-xs font-medium"><i class="fas fa-list-check" style="font-size:9px"></i> 텍스트</span>`;
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="px-3 py-2 text-slate-500">${it.page||1}</td>
