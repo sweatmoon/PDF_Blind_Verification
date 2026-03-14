@@ -226,25 +226,25 @@
 
   <!-- ═══════════════ 처리 중 화면 ═══════════════ -->
   <div id="page-processing" class="hidden fade-in">
-    <div class="max-w-2xl mx-auto">
-      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+    <div class="max-w-2xl mx-auto px-1">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-8">
 
         <!-- 헤더 -->
-        <div class="text-center mb-6">
-          <div class="relative inline-flex mb-4">
-            <div class="w-16 h-16 rounded-full border-4 border-indigo-100 flex items-center justify-center">
-              <i id="procMainIcon" class="fas fa-shield-halved text-2xl text-indigo-500 spinner"></i>
+        <div class="text-center mb-5">
+          <div class="relative inline-flex mb-3">
+            <div class="w-12 h-12 sm:w-16 sm:h-16 rounded-full border-4 border-indigo-100 flex items-center justify-center">
+              <i id="procMainIcon" class="fas fa-shield-halved text-xl sm:text-2xl text-indigo-500 spinner"></i>
             </div>
           </div>
-          <h2 class="text-lg font-bold text-slate-800">블라인드 검증 진행 중</h2>
-          <p id="processingFileName" class="text-sm text-slate-400 mt-1 truncate px-4"></p>
+          <h2 class="text-base sm:text-lg font-bold text-slate-800">블라인드 검증 진행 중</h2>
+          <p id="processingFileName" class="text-xs sm:text-sm text-slate-400 mt-1 truncate max-w-full px-2"></p>
         </div>
 
         <!-- 전체 진행률 -->
-        <div class="mb-5">
-          <div class="flex justify-between text-xs text-slate-500 mb-1.5">
-            <span id="progressMessage">준비 중…</span>
-            <span id="progressPct" class="font-semibold text-indigo-600">0%</span>
+        <div class="mb-4">
+          <div class="flex justify-between text-xs text-slate-500 mb-1.5 min-w-0">
+            <span id="progressMessage" class="truncate mr-2">준비 중…</span>
+            <span id="progressPct" class="font-semibold text-indigo-600 flex-shrink-0">0%</span>
           </div>
           <div class="h-2.5 bg-slate-100 rounded-full overflow-hidden">
             <div id="progressBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
@@ -476,20 +476,20 @@
         </div>
 
         <!-- 진행 중 상세 (메인 processing UI 복제) -->
-        <div id="db-detailRunning" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-8">
-          <div class="text-center mb-6">
-            <div class="relative inline-flex mb-4">
-              <div class="w-16 h-16 rounded-full border-4 border-indigo-100 flex items-center justify-center">
-                <i class="fas fa-shield-halved text-2xl text-indigo-500 spinner"></i>
+        <div id="db-detailRunning" class="hidden bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-8">
+          <div class="text-center mb-4">
+            <div class="relative inline-flex mb-3">
+              <div class="w-12 h-12 sm:w-16 sm:h-16 rounded-full border-4 border-indigo-100 flex items-center justify-center">
+                <i class="fas fa-shield-halved text-xl sm:text-2xl text-indigo-500 spinner"></i>
               </div>
             </div>
-            <h2 class="text-lg font-bold text-slate-800">블라인드 검증 진행 중</h2>
-            <p id="db-procFileName" class="text-sm text-slate-400 mt-1 truncate px-4"></p>
+            <h2 class="text-base sm:text-lg font-bold text-slate-800">블라인드 검증 진행 중</h2>
+            <p id="db-procFileName" class="text-xs sm:text-sm text-slate-400 mt-1 truncate max-w-full px-2"></p>
           </div>
-          <div class="mb-5">
-            <div class="flex justify-between text-xs text-slate-500 mb-1.5">
-              <span id="db-procMsg">처리 중…</span>
-              <span id="db-procPct" class="font-semibold text-indigo-600">0%</span>
+          <div class="mb-4">
+            <div class="flex justify-between text-xs text-slate-500 mb-1.5 min-w-0">
+              <span id="db-procMsg" class="truncate mr-2">처리 중…</span>
+              <span id="db-procPct" class="font-semibold text-indigo-600 flex-shrink-0">0%</span>
             </div>
             <div class="h-2.5 bg-slate-100 rounded-full overflow-hidden">
               <div id="db-procBar" class="progress-bar h-full bg-indigo-500 rounded-full" style="width:0%"></div>
@@ -527,12 +527,12 @@
         <!-- 완료 결과 상세 (renderResult 결과를 여기에 표시) -->
         <div id="db-detailDone" class="hidden space-y-4">
           <!-- 요약 카드 -->
-          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-            <div class="flex flex-wrap items-start justify-between gap-4 mb-4">
-              <div>
-                <div class="flex items-center gap-3 mb-1.5">
-                  <span id="db-riskBadge" class="px-3 py-1 rounded-full text-white text-sm font-bold"></span>
-                  <h2 id="db-resultFileName" class="font-semibold text-slate-700 text-sm truncate max-w-xs"></h2>
+          <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-5">
+            <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                  <span id="db-riskBadge" class="px-3 py-1 rounded-full text-white text-sm font-bold flex-shrink-0"></span>
+                  <h2 id="db-resultFileName" class="font-semibold text-slate-700 text-sm truncate min-w-0"></h2>
                 </div>
                 <p class="text-xs text-slate-500">
                   <span id="db-resultPages">-</span>페이지 분석 &nbsp;·&nbsp;
@@ -2389,13 +2389,33 @@ async function dbFetchServerJobs() {
           }
         } catch(e) { /* ignore */ }
       }
-      // 진행 중 job에 SSE 구독 (아직 없는 경우만)
-      if ((job.status === 'pending' || job.status === 'processing') && !_dbSseMap[job.job_id]) {
-        dbSubscribeSSE(job.job_id, job.filename, job.file_size || 0);
-        // 처리 중 job 발견 시 대시보드 페이지가 아니면 자동 이동
+      // 진행 중 job: SSE 구독 + UI 즉시 복원 (새로고침 후에도)
+      if (job.status === 'pending' || job.status === 'processing') {
+        // SSE 미구독 상태면 재구독
+        if (!_dbSseMap[job.job_id]) {
+          dbSubscribeSSE(job.job_id, job.filename, job.file_size || 0);
+        }
+        // 진행 중 job의 현재 progress/message로 UI 즉시 복원
+        const bar    = document.getElementById('db-procBar');
+        const msgEl  = document.getElementById('db-procMsg');
+        const pctEl  = document.getElementById('db-procPct');
+        const fnEl   = document.getElementById('db-procFileName');
+        const pct    = job.progress || 0;
+        const msg    = job.message  || '처리 중…';
+        if (bar)   bar.style.width  = pct + '%';
+        if (pctEl) pctEl.textContent = pct + '%';
+        if (msgEl) msgEl.textContent = msg;
+        if (fnEl)  fnEl.textContent  = job.filename || '';
+        dbUpdateSteps(pct, msg);
+        // 대시보드가 아니면 자동 이동
         if (state.currentPage !== 'dashboard') {
           showPage('dashboard');
         }
+        // 진행 중 job 상세 패널 표시
+        const detailRunning = document.getElementById('db-detailRunning');
+        const detailDone    = document.getElementById('db-detailDone');
+        if (detailRunning) detailRunning.classList.remove('hidden');
+        if (detailDone)    detailDone.classList.add('hidden');
       }
     }
 
