@@ -19,10 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 앱 소스 복사
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
-COPY data/ ./data/
 COPY start.sh ./start.sh
 
 # 런타임 디렉토리 생성 + 실행 권한
+# data/는 이미지에 포함하지 않음 - Railway Volume 마운트 대상
 RUN mkdir -p /app/tmp /app/logs /app/data/reports \
     && chmod +x /app/start.sh
 

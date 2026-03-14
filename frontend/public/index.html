@@ -2389,8 +2389,14 @@ async function dbFetchServerJobs() {
           }
         } catch(e) { /* ignore */ }
       }
-      // 진행 중 job: SSE 구독 + UI 즉시 복원 (새로고침 후에도)
+      // 진행 중 job: SSE 구독 + UI 즉시 복원 + localStorage 백업
       if (job.status === 'pending' || job.status === 'processing') {
+        // localStorage에 현재 상태 백업 (새로고침/재시작 대비)
+        localStorage.setItem('activeJobId',       job.job_id);
+        localStorage.setItem('activeJobFilename', job.filename || '');
+        localStorage.setItem('activeJobProgress', String(job.progress || 0));
+        localStorage.setItem('activeJobMessage',  job.message  || '처리 중…');
+
         // SSE 미구독 상태면 재구독
         if (!_dbSseMap[job.job_id]) {
           dbSubscribeSSE(job.job_id, job.filename, job.file_size || 0);
@@ -2402,21 +2408,27 @@ async function dbFetchServerJobs() {
         const fnEl   = document.getElementById('db-procFileName');
         const pct    = job.progress || 0;
         const msg    = job.message  || '처리 중…';
-        if (bar)   bar.style.width  = pct + '%';
+        if (bar)   bar.style.width   = pct + '%';
         if (pctEl) pctEl.textContent = pct + '%';
         if (msgEl) msgEl.textContent = msg;
         if (fnEl)  fnEl.textContent  = job.filename || '';
         dbUpdateSteps(pct, msg);
-        // 대시보드가 아니면 자동 이동
-        if (state.currentPage !== 'dashboard') {
-          showPage('dashboard');
-        }
-        // 진행 중 job 상세 패널 표시
+        if (state.currentPage !== 'dashboard') showPage('dashboard');
         const detailRunning = document.getElementById('db-detailRunning');
         const detailDone    = document.getElementById('db-detailDone');
         if (detailRunning) detailRunning.classList.remove('hidden');
         if (detailDone)    detailDone.classList.add('hidden');
       }
+    }
+
+    // 서버에 진행 중 job이 없는데 localStorage에 있으면 → 서버 재시작으로 중단됨
+    const hasActiveOnServer = jobs.some(j => j.status === 'pending' || j.status === 'processing');
+    if (!hasActiveOnServer && localStorage.getItem('activeJobId')) {
+      // localStorage 정리
+      localStorage.removeItem('activeJobId');
+      localStorage.removeItem('activeJobFilename');
+      localStorage.removeItem('activeJobProgress');
+      localStorage.removeItem('activeJobMessage');
     }
 
     renderDashboard();
@@ -2502,11 +2514,17 @@ function dbSubscribeSSE(jobId, filename, fileSize) {
 
       if (d.status === 'completed') {
         sse.close(); delete _dbSseMap[jobId];
+        // 완료 시 localStorage 백업 정리
+        if (localStorage.getItem('activeJobId') === jobId) {
+          localStorage.removeItem('activeJobId');
+          localStorage.removeItem('activeJobFilename');
+          localStorage.removeItem('activeJobProgress');
+          localStorage.removeItem('activeJobMessage');
+        }
         fetch(`/api/jobs/${jobId}/report`)
           .then(r => r.json())
           .then(report => {
             saveReportToStorage(jobId, filename, fileSize, report);
-            // 서버 job 목록 갱신
             dbFetchServerJobs();
             if (_dbSelectedId === jobId) {
               dbSelectDone(jobId);
@@ -2514,8 +2532,21 @@ function dbSubscribeSSE(jobId, filename, fileSize) {
           }).catch(() => {});
       } else if (d.status === 'failed') {
         sse.close(); delete _dbSseMap[jobId];
+        // 실패 시 localStorage 백업 정리
+        if (localStorage.getItem('activeJobId') === jobId) {
+          localStorage.removeItem('activeJobId');
+          localStorage.removeItem('activeJobFilename');
+          localStorage.removeItem('activeJobProgress');
+          localStorage.removeItem('activeJobMessage');
+        }
         showToast('검증 실패: ' + (d.message || '서버 오류'), 'error');
         dbFetchServerJobs();
+      } else {
+        // 진행 중 상태 localStorage에 지속 업데이트
+        if (localStorage.getItem('activeJobId') === jobId) {
+          localStorage.setItem('activeJobProgress', String(d.progress || 0));
+          localStorage.setItem('activeJobMessage',  d.message || '처리 중…');
+        }
       }
     } catch(e) {}
   };
@@ -3224,17 +3255,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (badge) { badge.textContent = savedCount; badge.classList.remove('hidden'); }
   }
 
-  // ✅ 처리 중인 job 있으면 대시보드로 자동 이동
+  // ✅ 처리 중인 job 복원 (서버 재시작/새로고침 대응)
   try {
     const res = await fetch('/api/jobs/list');
     if (res.ok) {
       const jobs = await res.json();
       const activeJob = jobs.find(j => j.status === 'pending' || j.status === 'processing');
       if (activeJob) {
+        // 서버에 진행 중 job 있음 → localStorage에도 백업
+        localStorage.setItem('activeJobId',       activeJob.job_id);
+        localStorage.setItem('activeJobFilename', activeJob.filename || '');
+        localStorage.setItem('activeJobProgress', String(activeJob.progress || 0));
+        localStorage.setItem('activeJobMessage',  activeJob.message  || '처리 중…');
         showPage('dashboard');
+      } else {
+        // 서버에 없으면 localStorage 백업 확인
+        const savedJobId = localStorage.getItem('activeJobId');
+        if (savedJobId) {
+          // 서버에 job이 없다 = 서버가 재시작됨 → failed 처리
+          localStorage.removeItem('activeJobId');
+          localStorage.removeItem('activeJobFilename');
+          localStorage.removeItem('activeJobProgress');
+          localStorage.removeItem('activeJobMessage');
+        }
       }
     }
-  } catch(e) { /* ignore */ }
+  } catch(e) {
+    // 서버 응답 없음 → localStorage에 진행 중 job 있으면 대시보드 이동
+    const savedJobId = localStorage.getItem('activeJobId');
+    if (savedJobId) {
+      showPage('dashboard');
+    }
+  }
 
   // ✅ 저장된 API 키 복원
   const savedKey = localStorage.getItem('claudeApiKey');
