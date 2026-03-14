@@ -378,7 +378,7 @@ class ServerPipeline:
 
 # ── 결과 합산 ────────────────────────────────────────────────────
 def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int) -> dict:
-    """규칙 탐지(OCR 포함) + Vision 결과를 페이지별로 합산"""
+    """제대로 하면 규칙 탐지(OCR 포함) + Vision 결과를 페이지별로 합산"""
     page_map: dict[int, list] = {}
 
     # Vision 항목 처리
@@ -399,25 +399,38 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
             "source":          "vision",
         })
 
-    # 규칙 항목 처리 (Vision과 중복되지 않는 것만 추가)
+    # 규칙 항목 처리: Vision과 같은 텍스트면 source를 합치, 없으면 신규 추가
     for page_str, hits in rule_hits_by_page.items():
         try:
             p = int(page_str)
         except ValueError:
             continue
-        vpage = [d["detected_text"].lower() for d in page_map.get(p, [])]
         for h in hits:
             content = h.get("content", "").lower()
-            already = any(
-                content and vc and
-                ((content in vc and len(content) >= 4 and len(content) / len(vc) > 0.5) or
-                 (vc in content and len(vc) >= 4 and len(vc) / len(content) > 0.5) or
-                 content == vc)
-                for vc in vpage
-            )
-            if not already:
+            rule_src = h.get("source", "rule")  # 'ocr' or 'rule'
+            # vision과 중복 여부 확인
+            matched_idx = None
+            for idx, d in enumerate(page_map.get(p, [])):
+                vc = d["detected_text"].lower()
+                if content and vc and (
+                    content == vc or
+                    (content in vc and len(content) >= 4 and len(content) / len(vc) > 0.5) or
+                    (vc in content and len(vc) >= 4 and len(vc) / len(content) > 0.5)
+                ):
+                    matched_idx = idx
+                    break
+            if matched_idx is not None:
+                # 중복 항목: source에 rule 추가
+                existing = page_map[p][matched_idx]
+                existing_src = existing.get("source", "vision")
+                if existing_src == "vision":
+                    existing["source"] = f"{rule_src}+vision"
+                # 판정은 더 강한 쪽으로
+                weight = {"위반": 2, "주의": 1, "허용": 0}
+                if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
+                    existing["verdict"] = h.get("judgment", "주의")
+            else:
                 # source: 'ocr'이면 OCR로 읽은 텍스트에서 탐지, 'rule'이면 PyMuPDF 텍스트에서 탐지
-                src = h.get("source", "rule")  # 'ocr' or 'rule'
                 page_map.setdefault(p, []).append({
                     "detection_type":  h.get("type", "기타"),
                     "detected_text":   h.get("content", ""),
@@ -425,7 +438,7 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
                     "reason":          h.get("reason", ""),
                     "recommendation":  h.get("recommendation", ""),
                     "confidence":      h.get("confidence", 0.95),
-                    "source":          src,
+                    "source":          rule_src,
                 })
 
     return page_map

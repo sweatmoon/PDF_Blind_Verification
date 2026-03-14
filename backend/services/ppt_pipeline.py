@@ -360,17 +360,32 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
             p = int(page_str)
         except ValueError:
             continue
-        vpage = [d["detected_text"].lower() for d in page_map.get(p, [])]
         for h in hits:
             content = h.get("content", "").lower()
-            already = any(
-                content and vc and
-                ((content in vc and len(content) >= 4 and len(content) / len(vc) > 0.5) or
-                 (vc in content and len(vc) >= 4 and len(vc) / len(content) > 0.5) or
-                 content == vc)
-                for vc in vpage
-            )
-            if not already:
+            # vision과 같은 텍스트가 있으면 source를 rule+vision으로 업데이트
+            matched_idx = None
+            for idx, d in enumerate(page_map.get(p, [])):
+                vc = d["detected_text"].lower()
+                if content and vc and (
+                    content == vc or
+                    (content in vc and len(content) >= 4 and len(content) / len(vc) > 0.5) or
+                    (vc in content and len(vc) >= 4 and len(vc) / len(content) > 0.5)
+                ):
+                    matched_idx = idx
+                    break
+            if matched_idx is not None:
+                # 중복 항목: source에 rule 추가
+                existing = page_map[p][matched_idx]
+                existing_src = existing.get("source", "vision")
+                rule_src = h.get("source", "rule")  # 'rule' or 'ocr'
+                if existing_src == "vision":
+                    existing["source"] = f"{rule_src}+vision"
+                # 판정은 더 강한 쪽으로
+                weight = {"위반": 2, "주의": 1, "허용": 0}
+                if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
+                    existing["verdict"] = h.get("judgment", "주의")
+            else:
+                # 새 항목 추가
                 page_map.setdefault(p, []).append({
                     "detection_type":  h.get("type", "기타"),
                     "detected_text":   h.get("content", ""),
