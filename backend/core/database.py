@@ -58,19 +58,100 @@ CREATE TABLE IF NOT EXISTS kv_store (
 
 
 def init_db() -> None:
-    """앱 시작 시 1회 호출. 테이블 생성 + 기본값 시드."""
+    """앱 시작 시 1회 호출. 테이블 생성 + JSON 마이그레이션 or 기본값 시드."""
     conn = _get_conn()
     conn.executescript(_SCHEMA)
     conn.commit()
 
-    # 빈 DB면 DEFAULT_DICT 시드
     cur = conn.execute("SELECT COUNT(*) FROM dictionary_items")
     count = cur.fetchone()[0]
+
     if count == 0:
-        logger.info("사전 DB 최초 초기화 — 기본값 삽입")
-        _seed_default(conn)
+        # ── 1순위: 기존 dictionary.json 마이그레이션 ──────────────
+        migrated = _migrate_from_json(conn)
+        if not migrated:
+            # ── 2순위: 기본값 시드 ────────────────────────────────
+            logger.info("사전 DB 최초 초기화 — 기본값 삽입")
+            _seed_default(conn)
     else:
         logger.info(f"사전 DB 로드 완료 ({count}개 항목)")
+
+    # ── API 키 파일 → DB 마이그레이션 (kv_store 비어있을 때만) ──
+    _migrate_api_keys(conn)
+
+
+def _migrate_from_json(conn: sqlite3.Connection) -> bool:
+    """기존 dictionary.json → DB 마이그레이션. 성공 시 True 반환."""
+    import json
+    from pathlib import Path
+
+    # DATA_DIR 를 직접 import하면 순환참조 위험 → 경로 직접 계산
+    json_path = DB_PATH.parent / "dictionary.json"
+    if not json_path.exists():
+        return False
+
+    try:
+        data = json.loads(json_path.read_text("utf-8"))
+        rows = []
+        total = 0
+        for group_key, subcats in data.items():
+            if not isinstance(subcats, dict):
+                continue
+            for subkey, terms in subcats.items():
+                if not isinstance(terms, list):
+                    continue
+                for term in terms:
+                    t = str(term).strip()
+                    if t:
+                        rows.append((group_key, subkey, t))
+                        total += 1
+        if rows:
+            conn.executemany(
+                "INSERT OR IGNORE INTO dictionary_items (group_key, subkey, term) VALUES (?,?,?)",
+                rows,
+            )
+            conn.commit()
+            logger.info(f"dictionary.json → DB 마이그레이션 완료: {total}개 항목")
+            return True
+    except Exception as e:
+        logger.error(f"dictionary.json 마이그레이션 실패: {e}")
+    return False
+
+
+def _migrate_api_keys(conn: sqlite3.Connection) -> None:
+    """기존 API 키 파일 → kv_store 마이그레이션."""
+    import json
+    from pathlib import Path
+
+    data_dir = DB_PATH.parent
+
+    # Vision API 키
+    cur = conn.execute("SELECT COUNT(*) FROM kv_store WHERE key='google_vision_api_key'")
+    if cur.fetchone()[0] == 0:
+        vision_file = data_dir / "vision_api_key.txt"
+        if vision_file.exists():
+            key = vision_file.read_text("utf-8").strip()
+            if key:
+                conn.execute(
+                    "INSERT OR IGNORE INTO kv_store (key, value) VALUES (?,?)",
+                    ("google_vision_api_key", key),
+                )
+                conn.commit()
+                logger.info("vision_api_key.txt → DB 마이그레이션 완료")
+
+    # Claude API 키
+    cur = conn.execute("SELECT COUNT(*) FROM kv_store WHERE key='claude_api_key'")
+    if cur.fetchone()[0] == 0:
+        claude_file = data_dir / "claude_api_key.txt"
+        if claude_file.exists():
+            key = claude_file.read_text("utf-8").strip()
+            if key:
+                conn.execute(
+                    "INSERT OR IGNORE INTO kv_store (key, value) VALUES (?,?)",
+                    ("claude_api_key", key),
+                )
+                conn.commit()
+                logger.info("claude_api_key.txt → DB 마이그레이션 완료")
 
 
 def _seed_default(conn: sqlite3.Connection) -> None:
