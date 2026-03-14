@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from services.rule_detector import get_rule_detector, _is_org_context
-from services.claude_judge  import get_claude_judge, ClaudeVisionJudge
+from services.claude_judge  import get_claude_judge, ClaudeVisionJudge, scan_slide_for_faces
 from services.ocr_service   import get_ocr
 from services.ppt_service   import PPTService
 from services.file_manager  import _wipe_file
@@ -359,6 +359,53 @@ class PPTServerPipeline:
                 all_vision_items.extend(items)
 
             logger.info(f"[{job_id}] Claude Vision 완료: {len(all_vision_items)}건")
+
+        # ── 6-B. 독립 Face Scan 패스 ───────────────────────────────────
+        # Claude가 person_candidate를 빠뜨린 경우를 보완:
+        # 슬라이드 전체 이미지에서 MediaPipe + Haar로 직접 얼굴을 탐지.
+        # 이미 Claude가 잡은 bbox와 IoU > 0.3 겹치는 경우는 자동 중복 제거.
+        if page_images:
+            # 기존 person_candidate bbox 수집 (중복 방지용)
+            existing_pc_bboxes: dict[int, list] = {}
+            for vi in all_vision_items:
+                if vi.get("type") == "person_candidate":
+                    pg = int(vi.get("page", 0))
+                    bb = vi.get("bbox")
+                    if bb:
+                        existing_pc_bboxes.setdefault(pg, []).append(bb)
+
+            direct_scan_items: list[dict] = []
+            _judge_client = getattr(self.judge, "client", None)
+            _judge_model  = getattr(self.judge, "model", "")
+
+            for pg_info in page_images:
+                pg_no  = pg_info["page"]
+                pg_b64 = pg_info.get("b64", "")
+                if not pg_b64:
+                    continue
+
+                existing_bbs = existing_pc_bboxes.get(pg_no, [])
+                new_items = scan_slide_for_faces(
+                    pg_b64,
+                    pg_no,
+                    existing_bboxes=existing_bbs,
+                    client=_judge_client,
+                    model=_judge_model,
+                )
+                if new_items:
+                    logger.info(
+                        f"[{job_id}] 직접 face scan p{pg_no}: "
+                        f"{len(new_items)}건 추가"
+                    )
+                    direct_scan_items.extend(new_items)
+
+            if direct_scan_items:
+                logger.info(
+                    f"[{job_id}] 직접 face scan 합계: {len(direct_scan_items)}건 추가"
+                )
+                all_vision_items.extend(direct_scan_items)
+            else:
+                logger.debug(f"[{job_id}] 직접 face scan: 추가 탐지 없음")
 
         prog(90, "결과 합산 중…")
 

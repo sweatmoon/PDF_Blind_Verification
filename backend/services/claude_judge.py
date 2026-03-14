@@ -2024,6 +2024,195 @@ def _post_process_faces(
     return out
 
 
+# ── 슬라이드 직접 Face Scan ──────────────────────────────────────
+def scan_slide_for_faces(
+    page_b64: str,
+    page_no: int,
+    existing_bboxes: Optional[List[list]] = None,
+    client=None,
+    model: str = "",
+) -> List[dict]:
+    """
+    슬라이드 전체 이미지에서 얼굴을 직접 탐지해 person_candidate 항목을 생성.
+
+    동작 방식:
+      1. MediaPipe BlazeFace로 슬라이드 전체 이미지에서 얼굴 bbox 목록 추출
+      2. OpenCV Haar Cascade로 추가 탐지 (MediaPipe 보완)
+      3. 각 bbox를 _verify_face_candidate()로 재확인
+          real_photo         → judgment="위반" 아이템 생성
+          icon_or_silhouette → 스킵
+          unknown            → 스킵 (face not detected = 허용)
+      4. existing_bboxes와 IoU > 0.3 겹치는 경우 중복 제거
+         (Claude가 이미 잡은 영역은 추가하지 않음)
+
+    반환:
+      새로 탐지된 위반 아이템 리스트
+      [{"page": N, "type": "person_candidate", "judgment": "위반",
+        "content": "인물 사진 후보 영역 (직접 탐지)",
+        "reason": "...", "bbox": [x,y,w,h], "_face_reverified": True,
+        "_direct_scan": True}]
+    """
+    results: List[dict] = []
+
+    try:
+        import numpy as np
+        import cv2
+        import base64
+        from io import BytesIO
+        from PIL import Image as _PILImg
+
+        # ── base64 → PIL 이미지 ──────────────────────────────────
+        try:
+            img_bytes = base64.b64decode(page_b64)
+            slide_img = _PILImg.open(BytesIO(img_bytes)).convert("RGB")
+        except Exception as _de:
+            logger.warning(f"[face_scan] p{page_no} 이미지 디코딩 실패: {_de}")
+            return results
+
+        W, H = slide_img.width, slide_img.height
+        img_rgb = np.array(slide_img)
+
+        detected_bboxes: List[tuple] = []  # (x, y, w, h) 픽셀 좌표 (절대값)
+
+        # ── 1단계: MediaPipe BlazeFace ─────────────────────────
+        mp_detector = _get_mp_face_detector()
+        if mp_detector is not None:
+            try:
+                import mediapipe as _mp
+                mp_img = _mp.Image(
+                    image_format=_mp.ImageFormat.SRGB,
+                    data=img_rgb.astype(np.uint8),
+                )
+                mp_result = mp_detector.detect(mp_img)
+                for det in mp_result.detections:
+                    conf = det.categories[0].score if det.categories else 0.0
+                    if conf < 0.4:
+                        continue
+                    bb = det.bounding_box
+                    x, y, w, h = bb.origin_x, bb.origin_y, bb.width, bb.height
+                    # 슬라이드 범위 클램프
+                    x = max(0, x); y = max(0, y)
+                    w = min(w, W - x); h = min(h, H - y)
+                    if w > 20 and h > 20:
+                        detected_bboxes.append((x, y, w, h))
+                        logger.info(
+                            f"[face_scan] p{page_no} MediaPipe 얼굴 "
+                            f"(conf={conf:.2f}, bbox={x},{y},{w},{h})"
+                        )
+            except Exception as _me:
+                logger.debug(f"[face_scan] p{page_no} MediaPipe 실패: {_me}")
+
+        # ── 2단계: OpenCV Haar Cascade (보완) ─────────────────
+        cascade = _get_cv_face_cascade()
+        if cascade is not None:
+            try:
+                gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+                faces_haar = cascade.detectMultiScale(
+                    gray,
+                    scaleFactor=1.05,
+                    minNeighbors=3,
+                    minSize=(30, 30),
+                    flags=cv2.CASCADE_SCALE_IMAGE,
+                )
+                if len(faces_haar) > 0:
+                    for (fx, fy, fw, fh) in faces_haar:
+                        detected_bboxes.append((int(fx), int(fy), int(fw), int(fh)))
+                        logger.info(
+                            f"[face_scan] p{page_no} Haar 얼굴 "
+                            f"(bbox={fx},{fy},{fw},{fh})"
+                        )
+            except Exception as _ce:
+                logger.debug(f"[face_scan] p{page_no} Haar 실패: {_ce}")
+
+        if not detected_bboxes:
+            logger.debug(f"[face_scan] p{page_no} 얼굴 없음 → 스킵")
+            return results
+
+        # ── NMS: 겹치는 bbox 병합 (같은 얼굴 중복 제거) ──────
+        def _iou(a, b):
+            ax, ay, aw, ah = a
+            bx, by, bw, bh = b
+            ix = max(ax, bx); iy = max(ay, by)
+            ix2 = min(ax+aw, bx+bw); iy2 = min(ay+ah, by+bh)
+            inter = max(0, ix2-ix) * max(0, iy2-iy)
+            union = aw*ah + bw*bh - inter
+            return inter / union if union > 0 else 0.0
+
+        # 간단한 NMS
+        keep: List[tuple] = []
+        for bbox in detected_bboxes:
+            overlap = any(_iou(bbox, k) > 0.3 for k in keep)
+            if not overlap:
+                keep.append(bbox)
+        detected_bboxes = keep
+
+        # ── 기존 person_candidate bbox와 중복 체크 ────────────
+        def _to_abs(rel_bbox):
+            """상대좌표 [rx,ry,rw,rh] → 절대 픽셀"""
+            if not rel_bbox or len(rel_bbox) < 4:
+                return None
+            rx, ry, rw, rh = rel_bbox
+            # 0~1 범위면 절대 변환, 이미 픽셀이면 그대로
+            if max(rx, ry, rw, rh) <= 1.5:
+                return (int(rx*W), int(ry*H), int(rw*W), int(rh*H))
+            return (int(rx), int(ry), int(rw), int(rh))
+
+        existing_abs: List[tuple] = []
+        for eb in (existing_bboxes or []):
+            ab = _to_abs(eb)
+            if ab:
+                existing_abs.append(ab)
+
+        # ── 각 얼굴 bbox → face_verify ────────────────────────
+        for (fx, fy, fw, fh) in detected_bboxes:
+            # 기존과 겹치는지 확인
+            abs_bb = (fx, fy, fw, fh)
+            if any(_iou(abs_bb, eb) > 0.3 for eb in existing_abs):
+                logger.info(
+                    f"[face_scan] p{page_no} bbox={fx},{fy},{fw},{fh} "
+                    f"→ 기존 person_candidate 중복 → 스킵"
+                )
+                continue
+
+            # 상대좌표로 변환 (0~1)
+            rel_bbox = [fx/W, fy/H, fw/W, fh/H]
+
+            verdict = _verify_face_candidate(page_b64, rel_bbox, client=client, model=model)
+            logger.info(
+                f"[face_scan] p{page_no} bbox={fx},{fy},{fw},{fh} "
+                f"→ face_verify={verdict}"
+            )
+
+            if verdict == "real_photo":
+                item = {
+                    "page": page_no,
+                    "type": "person_candidate",
+                    "judgment": "위반",
+                    "content": "인물 사진 후보 영역 (직접 탐지)",
+                    "reason": "슬라이드 직접 얼굴 탐지 (MediaPipe/Haar) → 실제 인물 사진 확인",
+                    "bbox": rel_bbox,
+                    "_face_reverified": True,
+                    "_direct_scan": True,
+                }
+                results.append(item)
+                alog.log("face_scan", "real_photo", {
+                    "page": page_no,
+                    "bbox": rel_bbox,
+                    "abs_bbox": [fx, fy, fw, fh],
+                })
+            else:
+                alog.log("face_scan", verdict, {
+                    "page": page_no, "bbox": rel_bbox,
+                })
+
+    except ImportError as _ie:
+        logger.warning(f"[face_scan] 라이브러리 없음 → 스킵: {_ie}")
+    except Exception as e:
+        logger.warning(f"[face_scan] p{page_no} 전체 오류: {e}")
+
+    return results
+
+
 # ── 싱글톤 ───────────────────────────────────────────────────────
 _inst: ClaudeVisionJudge | None = None
 
