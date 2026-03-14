@@ -1,7 +1,7 @@
 """
 관리자 API – 사전 관리 / 시스템 설정 / 통계
-- Claude API 키 런타임 업데이트 추가
-- 단일 항목 추가/삭제 'term' 필드 지원
+- 사전: SQLite DB 영구 저장 (Railway 재배포 후에도 유지)
+- API 키: DB kv_store + 파일 이중 저장
 """
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException
@@ -10,6 +10,10 @@ from pydantic import BaseModel
 from models.schemas import DictionaryUpdateRequest
 from services.rule_detector import get_rule_detector
 from core.config import get_logger, load_dict, save_dict
+from core.database import (
+    db_load_dict, db_save_dict, db_add_terms, db_remove_term,
+    db_replace_subkey, db_count_subkey, kv_set, kv_get,
+)
 
 router = APIRouter()
 logger = get_logger("admin_api")
@@ -30,7 +34,7 @@ def restore_dictionary(body: dict):
     body: { direct_identifiers: {...}, indirect_identifiers: {...}, allowed_terms: {...} }
     """
     valid_groups = {"direct_identifiers", "indirect_identifiers", "allowed_terms"}
-    current = load_dict()
+    restore_data: dict = {}
 
     for group_key in valid_groups:
         if group_key not in body:
@@ -38,22 +42,22 @@ def restore_dictionary(body: dict):
         group_data = body[group_key]
         if not isinstance(group_data, dict):
             continue
-        current[group_key] = {}
+        restore_data[group_key] = {}
         for subkey, items in group_data.items():
             if isinstance(items, list):
-                current[group_key][subkey] = [
+                restore_data[group_key][subkey] = [
                     i.strip() for i in items if str(i).strip()
                 ]
 
-    if not save_dict(current):
-        raise HTTPException(500, "사전 저장 실패")
+    if not db_save_dict(restore_data):
+        raise HTTPException(500, "사전 DB 저장 실패")
 
     get_rule_detector().reload()
     total = sum(
         len(v) for g in valid_groups
-        for v in current.get(g, {}).values()
+        for v in restore_data.get(g, {}).values()
     )
-    logger.info(f"사전 복원 완료: 총 {total}개 항목")
+    logger.info(f"사전 복원 완료 (DB): 총 {total}개 항목")
     return JSONResponse({"success": True, "total_items": total})
 
 
@@ -64,43 +68,33 @@ def update_dictionary(req: DictionaryUpdateRequest):
     if req.group not in valid_groups:
         raise HTTPException(400, f"유효하지 않은 그룹: {req.group}")
 
-    data  = load_dict()
-    group = data.setdefault(req.group, {})
-    group.setdefault(req.subcategory, [])
-
     clean = [i.strip() for i in req.items if i.strip()]
 
     if req.action == "add":
-        # 대소문자·공백 정규화 후 중복 체크 (batch 엔드포인트와 동일 기준)
-        existing_lower = {x.strip().lower() for x in group[req.subcategory]}
-        added = 0
-        for item in clean:
-            if item.strip().lower() not in existing_lower:
-                group[req.subcategory].append(item)
-                existing_lower.add(item.strip().lower())
-                added += 1
+        added, skipped = db_add_terms(req.group, req.subcategory, clean)
+        total = db_count_subkey(req.group, req.subcategory)
     elif req.action == "remove":
-        rm = set(clean)
-        group[req.subcategory] = [x for x in group[req.subcategory] if x not in rm]
+        for item in clean:
+            db_remove_term(req.group, req.subcategory, item)
+        total = db_count_subkey(req.group, req.subcategory)
+        added = skipped = 0
     elif req.action == "replace":
-        group[req.subcategory] = clean
+        db_replace_subkey(req.group, req.subcategory, clean)
+        total = db_count_subkey(req.group, req.subcategory)
+        added = skipped = 0
     else:
         raise HTTPException(400, f"유효하지 않은 action: {req.action}")
-
-    if not save_dict(data):
-        raise HTTPException(500, "사전 저장 실패")
 
     get_rule_detector().reload()
     resp: dict = {
         "success": True,
         "group":   req.group,
         "subcat":  req.subcategory,
-        "count":   len(group[req.subcategory]),
+        "count":   total,
     }
-    # add 액션인 경우 추가/중복 건수 포함
     if req.action == "add":
         resp["added"]   = added
-        resp["skipped"] = len(clean) - added
+        resp["skipped"] = skipped
     return JSONResponse(resp)
 
 
@@ -115,7 +109,7 @@ def add_item(group: str, subcategory: str, body: dict):
         group=group, subcategory=subcategory, items=[item], action="add"))
 
 
-# ── 배치 항목 추가 (다중 입력, race condition 없음) ────────────
+# ── 배치 항목 추가 (다중 입력, DB 직접 UPSERT) ───────────────
 @router.post("/dictionary/{group}/{subcategory}/batch")
 def add_items_batch(group: str, subcategory: str, body: dict):
     terms = body.get("terms", [])
@@ -129,25 +123,11 @@ def add_items_batch(group: str, subcategory: str, body: dict):
     if group not in valid_groups:
         raise HTTPException(400, f"유효하지 않은 그룹: {group}")
 
-    data  = load_dict()
-    grp   = data.setdefault(group, {})
-    grp.setdefault(subcategory, [])
-    # 대소문자·공백 정규화 후 중복 체크
-    existing_lower = {x.strip().lower() for x in grp[subcategory]}
+    added, skipped = db_add_terms(group, subcategory, clean)
+    total = db_count_subkey(group, subcategory)
 
-    added = 0
-    for item in clean:
-        if item.strip().lower() not in existing_lower:
-            grp[subcategory].append(item)
-            existing_lower.add(item.strip().lower())
-            added += 1
-
-    skipped = len(clean) - added
-    if not save_dict(data):
-        raise HTTPException(500, "사전 저장 실패")
     get_rule_detector().reload()
-    return JSONResponse({"success": True, "added": added, "skipped": skipped,
-                         "total": len(grp[subcategory])})
+    return JSONResponse({"success": True, "added": added, "skipped": skipped, "total": total})
 
 
 # ── 단일 항목 삭제 ────────────────────────────────────────────
@@ -193,9 +173,14 @@ def set_claude_key(req: ClaudeKeyRequest):
     cfg.ANTHROPIC_API_KEY = api_key
     cfg.CLAUDE_ENABLED = True
 
-    # 파일에 영구 저장 (서버 재시작 후 자동 복원)
+    # 파일에 영구 저장 (하위 호환) + DB 저장
     try:
         cfg._CLAUDE_KEY_FILE.write_text(api_key, encoding="utf-8")
+    except Exception:
+        pass
+    try:
+        from core.database import kv_set
+        kv_set("claude_api_key", api_key)
     except Exception:
         pass
 
@@ -223,7 +208,7 @@ def set_vision_key(req: VisionKeyRequest):
     if not api_key:
         raise HTTPException(400, "API 키 필요")
 
-    cfg.set_google_vision_key(api_key)
+    cfg.set_google_vision_key(api_key)   # DB + 파일 이중 저장
     logger.info("Google Vision API 키 런타임 업데이트 완료")
     return JSONResponse({"success": True, "vision_enabled": True})
 

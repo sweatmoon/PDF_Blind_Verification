@@ -23,7 +23,40 @@ FRONTEND = Path(__file__).parent.parent / "frontend" / "public"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _load_saved_jobs()   # 서버 재시작 시 저장된 결과 복원
+    # ── 1. DB 초기화 (스키마 생성 + 기본값 시드) ────────────────
+    try:
+        from core.database import init_db
+        init_db()
+        logger.info("SQLite DB 초기화 완료")
+    except Exception as e:
+        logger.error(f"DB 초기화 실패: {e}")
+
+    # ── 2. DB에서 API 키 복원 (환경변수 없을 때 fallback) ────────
+    try:
+        import core.config as cfg
+        from core.database import kv_get
+
+        # Vision API 키
+        if not cfg.GOOGLE_VISION_API_KEY:
+            db_vision = kv_get("google_vision_api_key", "")
+            if db_vision:
+                cfg.GOOGLE_VISION_API_KEY = db_vision
+                logger.info("DB에서 Vision API 키 복원")
+
+        # Claude API 키
+        if not cfg.ANTHROPIC_API_KEY:
+            db_claude = kv_get("claude_api_key", "")
+            if db_claude:
+                cfg.ANTHROPIC_API_KEY = db_claude
+                cfg.CLAUDE_ENABLED = True
+                import os
+                os.environ["ANTHROPIC_API_KEY"] = db_claude
+                logger.info("DB에서 Claude API 키 복원")
+    except Exception as e:
+        logger.warning(f"DB에서 API 키 복원 실패: {e}")
+
+    # ── 3. 저장된 Job 복원 ─────────────────────────────────────
+    _load_saved_jobs()
 
     # 재시작 전 processing/pending 상태 job → failed 마킹 (중단된 작업 명확히 표시)
     from core.config import list_jobs, update_job

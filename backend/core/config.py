@@ -32,12 +32,18 @@ OCR_ENABLED        = os.getenv("OCR_ENABLED", "true").lower() == "true"
 CLAUDE_ENABLED     = bool(ANTHROPIC_API_KEY)
 CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
-# ── Google Vision API (런타임 설정 가능 + 파일 영구 저장) ────────
+# ── Google Vision API (런타임 설정 가능 + DB 영구 저장) ─────────
 GOOGLE_VISION_API_KEY: str = os.getenv("GOOGLE_VISION_API_KEY", "") or _load_key_file(_VISION_KEY_FILE)
 
 def set_google_vision_key(key: str):
     global GOOGLE_VISION_API_KEY
     GOOGLE_VISION_API_KEY = key.strip()
+    # DB + 파일 이중 저장 (하위 호환)
+    try:
+        from core.database import kv_set
+        kv_set("google_vision_api_key", key.strip())
+    except Exception:
+        pass
     try:
         _VISION_KEY_FILE.write_text(key.strip(), encoding="utf-8")
     except Exception:
@@ -45,6 +51,14 @@ def set_google_vision_key(key: str):
 
 def get_google_vision_key() -> str:
     return GOOGLE_VISION_API_KEY
+
+def _load_vision_key_from_db() -> str:
+    """DB에서 Vision API 키 로드 (init_db 이후 호출)"""
+    try:
+        from core.database import kv_get
+        return kv_get("google_vision_api_key", "")
+    except Exception:
+        return ""
 
 # ── 로거 팩토리 ────────────────────────────────────────────────
 def get_logger(name: str) -> logging.Logger:
@@ -156,9 +170,7 @@ def delete_job(job_id: str):
 def list_jobs() -> list:
     return list(_jobs.values())
 
-# ── 사전 파일 ─────────────────────────────────────────────────
-DICT_FILE = DATA_DIR / "dictionary.json"
-
+# ── 사전 기본값 (DB 시드용) ──────────────────────────────────
 DEFAULT_DICT: dict = {
     "direct_identifiers": {
         "company_names":        [],
@@ -191,23 +203,21 @@ DEFAULT_DICT: dict = {
     },
 }
 
+# ── 사전 로드/저장 → SQLite DB 위임 ──────────────────────────
 def load_dict() -> dict:
-    if DICT_FILE.exists():
-        try:
-            data = json.loads(DICT_FILE.read_text("utf-8"))
-            # 누락 키 병합
-            for g in DEFAULT_DICT:
-                data.setdefault(g, {})
-                for sk in DEFAULT_DICT[g]:
-                    data[g].setdefault(sk, DEFAULT_DICT[g][sk])
-            return data
-        except Exception as e:
-            logger.warning(f"사전 로드 실패: {e}")
-    return {g: {sk: list(v) for sk, v in subs.items()} for g, subs in DEFAULT_DICT.items()}
+    """DB에서 사전 로드. DB 미준비 시 DEFAULT_DICT 반환."""
+    try:
+        from core.database import db_load_dict
+        return db_load_dict()
+    except Exception as e:
+        logger.warning(f"DB 사전 로드 실패, 기본값 사용: {e}")
+        return {g: {sk: list(v) for sk, v in subs.items()} for g, subs in DEFAULT_DICT.items()}
 
 def save_dict(data: dict) -> bool:
+    """DB에 사전 저장."""
     try:
-        DICT_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-        return True
+        from core.database import db_save_dict
+        return db_save_dict(data)
     except Exception as e:
-        logger.error(f"사전 저장 실패: {e}"); return False
+        logger.error(f"DB 사전 저장 실패: {e}")
+        return False
