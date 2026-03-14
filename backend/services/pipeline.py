@@ -25,6 +25,7 @@ from services.rule_detector import get_rule_detector
 from services.claude_judge  import get_claude_judge
 from services.file_manager  import _wipe_file
 from core.config import get_logger, update_job
+import core.analysis_log as alog
 
 logger = get_logger("pipeline")
 
@@ -49,6 +50,10 @@ class Pipeline:
         t0 = time.time()
         logger.info(f"[{job_id}] 파이프라인 시작: {filename}")
 
+        # 분석 로그: job_id 활성화
+        alog.set_job(job_id)
+        alog.log("pipeline", "start", {"filename": filename, "job_id": job_id})
+
         def prog(pct: int, msg: str):
             update_job(job_id, progress=pct, message=msg)
 
@@ -62,6 +67,9 @@ class Pipeline:
         mode  = "스캔(OCR)" if svc.is_scanned else "텍스트(빠름)"
         prog(10, f"총 {total}페이지 · {mode}")
         logger.info(f"[{job_id}] {total}p scanned={svc.is_scanned}")
+        alog.log("pipeline", "pdf_opened", {
+            "total_pages": total, "is_scanned": svc.is_scanned, "mode": mode
+        })
 
         if svc.is_scanned and total > MAX_OCR_PAGES:
             logger.warning(f"[{job_id}] 스캔 PDF {total}p → 앞 {MAX_OCR_PAGES}p만 OCR")
@@ -76,14 +84,19 @@ class Pipeline:
         # ── 3. 1차 텍스트 규칙 탐지 (전 페이지 빠르게) ──────
         prog(15, "전체 텍스트 스캔 중…")
         rule_results: List[tuple] = []  # (page_idx, detections)
+        _rule_hit_count = 0
         for i in range(total):
             page = svc.extract_page(i)
             hits = self.rules.detect(page.text, page.page_number)
             rule_results.append((i, page, hits))
+            _rule_hit_count += len(hits)
             if i % 10 == 0:
                 await asyncio.sleep(0)
 
         prog(30, "패턴 탐지 완료…")
+        alog.log("pipeline", "rule_detect_done", {
+            "total_pages": total, "total_hits": _rule_hit_count
+        })
 
         # ── 4. OCR + 이미지 분석 (필요한 페이지만) ──────────
         for idx, (i, page, rule_hits) in enumerate(rule_results):
@@ -114,6 +127,11 @@ class Pipeline:
                         for r in ocr_hits:
                             r.source = "ocr"
                         add_unique(ocr_hits)
+                        alog.log("pipeline", "ocr_page", {
+                            "page": page.page_number,
+                            "ocr_text_len": len(full_ocr),
+                            "ocr_hits": len(ocr_hits),
+                        })
 
             # 내장 이미지 OCR (텍스트 PDF에도 이미지 있을 수 있음, 제한적으로)
             if self.ocr.enabled:
@@ -136,6 +154,12 @@ class Pipeline:
             # 로고 추정
             logo_hits = self._logo_heuristic(page.images, page.page_number)
             all_det.extend(logo_hits)
+            if logo_hits:
+                alog.log("pipeline", "logo_heuristic", {
+                    "page": page.page_number,
+                    "logo_candidates": len(logo_hits),
+                    "images_total": len(page.images),
+                })
 
             # Claude 판정 (히트 있을 때만)
             if all_det:
@@ -160,6 +184,17 @@ class Pipeline:
             pr = self._make_page_result(page.page_number, all_det)
             page_results.append(pr)
 
+            # 분석 로그: 페이지 최종 결과
+            alog.log("pipeline", "page_done", {
+                "page":       page.page_number,
+                "rule_hits":  len(rule_hits),
+                "all_det":    len(all_det),
+                "violations": sum(1 for d in all_det if d.verdict and d.verdict.value == "위반"),
+                "cautions":   sum(1 for d in all_det if d.verdict and d.verdict.value == "주의"),
+                "allowed":    sum(1 for d in all_det if d.verdict and d.verdict.value == "허용"),
+                "sources":    list({d.source for d in all_det}),
+            })
+
             await asyncio.sleep(0)
 
         svc.close()
@@ -181,6 +216,18 @@ class Pipeline:
         prog(100, "검증 완료")
         logger.info(f"[{job_id}] 완료 {report.processing_time_seconds}s | "
                     f"위반:{report.violation_count} 주의:{report.caution_count}")
+
+        # 분석 로그: 파이프라인 종료 요약
+        alog.log("pipeline", "finish", {
+            "elapsed_sec":      report.processing_time_seconds,
+            "total_pages":      report.total_pages,
+            "violation_count":  report.violation_count,
+            "caution_count":    report.caution_count,
+            "allowed_count":    report.allowed_count,
+            "risk_level":       report.risk_level.value if report.risk_level else None,
+        })
+        alog.close_job(job_id)
+
         return report
 
     # ═══════════════════════════════════════════════════════

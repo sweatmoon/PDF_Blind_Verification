@@ -17,6 +17,7 @@ from services.ocr_service   import get_ocr
 from services.file_manager  import _wipe_file
 from services.pdf_service   import PDFService
 from core.config import get_logger, update_job, load_dict, DATA_DIR
+import core.analysis_log as alog
 
 logger = get_logger("server_pipeline")
 
@@ -108,6 +109,10 @@ class ServerPipeline:
         """
         t0 = time.time()
         logger.info(f"[{job_id}] 서버 파이프라인 시작: {filename}")
+
+        # 분석 로그: job_id 활성화
+        alog.set_job(job_id)
+        alog.log("pipeline", "start", {"filename": filename, "job_id": job_id, "pipeline": "server"})
 
         def prog(pct: int, msg: str):
             update_job(job_id, progress=pct, message=msg)
@@ -408,6 +413,19 @@ class ServerPipeline:
             f"위반:{report['violation_count']} 주의:{report['caution_count']} | "
             f"모드: {' + '.join(mode_desc)}"
         )
+
+        # 분석 로그: 파이프라인 종료
+        alog.log("pipeline", "finish", {
+            "elapsed_sec":     elapsed,
+            "total_pages":     svc.total_pages,
+            "violation_count": report.get("violation_count", 0),
+            "caution_count":   report.get("caution_count", 0),
+            "allowed_count":   report.get("allowed_count", 0),
+            "risk_level":      report.get("risk_level"),
+            "mode":            mode_desc,
+        })
+        alog.close_job(job_id)
+
         return report
 
 
@@ -532,6 +550,12 @@ def normalize_vision_items(vision_items: list) -> list:
         it = dict(it)          # 원본 변형 방지
         it["_page_int"] = p
         out.append(it)
+
+    alog.log("server_pipeline", "normalize_done", {
+        "input_count":  len(vision_items),
+        "output_count": len(out),
+        "filtered_out": len(vision_items) - len(out),
+    })
     return out
 
 
@@ -744,6 +768,23 @@ def apply_face_filters(items: list) -> list:
             f"dtype={dtype!r} content={content[:30]!r}"
         )
         out.append(it)
+
+    alog.log("server_pipeline", "face_filter_done", {
+        "input_count":  len(items),
+        "output_count": len(out),
+        "results": [
+            {
+                "page":      it.get("page"),
+                "type":      it.get("type"),
+                "judgment":  it.get("judgment"),
+                "reverified": it.get("_face_reverified", False),
+                "content":   str(it.get("content",""))[:60],
+            }
+            for it in out
+            if any(kw in str(it.get("type","")).lower()
+                   for kw in ("인물","사진","얼굴","face","photo","person","candidate"))
+        ],
+    })
     return out
 
 
@@ -863,6 +904,19 @@ def merge_rule_and_vision(
                     "_fp_filtered":    "",
                     "_is_logo":        False,
                 })
+
+    # 분석 로그: merge 결과
+    total_items = sum(len(v) for v in page_map.values())
+    verdict_counts: dict = {}
+    for items in page_map.values():
+        for it in items:
+            j = it.get("verdict") or it.get("judgment") or "?"
+            verdict_counts[j] = verdict_counts.get(j, 0) + 1
+    alog.log("server_pipeline", "merge_done", {
+        "pages":          list(page_map.keys()),
+        "total_items":    total_items,
+        "verdict_counts": verdict_counts,
+    })
 
     return page_map
 

@@ -20,6 +20,7 @@ import json, re, base64, io
 from typing import List, Optional
 import core.config as _cfg
 from core.config import get_logger
+import core.analysis_log as alog
 
 logger = get_logger("claude_judge")
 
@@ -307,6 +308,10 @@ def _verify_logo_candidate(
 
         # ── 0단계: pHash (결정론적 1차 필터) ────────────────────────
         phash_dist = _compare_phash(ref_img, crop_img)
+        alog.log("logo_postprocess", "phash", {
+            "bbox": bbox, "phash_dist": round(float(phash_dist), 1) if phash_dist >= 0 else -1,
+            "threshold": _PHASH_MATCH_THRESHOLD,
+        })
         if 0.0 <= phash_dist <= _PHASH_MATCH_THRESHOLD:
             logger.info(
                 f"[전체로고] pHash distance={phash_dist:.0f} ≤ {_PHASH_MATCH_THRESHOLD}"
@@ -329,6 +334,7 @@ def _verify_logo_candidate(
         logger.debug(f"[전체로고] SSIM={ssim_score:.3f}")
         if ssim_score >= _LOGO_SIM_THRESHOLD:
             logger.info(f"전체 로고 SSIM={ssim_score:.3f} → 위반 확정")
+            alog.log("logo_postprocess", "ssim_violation", {"bbox": bbox, "ssim": round(ssim_score, 3)})
             return True
 
         # ── 2단계: ORB ──────────────────────────────────────────────
@@ -336,6 +342,7 @@ def _verify_logo_candidate(
         logger.debug(f"[전체로고] ORB={orb_score:.3f}")
         if orb_score >= _LOGO_SIM_THRESHOLD:
             logger.info(f"전체 로고 ORB={orb_score:.3f} → 위반 확정")
+            alog.log("logo_postprocess", "orb_violation", {"bbox": bbox, "orb": round(orb_score, 3)})
             return True
 
         # ── 3단계: 빨간 마스크 SSIM ─────────────────────────────────
@@ -345,8 +352,13 @@ def _verify_logo_candidate(
         logger.debug(f"[전체로고] red_mask={red_score:.3f}")
         if red_score >= _LOGO_SIM_THRESHOLD:
             logger.info(f"전체 로고 red_mask={red_score:.3f} → 위반 확정")
+            alog.log("logo_postprocess", "redmask_violation", {"bbox": bbox, "red_mask": round(red_score, 3)})
             return True
 
+        alog.log("logo_postprocess", "logo_no_match", {
+            "bbox": bbox,
+            "ssim": round(ssim_score, 3), "orb": round(orb_score, 3), "red_mask": round(red_score, 3),
+        })
         logger.info(
             f"전체 로고 SSIM={ssim_score:.3f} ORB={orb_score:.3f} "
             f"red_mask={red_score:.3f} → 불일치(심볼 단계 진행)"
@@ -1188,22 +1200,87 @@ class ClaudeVisionJudge:
             cache_info  = f" [캐시 읽기:{cache_read} 저장:{cache_write}]" if (cache_read or cache_write) else ""
             logger.info(f"Claude 응답 p{valid_pages}: {len(raw)}자{cache_info}")
 
+            # ── 분석 로그: Claude 요청/응답 ──────────────────────────
+            alog.log("claude_request", "sent", {
+                "pages":        valid_pages,
+                "has_logo_ref": bool(logo_b64),
+                "has_company":  bool(company_dict),
+                "content_blocks": len(content),
+            })
+            alog.log("claude_response", "received", {
+                "pages":        valid_pages,
+                "response_len": len(raw),
+                "cache_read":   cache_read,
+                "cache_write":  cache_write,
+                "raw_preview":  raw[:300],
+            })
+
             items = self._parse_items(raw, valid_pages)
+
+            alog.log("claude_response", "parsed", {
+                "pages":      valid_pages,
+                "item_count": len(items),
+                "items": [
+                    {
+                        "page":     it.get("page"),
+                        "type":     it.get("type"),
+                        "judgment": it.get("judgment"),
+                        "content":  str(it.get("content", ""))[:80],
+                        "has_bbox": bool(it.get("bbox")),
+                    }
+                    for it in items
+                ],
+            })
 
             # ── 로고 후처리: 공공기관 오탐 차단 + 전체/심볼 재비교 ──
             logo_symbol_b64 = getattr(self, "_logo_symbol_b64", None)
+            items_before_logo = len(items)
             items = self._post_process_logo(
                 items, page_images, logo_b64,
                 logo_symbol_b64=logo_symbol_b64,
                 company_dict=company_dict,
             )
+            alog.log("logo_postprocess", "done", {
+                "pages":         valid_pages,
+                "before":        items_before_logo,
+                "after":         len(items),
+                "results": [
+                    {
+                        "page":     it.get("page"),
+                        "type":     it.get("type"),
+                        "judgment": it.get("judgment"),
+                        "content":  str(it.get("content", ""))[:60],
+                    }
+                    for it in items if "로고" in str(it.get("type","")).lower()
+                       or "logo" in str(it.get("type","")).lower()
+                ],
+            })
+
             # ── 얼굴/인물사진 오탐 후처리 (bbox 기반 이미지 재검증) ───
+            items_before_face = len(items)
             items = _post_process_faces(
                 items,
                 page_images=page_images,
                 client=self._client,
                 model=_cfg.CLAUDE_MODEL if self.enabled else "",
             )
+            alog.log("face_postprocess", "done", {
+                "pages":   valid_pages,
+                "before":  items_before_face,
+                "after":   len(items),
+                "results": [
+                    {
+                        "page":     it.get("page"),
+                        "type":     it.get("type"),
+                        "judgment": it.get("judgment"),
+                        "content":  str(it.get("content", ""))[:60],
+                        "reverified": it.get("_face_reverified", False),
+                    }
+                    for it in items
+                    if any(kw in str(it.get("type","")).lower()
+                           for kw in ("인물","사진","얼굴","face","photo","person"))
+                ],
+            })
 
             return items
         except Exception as e:
@@ -1609,6 +1686,7 @@ def _verify_face_candidate(
         crop_img = _extract_crop(page_b64, bbox, pad=8)
         if crop_img is None:
             logger.debug("[face_verify] crop 실패 → unknown")
+            alog.log("face_verify", "crop_fail", {"bbox": bbox, "result": "unknown"})
             return "unknown"
 
         # 공유 분석 변수 초기화
@@ -1654,6 +1732,11 @@ def _verify_face_candidate(
                         f"[face_verify] 단색/실루엣 → icon_or_silhouette "
                         f"(unique_fg={unique_fg}, fg_sat_std={_fg_sat_std:.1f})"
                     )
+                    alog.log("face_verify", "solid_silhouette", {
+                        "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
+                        "unique_fg": unique_fg, "fg_sat_std": round(_fg_sat_std, 1),
+                        "result": "icon_or_silhouette",
+                    })
                     return "icon_or_silhouette"
 
             # ── D: 전경 기준 피부색 비율 계산 ──────────────────────────
@@ -1677,6 +1760,12 @@ def _verify_face_candidate(
                     f"[face_verify] 피부색 부족 → icon_or_silhouette "
                     f"(skin_fg={_fg_skin_ratio:.3f})"
                 )
+                alog.log("face_verify", "low_skin", {
+                    "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
+                    "fg_count": fg_count, "skin_fg": round(_fg_skin_ratio, 3),
+                    "fg_sat_std": round(_fg_sat_std, 1),
+                    "result": "icon_or_silhouette",
+                })
                 return "icon_or_silhouette"
 
             # 피부색 풍부 → 실사 (CV 탐지 없이 즉시)
@@ -1685,6 +1774,12 @@ def _verify_face_candidate(
                     f"[face_verify] 피부색 풍부 → real_photo "
                     f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
                 )
+                alog.log("face_verify", "rich_skin", {
+                    "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
+                    "fg_count": fg_count, "skin_fg": round(_fg_skin_ratio, 3),
+                    "fg_sat_std": round(_fg_sat_std, 1),
+                    "result": "real_photo",
+                })
                 return "real_photo"
 
             # ≥ 0.20 이지만 sat_std 낮음 → 애매 → CV 탐지 진행
@@ -1703,7 +1798,19 @@ def _verify_face_candidate(
                 "[face_verify] CV 얼굴 검출 → real_photo "
                 f"(crop={crop_img.width}×{crop_img.height})"
             )
+            alog.log("face_verify", "cv_face_detected", {
+                "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
+                "skin_fg": round(_fg_skin_ratio, 3),
+                "fg_sat_std": round(_fg_sat_std, 1),
+                "result": "real_photo",
+            })
             return "real_photo"
+
+        alog.log("face_verify", "cv_no_face", {
+            "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
+            "skin_fg": round(_fg_skin_ratio, 3),
+            "fg_sat_std": round(_fg_sat_std, 1),
+        })
 
         # ══ 3단계: 피부색 휴리스틱 보완 (CV 미탐 + 전경 피부색 있는 경우) ════
         # 1단계에서 0.10~0.15 범위였고 CV도 미탐 → 경계값 처리
@@ -1715,6 +1822,10 @@ def _verify_face_candidate(
                     f"[face_verify] 피부색 보완 → real_photo "
                     f"(skin_fg={_fg_skin_ratio:.3f}, fg_sat_std={_fg_sat_std:.1f})"
                 )
+                alog.log("face_verify", "skin_supplement", {
+                    "bbox": bbox, "skin_fg": round(_fg_skin_ratio, 3),
+                    "fg_sat_std": round(_fg_sat_std, 1), "result": "real_photo",
+                })
                 return "real_photo"
         except Exception as _se:
             logger.debug(f"[face_verify] 피부색 보완 실패: {_se}")
@@ -1761,16 +1872,29 @@ def _verify_face_candidate(
                     reason = obj.get("reason", "")
                     if result in ("real_photo", "icon_or_silhouette", "unknown"):
                         logger.info(f"[face_verify] Claude 재판정 → {result}: {reason[:60]}")
+                        alog.log("face_verify", "claude_fallback", {
+                            "bbox": bbox, "result": result,
+                            "reason": reason[:120],
+                            "skin_fg": round(_fg_skin_ratio, 3),
+                            "fg_sat_std": round(_fg_sat_std, 1),
+                        })
                         return result
                 logger.debug(f"[face_verify] Claude 응답 파싱 실패: {raw[:100]}")
             except Exception as _ce:
                 logger.warning(f"[face_verify] Claude 재판정 실패: {_ce}")
 
         logger.debug("[face_verify] 판정 불가 → unknown")
+        alog.log("face_verify", "unknown", {
+            "bbox": bbox,
+            "skin_fg": round(_fg_skin_ratio, 3),
+            "fg_sat_std": round(_fg_sat_std, 1),
+            "result": "unknown",
+        })
         return "unknown"
 
     except Exception as e:
         logger.warning(f"[face_verify] 전체 오류: {e} → unknown")
+        alog.log("face_verify", "error", {"bbox": bbox, "error": str(e), "result": "unknown"})
         return "unknown"
 
 
