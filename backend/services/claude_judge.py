@@ -124,8 +124,8 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - 이름+직책이 같은 줄에 있으면 → "인력명+직책" 1개 항목으로 통합 출력 가능
 
 ━━━ 텍스트 추출 탐지 결과 처리 ━━━
-- 이미지 앞에 "[텍스트 탐지 결과]"가 있으면, 해당 위반 항목은 이미지와 무관하게 반드시 포함
-- 텍스트로 감지된 실명이 있으면 해당 페이지는 무조건 위반으로 출력
+- 이미지 앞에 "[N페이지 텍스트 레이어에서 이미 탐지된 항목]"이 있으면, 해당 항목들을 JSON에 그대로 포함
+- 단, 해당 항목은 명시된 N페이지에만 귀속시킬 것. 같은 배치의 다른 페이지에 적용하지 말 것
 - 텍스트 탐지 결과가 없는 페이지도 이미지를 꼼꼼히 확인
 
 ━━━ 절대 금지 ━━━
@@ -134,8 +134,10 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - 배치 내 다른 페이지를 근거로 이 페이지도 익명처리됐다고 가정하는 것
 - 레퍼런스 로고와 확신 없이 "유사해 보인다"는 이유만으로 위반 판정하는 것
 - 공공기관·발주처 로고를 제안사 로고로 오인하여 위반 판정하는 것
-- 단색 실루엣·픽토그램·아이콘을 인물 사진으로 오인하여 위반 판정하는 것
+- 단색 실루엣·픽토그램·아이콘·도형을 인물 사진으로 오인하여 위반 판정하는 것
 - 특정인을 식별할 수 없는 이미지를 인물 사진 위반으로 판정하는 것
+- 얼굴이 명확히 보이지 않는 이미지를 인물사진으로 판정하는 것
+- 텍스트 힌트에서 탐지된 항목을 다른 페이지 번호로 출력하는 것 (반드시 힌트에 명시된 페이지 번호로만 출력)
 
 반드시 아래 JSON 형식으로만 반환하라. 다른 텍스트 절대 포함 금지:
 {
@@ -313,16 +315,16 @@ class ClaudeVisionJudge:
                 hits = rule_hits[page_key]
                 violations = [h for h in hits if h.get("judgment") == "위반"]
                 cautions   = [h for h in hits if h.get("judgment") == "주의"]
-                hint_lines = [f"[{pg['page']}페이지 텍스트 레이어에서 이미 탐지된 항목 — 아래 항목 각각을 JSON 결과에 그대로 포함할 것]"]
+                hint_lines = [f"[{pg['page']}페이지 텍스트 레이어에서 이미 탐지된 항목 — 아래 항목을 page: \"{pg['page']}\" 로 JSON에 포함할 것]"]
                 for h in violations:
                     c = h.get('content', '')
                     t = h.get('type', '')
-                    hint_lines.append(f'  - type: "{t}", content: "{c}", judgment: "위반"')
+                    hint_lines.append(f'  - page: "{pg["page"]}", type: "{t}", content: "{c}", judgment: "위반"')
                 for h in cautions:
                     c = h.get('content', '')
                     t = h.get('type', '')
-                    hint_lines.append(f'  - type: "{t}", content: "{c}", judgment: "주의"')
-                hint_lines.append("※ 위 항목들은 텍스트 추출로 확인된 실제 탐지값입니다. content 값을 요약하거나 바꾸지 말고 위에 명시된 값을 그대로 JSON에 출력하십시오.")
+                    hint_lines.append(f'  - page: "{pg["page"]}", type: "{t}", content: "{c}", judgment: "주의"')
+                hint_lines.append(f"※ 위 항목들은 {pg['page']}페이지 텍스트 추출로 확인된 값입니다. page 번호를 반드시 {pg['page']}로 출력하고, content 값을 그대로 JSON에 출력하십시오. 다른 페이지 번호로 출력하지 마십시오.")
                 content.append({
                     "type": "text",
                     "text": "\n".join(hint_lines)
