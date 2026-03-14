@@ -251,8 +251,9 @@ class ClaudeVisionJudge:
             return []
 
         content = []
+        _cache_marked = False   # cache_control 마킹 여부 추적
 
-        # 1. 로고 레퍼런스 첨부
+        # 1. 로고 레퍼런스 첨부 (캐싱 대상)
         if logo_b64:
             content.append({
                 "type": "text",
@@ -321,10 +322,18 @@ class ClaudeVisionJudge:
                     lines.append(f"{label}: {', '.join(vals)}")
 
             if lines:
+                # ★ Prompt Caching: 사전 텍스트 마지막 블록에 cache_control 적용
+                # 시스템프롬프트 + 로고 + 사전까지가 캐싱 구간 (매 호출 동일)
                 content.append({
                     "type": "text",
-                    "text": "━━━ 제안사 식별 사전 (이 정보가 등장하면 즉시 위반) ━━━\n" + "\n".join(lines)
+                    "text": "━━━ 제안사 식별 사전 (이 정보가 등장하면 즉시 위반) ━━━\n" + "\n".join(lines),
+                    "cache_control": {"type": "ephemeral"}
                 })
+                _cache_marked = True
+
+        # 사전이 없을 때: 로고 마지막 블록에 cache_control 적용
+        if not _cache_marked and logo_b64 and content:
+            content[-1]["cache_control"] = {"type": "ephemeral"}
 
         # 3. 페이지 이미지들 첨부 (각 페이지 앞에 텍스트 탐지 힌트 삽입)
         start_page = page_images[0]["page"]
@@ -373,11 +382,23 @@ class ClaudeVisionJudge:
             resp = self._client.messages.create(
                 model=_cfg.CLAUDE_MODEL,
                 max_tokens=8192,
-                system=SYSTEM_PROMPT,
+                # ★ Prompt Caching: 시스템 프롬프트 캐싱 (매 호출 동일 → 90% 비용 절감)
+                system=[
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ],
                 messages=[{"role": "user", "content": content}],
             )
             raw = resp.content[0].text.strip()
-            logger.info(f"Claude 응답 p{start_page}~{end_page}: {len(raw)}자")
+            # 캐싱 적중 여부 로깅
+            usage = resp.usage
+            cache_read  = getattr(usage, "cache_read_input_tokens",  0) or 0
+            cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            cache_info  = f" [캐시 읽기:{cache_read} 저장:{cache_write}]" if (cache_read or cache_write) else ""
+            logger.info(f"Claude 응답 p{start_page}: {len(raw)}자{cache_info}")
             return self._parse_items(raw)
         except Exception as e:
             logger.error(f"Claude Vision 오류 p{start_page}~{end_page}: {e}")

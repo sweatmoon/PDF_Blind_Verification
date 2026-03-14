@@ -20,7 +20,7 @@ from core.config import get_logger, update_job, load_dict, DATA_DIR
 
 logger = get_logger("server_pipeline")
 
-PAGES_PER_BATCH    = 4    # Claude Vision 배치당 페이지 수
+PAGES_PER_BATCH    = 1    # Claude Vision 배치당 페이지 수 (1=오탐 방지)
 RENDER_DPI         = 200  # Claude Vision용 이미지 DPI (120=252KB/장, 200=539KB/장, 300=939KB/장)
 OCR_DPI            = 120  # OCR용 이미지 DPI (GV는 120으로 충분, 1300px)
 GV_BATCH_SIZE      = 16   # Google Vision 배치당 최대 페이지 수
