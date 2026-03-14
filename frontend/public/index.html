@@ -2512,7 +2512,7 @@ async function dbFetchServerJobs() {
         if (msgEl) msgEl.textContent = msg;
         if (fnEl)  fnEl.textContent  = job.filename || '';
         dbUpdateSteps(pct, msg);
-        if (state.currentPage !== 'dashboard') showPage('dashboard');
+        // 사용자가 다른 화면을 보고 있어도 강제 이동 X
         const detailRunning = document.getElementById('db-detailRunning');
         const detailDone    = document.getElementById('db-detailDone');
         if (detailRunning) detailRunning.classList.remove('hidden');
@@ -3423,8 +3423,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (dr) dr.classList.remove('hidden');
         if (dd) dd.classList.add('hidden');
         _dbSelectedId = activeJob.job_id;
-        // 대시보드로 이동 (showPage 내부에서 renderDashboard 호출됨)
-        showPage('dashboard');
+        // 대시보드가 이미 열려있을 때만 패널 갱신 (강제 이동 X)
+        if (state.currentPage === 'dashboard') renderDashboard();
         // SSE 재구독
         dbSubscribeSSE(activeJob.job_id, activeJob.filename, activeJob.file_size || 0);
       } else {
