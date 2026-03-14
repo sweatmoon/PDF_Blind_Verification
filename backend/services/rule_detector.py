@@ -18,6 +18,39 @@ def _normalize_name(text: str) -> str:
     """
     return re.sub(r'[\s\u3000·•_\-/·\.·,]', '', text)
 
+
+# ── 기관/단체명 맥락 키워드 (인명 오탐 방지용) ─────────────────────
+# 2글자 인력명이 이 단어들과 함께 붙어 있으면 기관명의 일부로 판단해 오탐 처리
+_ORG_CONTEXT_SUFFIXES = re.compile(
+    r'^(공단|공사|위원회|연구원|연구소|진흥원|진흥원|협회|학회|재단|센터|기관|청|처|교|대학|병원|'
+    r'서비스|시스템|플랫폼|포털|네트워크|솔루션|기업|회사|그룹|주식|유한|건강|보험|연금|'
+    r'철도|도로|토지|주택|수자원|전력|가스|통신|방송|금융|은행|증권|투자|신용|카드)'
+)
+_ORG_CONTEXT_PREFIXES = re.compile(
+    r'(국가|정부|공공|민간|한국|대한|서울|경기|부산|인천|광주|대전|울산|세종|'
+    r'중앙|지방|광역|기초|행정|사업|관리|운영|대국민|시민|주민)$'
+)
+
+
+def _is_org_context(term: str, text: str, match_start: int, match_end: int) -> bool:
+    """매칭된 위치의 앞뒤 맥락을 보고 기관명의 일부인지 판단"""
+    window = 12
+    before = text[max(0, match_start - window): match_start]
+    after  = text[match_end: match_end + window]
+
+    # 뒤에 기관 관련 단어가 바로 이어지면 기관명 복합어
+    if _ORG_CONTEXT_SUFFIXES.search(after):
+        return True
+    # 앞에 기관 관련 단어가 바로 이어지면 기관명 복합어
+    if _ORG_CONTEXT_PREFIXES.search(before):
+        return True
+    # 앞뒤 모두 한글로 끊김없이 이어지면 복합어의 일부
+    if (before and after
+            and re.search(r'[가-힣]$', before)
+            and re.search(r'^[가-힣]', after)):
+        return True
+    return False
+
 # ── 정규식 패턴 ────────────────────────────────────────────────
 _P = {
     "email": re.compile(
@@ -204,6 +237,9 @@ class RuleDetector:
                             else re.escape(norm_term)
                         )
                         for m in re.finditer(norm_pattern, _norm_text, re.I):
+                            # 2글자 이하: 기관명 맥락 오탐 필터
+                            if len(norm_term) <= 2 and _is_org_context(norm_term, _norm_text, m.start(), m.end()):
+                                continue
                             k = (norm_term[:60], dtype)
                             if k in seen: continue
                             seen.add(k)
@@ -221,6 +257,9 @@ class RuleDetector:
                     else:
                         pattern = re.escape(term)
                     for m in re.finditer(pattern, text, re.I):
+                        # 2글자 이하: 기관명 맥락 오탐 필터
+                        if len(term) <= 2 and _is_org_context(term, text, m.start(), m.end()):
+                            continue
                         matched = m.group()
                         k = (matched[:60], dtype)
                         if k in seen: continue

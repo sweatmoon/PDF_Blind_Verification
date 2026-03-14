@@ -54,6 +54,9 @@ class PPTService:
             from pptx import Presentation
             self._prs         = Presentation(str(self.path))
             self.total_slides = len(self._prs.slides)
+            # slides[idx] 인덱스 접근이 일부 파일에서 AttributeError 발생하는 버그 대비
+            # → 슬라이드를 미리 list로 캐싱해 안전하게 접근
+            self._slides_list = list(self._prs.slides)
             self.metadata     = self._extract_metadata()
             logger.info(f"PPTX 열기: {self.total_slides}슬라이드")
             return True
@@ -90,7 +93,8 @@ class PPTService:
     # ── 슬라이드 추출 ─────────────────────────────────────────
     def extract_slide(self, idx: int) -> SlideData:
         """0-based index"""
-        slide      = self._prs.slides[idx]
+        # slides[idx] 인덱스 접근 버그 대비 → 캐싱된 list 사용
+        slide      = self._slides_list[idx]
         slide_num  = idx + 1
         text_items = []
         images     = []
