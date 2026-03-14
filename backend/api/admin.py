@@ -232,6 +232,58 @@ def get_stats():
 
 
 # ── 로그 조회 (원문 마스킹) ───────────────────────────────────
+@router.get("/db-status")
+def get_db_status():
+    """DB 상태 확인 - Railway 서버에서 실제 DB 데이터 조회"""
+    import sqlite3
+    from core.config import DATA_DIR
+    from core.database import _get_conn
+
+    db_path = DATA_DIR / "blind_verify.db"
+    result = {
+        "db_path": str(db_path),
+        "db_exists": db_path.exists(),
+        "db_size_kb": round(db_path.stat().st_size / 1024, 1) if db_path.exists() else 0,
+        "dictionary": {},
+        "dictionary_total": 0,
+        "kv_keys": [],
+    }
+
+    try:
+        conn = _get_conn()
+
+        # 카테고리별 항목 수
+        rows = conn.execute(
+            "SELECT group_key, subkey, COUNT(*) as cnt FROM dictionary_items GROUP BY group_key, subkey ORDER BY group_key, subkey"
+        ).fetchall()
+        for group_key, subkey, cnt in rows:
+            key = f"{group_key}/{subkey}"
+            result["dictionary"][key] = cnt
+            result["dictionary_total"] += cnt
+
+        # 샘플 항목 (각 subkey 최대 5개)
+        samples = {}
+        sample_rows = conn.execute(
+            "SELECT group_key, subkey, term FROM dictionary_items ORDER BY group_key, subkey, term LIMIT 200"
+        ).fetchall()
+        for group_key, subkey, term in sample_rows:
+            key = f"{group_key}/{subkey}"
+            if key not in samples:
+                samples[key] = []
+            if len(samples[key]) < 5:
+                samples[key].append(term)
+        result["samples"] = samples
+
+        # kv_store 키 목록
+        kv_rows = conn.execute("SELECT key, updated_at FROM kv_store ORDER BY key").fetchall()
+        result["kv_keys"] = [{"key": k, "updated_at": str(t)} for k, t in kv_rows]
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return JSONResponse(result)
+
+
 @router.get("/logs")
 def get_logs(lines: int = 80):
     from core.config import LOGS_DIR
