@@ -270,7 +270,12 @@ class RuleDetector:
                     norm_term = _normalize_name(term)
 
                     # ── 일반 명사 사전 체크: 사람 이름이 될 수 없는 단어 → 허용으로 처리
+                    # 단, 텍스트에 실제로 해당 단어가 존재할 때만 허용 항목 생성
                     if norm_term in _COMMON_WORDS or term in _COMMON_WORDS:
+                        # 텍스트에 실제로 해당 단어가 있는지 먼저 확인
+                        _check_pattern = re.escape(term) if len(term) > 2 else r"(?<![가-힣])" + re.escape(term) + r"(?![가-힣])"
+                        if not re.search(_check_pattern, text, re.I) and not re.search(re.escape(norm_term), _norm_text, re.I):
+                            continue  # 텍스트에 없으면 허용 항목도 생성하지 않음
                         k = (term[:60] + "_common_word", dtype)
                         if k not in seen:
                             seen.add(k)

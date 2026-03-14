@@ -808,7 +808,24 @@ function showPage(page) {
   document.getElementById(`page-${page}`).classList.remove('hidden');
   state.currentPage = page;
   if (page === 'admin') loadAdminData();
-  if (page === 'upload') renderRecentJobs();
+  if (page === 'upload') {
+    // 업로드 페이지로 돌아올 때 이전 분석 상태 초기화
+    if (state.pollTimer) clearInterval(state.pollTimer);
+    if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
+    state.currentJobId = null;
+    state.currentReport = null;
+    state.batchResults = [];
+    state.totalInputTokens = 0;
+    state.totalOutputTokens = 0;
+    const batchList = document.getElementById('batchList');
+    if (batchList) batchList.innerHTML = '';
+    const batchProgress = document.getElementById('batchProgress');
+    if (batchProgress) batchProgress.classList.add('hidden');
+    setProgress(0, '');
+    ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
+    document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
+    renderRecentJobs();
+  }
   if (page === 'dashboard') { dbStartPolling(); renderDashboard(); }
 }
 
@@ -842,6 +859,21 @@ async function processFile(file) {
   if (file.size > 300 * 1024 * 1024) {
     showToast('파일 크기가 300MB를 초과합니다.', 'error'); return;
   }
+
+  // 새 파일 선택 시 이전 분석 상태 초기화
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  if (state.resultTimer) { clearTimeout(state.resultTimer); state.resultTimer = null; }
+  state.currentJobId = null;
+  state.currentReport = null;
+  state.batchResults = [];
+  state.totalInputTokens = 0;
+  state.totalOutputTokens = 0;
+  document.getElementById('batchList').innerHTML = '';
+  document.getElementById('batchProgress').classList.add('hidden');
+  setProgress(0, '');
+  ['upload','scan','render','vision','report'].forEach(s => setStep(s, 'pending'));
+  document.getElementById('uploadBtnText').textContent = '블라인드 검증 시작';
+
   state.selectedFile = file;
   document.getElementById('fileInfo').classList.remove('hidden');
   document.getElementById('fileName').textContent = file.name;
