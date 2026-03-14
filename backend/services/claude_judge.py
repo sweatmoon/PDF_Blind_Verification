@@ -767,11 +767,20 @@ def _detect_real_face(pil_img) -> bool:
                 if result.detections:
                     conf = result.detections[0].categories[0].score \
                         if result.detections[0].categories else 0.0
-                    logger.info(
-                        f"[face_detect] MediaPipe 얼굴 검출 "
-                        f"(count={len(result.detections)}, conf={conf:.2f}) → True"
-                    )
-                    return True
+                    # ★ 임계값 0.6: 아이콘/실루엣 오탐 방지
+                    #   - 작은 crop(아이콘)에서 conf 0.4~0.5대 오탐 빈번
+                    #   - 실제 얼굴 사진은 보통 conf 0.7 이상
+                    if conf < 0.6:
+                        logger.info(
+                            f"[face_detect] MediaPipe 신뢰도 낮음 → 스킵 "
+                            f"(conf={conf:.2f} < 0.6)"
+                        )
+                    else:
+                        logger.info(
+                            f"[face_detect] MediaPipe 얼굴 검출 "
+                            f"(count={len(result.detections)}, conf={conf:.2f}) → True"
+                        )
+                        return True
                 logger.debug("[face_detect] MediaPipe: 얼굴 없음")
             except Exception as _me:
                 logger.debug(f"[face_detect] MediaPipe 실패: {_me}")
@@ -784,8 +793,8 @@ def _detect_real_face(pil_img) -> bool:
                 faces = cascade.detectMultiScale(
                     gray,
                     scaleFactor=1.1,
-                    minNeighbors=4,
-                    minSize=(20, 20),
+                    minNeighbors=5,   # 4→5: 아이콘 오탐 방지
+                    minSize=(30, 30), # 20→30: 픽토그램 오탐 방지
                     flags=cv2.CASCADE_SCALE_IMAGE,
                 )
                 if len(faces) > 0:
@@ -1690,6 +1699,19 @@ def _verify_face_candidate(
             alog.log("face_verify", "crop_fail", {"bbox": bbox, "result": "unknown"})
             return "unknown"
 
+        # ── 선체크: crop 크기가 너무 작으면 아이콘/픽토그램 가능성 높음 ──────
+        # 실제 얼굴 사진 crop은 보통 80px 이상. 50px 미만은 아이콘이 압도적으로 많음
+        if crop_img.width < 50 or crop_img.height < 50:
+            logger.info(
+                f"[face_verify] crop 너무 작음 → icon_or_silhouette 처리 "
+                f"(crop={crop_img.width}×{crop_img.height} < 50px)"
+            )
+            alog.log("face_verify", "tiny_crop_icon", {
+                "bbox": bbox, "crop_size": [crop_img.width, crop_img.height],
+                "result": "icon_or_silhouette",
+            })
+            return "icon_or_silhouette"
+
         # 공유 분석 변수 초기화
         _fg_skin_ratio = 0.0   # 전경 기준 피부색 비율
         _fg_sat_std    = 0.0   # 전경 기준 채도 표준편차
@@ -1941,6 +1963,22 @@ def _post_process_faces(
         page_b64 = page_b64_map.get(page_num) if page_num is not None else None
 
         if page_b64 is not None:
+            # ── 선체크: content/reason에 아이콘 키워드 있으면 MediaPipe 전에 즉시 허용 ──
+            # Claude가 이미 "아이콘", "실루엣" 등으로 설명한 경우 오탐 방지
+            combined_pre = dtype + " " + content + " " + reason
+            if any(kw in combined_pre for kw in _GRAPHIC_KW):
+                it = dict(it)
+                it["judgment"]        = "허용"
+                it["reason"]          = "그래픽/아이콘 키워드 확인 → MediaPipe 생략 후 즉시 허용"
+                it["recommendation"]  = ""
+                it["_face_reverified"] = True
+                logger.info(
+                    f"[face_post] 그래픽 키워드 선체크 → 허용: "
+                    f"p{page_num} '{it.get('content', '')[:40]}'"
+                )
+                out.append(it)
+                continue
+
             # bbox가 없어도 페이지 전체로 시도 (None bbox → _extract_crop fallback)
             face_class = _verify_face_candidate(
                 page_b64, bbox, client=client, model=model
@@ -2110,8 +2148,8 @@ def scan_slide_for_faces(
                 faces_haar = cascade.detectMultiScale(
                     gray,
                     scaleFactor=1.05,
-                    minNeighbors=3,
-                    minSize=(30, 30),
+                    minNeighbors=5,   # 3→5: 아이콘 오탐 감소
+                    minSize=(40, 40), # 30→40: 너무 작은 영역 제외
                     flags=cv2.CASCADE_SCALE_IMAGE,
                 )
                 if len(faces_haar) > 0:
