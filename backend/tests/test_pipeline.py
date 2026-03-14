@@ -926,6 +926,88 @@ def test_tc8_to_tc12_face_image_reverification():
 
     print("✅ TC8~TC12 통과: 인물사진 이미지 재검증 파이프라인 전체 정상")
 
+
+# ────────────────────────────────────────────────────────────────────
+# TC13: 새 SYSTEM_PROMPT — "주의" 판정 인물 후처리 검증
+# ────────────────────────────────────────────────────────────────────
+def test_tc13_caution_judgment_also_processed():
+    """
+    새 SYSTEM_PROMPT에서 Claude가 인물 사진을 "주의"로 반환하는 경우,
+    _post_process_faces가 "위반"과 동일하게 이미지 재검증을 수행해야 한다.
+
+    시나리오:
+      (A) judgment="주의" + 단색 이미지 → 허용 (아이콘/실루엣)
+      (B) judgment="주의" + 불명확 이미지 없음 → 키워드 폴백 → 허용 (기본값)
+      (C) judgment="주의" + 키워드 "실사" → 위반 유지
+    """
+    from services.claude_judge import _post_process_faces
+
+    print("\n  [TC13: 주의 판정 인물 후처리 검증]")
+
+    # ── (A) 주의 + 단색 이미지 → 허용 ───────────────────────────────
+    page_b64 = _make_face_page_b64("solid_blue", (200, 200))
+    page_images = [{"page": 2, "b64": page_b64, "media_type": "image/jpeg"}]
+
+    item_a = {
+        "page": 2,
+        "type": "인물사진",
+        "content": "사람 형태 의심",
+        "judgment": "주의",           # "주의"로 반환된 경우
+        "reason": "사람 형태 확인됨, 실사 여부 불명확",
+        "recommendation": "확인 필요",
+        "bbox": [10, 10, 150, 180],
+    }
+    result_a = _post_process_faces([item_a], page_images=page_images)
+    assert result_a, "TC13-A: 결과 없음"
+    assert result_a[0]["judgment"] == "허용", (
+        f"TC13-A 실패: 주의+단색 → 허용이어야 하는데 '{result_a[0]['judgment']}'"
+    )
+    print("  ✔ TC13-A: 주의+단색 이미지 → 허용 (이미지 재검증)")
+
+    # ── (B) 주의 + page_images 없음 + 일반 키워드 → 기본값 허용 ────────
+    item_b = {
+        "page": 3,
+        "type": "인물사진",
+        "content": "사람 형태 의심",
+        "judgment": "주의",
+        "reason": "불명확한 인물 형태",
+        "recommendation": "확인 필요",
+        "bbox": None,
+    }
+    result_b = _post_process_faces([item_b], page_images=None)
+    assert result_b, "TC13-B: 결과 없음"
+    assert result_b[0]["judgment"] == "허용", (
+        f"TC13-B 실패: 주의+불명확 → 허용이어야 하는데 '{result_b[0]['judgment']}'"
+    )
+    print("  ✔ TC13-B: 주의+불명확(키워드없음) → 기본값 허용")
+
+    # ── (C) 주의 + 실사 키워드 → 위반 유지 (키워드 폴백) ───────────────
+    item_c = {
+        "page": 4,
+        "type": "인물사진",
+        "content": "프로필 사진",
+        "judgment": "주의",
+        "reason": "피부색이 보이는 실사 촬영 사진으로 의심",
+        "recommendation": "확인 필요",
+        "bbox": None,
+    }
+    result_c = _post_process_faces([item_c], page_images=None)
+    assert result_c, "TC13-C: 결과 없음"
+    # 주의 → "위반"으로 업그레이드되지 않고 유지(위반 유지 로직은 원본 판정 유지)
+    # 키워드 폴백에서 실사 키워드 확인 → 판정 유지 (주의)
+    assert result_c[0]["judgment"] in ("주의", "위반"), (
+        f"TC13-C 실패: 주의+실사키워드 → 주의/위반이어야 하는데 '{result_c[0]['judgment']}'"
+    )
+    print("  ✔ TC13-C: 주의+실사키워드 → 위반/주의 유지")
+
+    print("✅ TC13 통과: 주의 판정 인물 후처리 — 이미지 재검증 및 키워드 폴백 정상")
+
+
+def test_tc13_caution_judgment_processed():
+    """TC13 단독 실행 래퍼"""
+    test_tc13_caution_judgment_also_processed()
+
+
 # ────────────────────────────────────────────────────────────────────
 # 전체 실행
 # ────────────────────────────────────────────────────────────────────
@@ -943,6 +1025,7 @@ if __name__ == "__main__":
         ("TC6 인물사진 오탐 방지",     test_tc6_person_photo_false_positive),
         ("TC7 심볼 자동 추출",         test_tc7_symbol_auto_extraction),
         ("TC8~12 인물사진 재검증",     test_tc8_to_tc12_face_image_reverification),
+        ("TC13 주의판정 인물 후처리",   test_tc13_caution_judgment_also_processed),
     ]
 
     passed = 0
