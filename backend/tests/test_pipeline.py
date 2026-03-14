@@ -1028,6 +1028,139 @@ def test_tc13_caution_judgment_processed():
     test_tc13_caution_judgment_also_processed()
 
 
+# ════════════════════════════════════════════════════════════════════
+# TC-A ~ TC-E: 3구간 정책 회귀 테스트
+# ════════════════════════════════════════════════════════════════════
+
+def _mock_detect(conf: float, bbox_size=(80, 80)):
+    """
+    _detect_real_face 를 monkey-patch 하기 위한 팩토리.
+    반환: (mp_conf, haar_detected, face_bbox) 형식의 mock 함수.
+    """
+    def _fake(pil_img):
+        if conf <= 0.0:
+            return 0.0, False, None
+        return conf, False, bbox_size
+    return _fake
+
+
+def test_tc_a_icon_weak_conf_small_bbox():
+    """
+    TC-A: 사람 아이콘 — MediaPipe conf 0.58, bbox 작음(30×30) → False
+    Case-2: 약한 후보지만 bbox < 40px → icon_or_silhouette
+    """
+    import services.claude_judge as _cj
+    from services.claude_judge import _verify_face_candidate
+    from unittest.mock import patch
+
+    page_b64 = _make_face_page_b64("solid_blue", (80, 80))
+
+    with patch.object(_cj, "_detect_real_face", _mock_detect(0.58, (30, 30))):
+        result = _verify_face_candidate(page_b64, None)
+
+    assert result == "icon_or_silhouette", (
+        f"TC-A 실패: 사람 아이콘(conf=0.58, bbox=30×30) → icon_or_silhouette 기대, 실제={result}"
+    )
+    print("✅ TC-A 통과: 사람 아이콘 conf=0.58 bbox=30×30 → icon_or_silhouette")
+
+
+def test_tc_b_silhouette_medium_conf():
+    """
+    TC-B: 실루엣 그래픽 — MediaPipe conf 0.62, bbox 있음, 단색 비율 높음 → False
+    Case-2: 약한 후보 + bbox OK + 단색 필터에서 탈락 → icon_or_silhouette
+    """
+    import services.claude_judge as _cj
+    from services.claude_judge import _verify_face_candidate
+    from unittest.mock import patch
+
+    # 단색 회색 이미지 → 단색/실루엣 사전 필터에서 걸림
+    page_b64 = _make_face_page_b64("solid_gray", (100, 100))
+
+    with patch.object(_cj, "_detect_real_face", _mock_detect(0.62, (60, 60))):
+        result = _verify_face_candidate(page_b64, None)
+
+    assert result == "icon_or_silhouette", (
+        f"TC-B 실패: 실루엣 그래픽(conf=0.62, 단색) → icon_or_silhouette 기대, 실제={result}"
+    )
+    print("✅ TC-B 통과: 실루엣 그래픽 conf=0.62 단색 → icon_or_silhouette")
+
+
+def test_tc_c_real_photo_weak_conf():
+    """
+    TC-C: 실제 프로필 사진 — MediaPipe conf 0.56, bbox 충분, 피부색 존재 → True
+    Case-2: 약한 후보 + bbox OK + 단색 아님 + 피부색 있음 → real_photo
+    """
+    import services.claude_judge as _cj
+    from services.claude_judge import _verify_face_candidate
+    from unittest.mock import patch
+
+    # 살색 이미지 (피부색 비율 충분) — bbox를 명시하여 crop 크기 보장
+    page_b64 = _make_face_page_b64("skin_photo", (200, 200))
+    # bbox: [x1, y1, x2, y2] 절대 픽셀 — 100×100 영역
+    test_bbox = [20, 20, 120, 120]
+
+    with patch.object(_cj, "_detect_real_face", _mock_detect(0.56, (60, 60))):
+        result = _verify_face_candidate(page_b64, test_bbox)
+
+    assert result == "real_photo", (
+        f"TC-C 실패: 실제 프로필(conf=0.56, 살색) → real_photo 기대, 실제={result}"
+    )
+    print("✅ TC-C 통과: 실제 프로필 conf=0.56 살색 → real_photo")
+
+
+def test_tc_d_real_photo_strong_conf():
+    """
+    TC-D: 실제 얼굴 사진 — MediaPipe conf 0.82, bbox 충분, 실루엣 아님 → True
+    Case-4: 강한 후보 + bbox OK + 단색 아님 → real_photo
+    """
+    import services.claude_judge as _cj
+    from services.claude_judge import _verify_face_candidate
+    from unittest.mock import patch
+
+    # bbox 명시하여 crop 크기 보장 (150×150 이미지에서 100×100 crop)
+    page_b64 = _make_face_page_b64("skin_photo", (200, 200))
+    test_bbox = [10, 10, 140, 140]
+
+    with patch.object(_cj, "_detect_real_face", _mock_detect(0.82, (80, 80))):
+        result = _verify_face_candidate(page_b64, test_bbox)
+
+    assert result == "real_photo", (
+        f"TC-D 실패: 실제 얼굴 사진(conf=0.82) → real_photo 기대, 실제={result}"
+    )
+    print("✅ TC-D 통과: 실제 얼굴 사진 conf=0.82 → real_photo")
+
+
+def test_tc_e_small_blurry_thumbnail():
+    """
+    TC-E: 흐릿한 작은 얼굴 썸네일 — MediaPipe conf 0.64, bbox 작음(35×35) → False
+    Case-2: 약한 후보 + bbox < 40px → icon_or_silhouette
+    """
+    import services.claude_judge as _cj
+    from services.claude_judge import _verify_face_candidate
+    from unittest.mock import patch
+
+    page_b64 = _make_face_page_b64("skin_photo", (80, 80))
+
+    with patch.object(_cj, "_detect_real_face", _mock_detect(0.64, (35, 35))):
+        result = _verify_face_candidate(page_b64, None)
+
+    assert result == "icon_or_silhouette", (
+        f"TC-E 실패: 작은 썸네일(conf=0.64, bbox=35×35) → icon_or_silhouette 기대, 실제={result}"
+    )
+    print("✅ TC-E 통과: 흐릿한 작은 썸네일 conf=0.64 bbox=35×35 → icon_or_silhouette")
+
+
+def test_tc_a_to_e_three_zone_policy():
+    """TC-A ~ TC-E: 3구간 정책 전체 회귀 테스트"""
+    print("\n  [TC-A~E: 3구간 정책 회귀 테스트]")
+    test_tc_a_icon_weak_conf_small_bbox()
+    test_tc_b_silhouette_medium_conf()
+    test_tc_c_real_photo_weak_conf()
+    test_tc_d_real_photo_strong_conf()
+    test_tc_e_small_blurry_thumbnail()
+    print("✅ TC-A~E 통과: 3구간 정책 전체 정상")
+
+
 # ────────────────────────────────────────────────────────────────────
 # 전체 실행
 # ────────────────────────────────────────────────────────────────────
