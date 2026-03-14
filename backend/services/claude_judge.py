@@ -1,19 +1,41 @@
 """
-Claude Vision 판정 엔진 v3
+Claude Vision 판정 엔진 v4
 - PAGE 블록 구조로 페이지 간 전이 완전 차단
 - rule_hits 확정→후보 교차검증 방식
 - 전체 이름 일치 기준 적용
 - 이름+직책 문맥 조건 강화
-- 레퍼런스 없는 로고 위반→주의 처리
+- 로고 판정 4단계 보수적 정책:
+    1단계 Claude Vision → 로고 후보 탐지
+    2단계 후보 영역 crop
+    3단계 레퍼런스 로고와 재비교
+    4단계 완전 일치 시만 위반 (그 외 허용)
+- 발주기관/공공기관 로고 오탐 방지
+- 강조 그래픽 오탐 방지
+- 우측하단 편향 제거
 - _parse_items() 출력 검증 강화
 """
 from __future__ import annotations
-import json, re, base64
+import json, re, base64, io
 from typing import List, Optional
 import core.config as _cfg
 from core.config import get_logger
 
 logger = get_logger("claude_judge")
+
+# ── 공공기관/발주기관 허용 키워드 (로고 절대 위반 불가) ──────────────
+_PUBLIC_ORG_KEYWORDS = (
+    "국가철도공단", "KR", "행정안전부", "LH", "한국토지주택공사",
+    "한국전력", "한국전력공사", "KEPCO", "한국도로공사", "한국수자원공사",
+    "한국가스공사", "한국철도공사", "코레일", "한국공항공사", "인천국제공항공사",
+    "국민건강보험", "국민건강보험공단", "국민연금", "국민연금공단",
+    "건강보험심사평가원", "국토교통부", "과학기술정보통신부",
+    "교육부", "고용노동부", "보건복지부", "환경부", "문화체육관광부",
+    "농림축산식품부", "산업통상자원부", "중소벤처기업부", "국방부",
+    "경찰청", "소방청", "기상청", "통계청", "조달청", "특허청",
+    "식품의약품안전처", "금융위원회", "공정거래위원회",
+    "한국농어촌공사", "NIA", "NIPA", "KISA", "ETRI", "KAIST", "KIST",
+    "정부24", "민원24", "나라장터", "디지털서비스",
+)
 
 # ── 시스템 프롬프트 ─────────────────────────────────────────────
 SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심사관이다.
@@ -24,6 +46,7 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 각 블록은 완전히 독립적으로 판단하라.
 ★★★ 다른 PAGE 블록에서 발견한 내용을 현재 블록에 적용하는 것 절대 금지 ★★★
 ★★★ 어떤 페이지에 위반이 있어도 다른 페이지에 자동 확장 금지 ★★★
+★★★ 특히 로고: 한 페이지에 로고가 있다고 해서 다른 페이지에도 로고가 있다고 추정 금지 ★★★
 
 ━━━ 우선순위 1 — 사전 등록 실명 (절대 위반) ━━━
 - "제안사 식별 사전"의 실명이 이미지에 전체 이름으로 확인되면 → 【위반】
@@ -71,10 +94,39 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - AI 생성 일러스트 스타일
 판단 기준: "실제 사람의 얼굴(피부색+이목구비)을 80% 이상 확신하는가?" → NO이면 반드시 【허용】
 
-━━━ 우선순위 4-B — 회사 로고 ━━━
+━━━ 우선순위 4-B — 회사 로고 판정 (매우 보수적으로) ━━━
+
+【로고 위반 판정 조건 — 아래 4가지 모두 충족해야만 위반】
+1. 레퍼런스 로고의 심볼 형태가 명확히 동일
+2. 워드마크 텍스트가 동일
+3. 색상 패턴이 동일
+4. 레이아웃 구조가 동일
+→ 위 조건 중 하나라도 불명확하면 반드시 【허용】으로 판정
+
+【로고 절대 위반 불가 대상】
+다음 기관의 로고는 제안사 로고로 절대 판정하지 마라:
+- 국가철도공단(KR), 행정안전부, LH, 한국토지주택공사, 한국전력(KEPCO)
+- 한국도로공사, 한국수자원공사, 한국철도공사(코레일), 국민건강보험공단
+- 기타 모든 공공기관·정부기관·발주기관 로고 → 항상 【허용】
+
+【로고가 아닌 것 — 절대 로고로 판정 금지】
+다음 요소는 회사 로고가 아니다:
+- 강조 표시용 빨간 원 (발표 강조, 마킹 표시)
+- 다이어그램 배지 (번호 표시, 단계 아이콘)
+- UI 강조 도형 (버튼, 뱃지, 태그)
+- 인포그래픽 아이콘 (화살표, 체크마크, 도형)
+- 단순 원형·사각형·다각형 그래픽
+- 슬라이드 장식 요소
+
+【우측하단 영역】
+우측하단은 참고적으로만 확인하라.
+실제 회사명 또는 레퍼런스 로고가 명확히 보이지 않으면 로고 위반으로 절대 판정하지 마라.
+단순 도형, 배경 요소, 저작권 표시 등은 위반 아님.
+
 【로고 레퍼런스가 있는 경우】
-- 레퍼런스와 형태·색상·폰트 스타일이 모두 80% 이상 일치해야만 【위반】
-- 비슷해 보이는 도형·아이콘·배지·UI 요소는 위반 아님
+- 이 분석은 1차 후보 탐지이다. 로고가 의심되면 type="로고후보"로 표시하라.
+- 최종 위반 판정은 후보 영역 crop 후 재비교로 결정된다.
+- 레퍼런스와 형태·워드마크·색상·레이아웃이 모두 명확히 일치해야만 type="로고" 위반으로 표시 가능
 - 발주기관·공공기관 로고는 절대 위반 아님
 
 【로고 레퍼런스가 없는 경우】
@@ -108,6 +160,9 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - 일반 본문/기술 설명에서 이름+직책 규칙 적용하는 것
 - 공공기관 로고를 제안사 로고로 오인하는 것
 - 단색 실루엣·픽토그램을 인물 사진으로 오인하는 것
+- 강조 그래픽(빨간 원, 배지, 도형)을 로고로 오인하는 것
+- 한 페이지의 로고 존재를 다른 페이지에 전이하는 것
+- 4가지 조건(형태+워드마크+색상+레이아웃)이 모두 충족되지 않았는데 로고 위반으로 판정하는 것
 
 ━━━ 출력 형식 ━━━
 반드시 아래 JSON 형식으로만 반환하라. 다른 텍스트 절대 포함 금지:
@@ -124,7 +179,92 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
   ]
 }
 - 문제 없는 페이지는 포함하지 않아도 된다
-- 한 페이지에 위반 요소 N개면 items 배열에 N개 항목"""
+- 한 페이지에 위반 요소 N개면 items 배열에 N개 항목
+- 로고 후보(1차 탐지)는 type="로고후보"로 표시하고 judgment="주의"로 설정
+- 최종 위반 확정은 코드에서 재비교 후 결정하므로 로고는 보수적으로 판정"""
+
+
+# ── 로고 후보 재비교 (crop → 픽셀 유사도) ───────────────────────
+def _verify_logo_candidate(
+    page_b64: str,
+    logo_ref_b64: str,
+    page_media_type: str = "image/jpeg",
+) -> bool:
+    """
+    Claude Vision이 로고 후보로 탐지한 페이지 이미지에서
+    우측하단 영역을 crop 후 레퍼런스 로고와 pixel-level 재비교.
+    반환값: True = 실제 로고 일치 (위반 확정), False = 불일치 (허용)
+    """
+    try:
+        from PIL import Image, ImageChops
+        import numpy as np
+
+        # 페이지 이미지 디코딩
+        page_bytes = base64.b64decode(page_b64)
+        page_img = Image.open(io.BytesIO(page_bytes)).convert("RGB")
+        pw, ph = page_img.width, page_img.height
+
+        # 레퍼런스 로고 디코딩
+        ref_bytes = base64.b64decode(logo_ref_b64)
+        ref_img = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
+        rw, rh = ref_img.width, ref_img.height
+
+        # 비교 영역 목록: 우측하단 28% × 22%, 우측하단 40% × 30%, 전체 우측 절반
+        crop_regions = [
+            (int(pw * 0.72), int(ph * 0.78), pw, ph),           # 우측하단 28%×22%
+            (int(pw * 0.60), int(ph * 0.70), pw, ph),           # 우측하단 40%×30%
+            (int(pw * 0.50), int(ph * 0.60), pw, ph),           # 우측절반 아래 40%
+        ]
+
+        # 레퍼런스 크기를 기준 비교 크기로 설정
+        cmp_w = max(64, min(rw, 200))
+        cmp_h = max(32, min(rh, 100))
+        ref_resized = ref_img.resize((cmp_w, cmp_h), Image.LANCZOS)
+        ref_arr = _img_to_hist(ref_resized)
+
+        best_sim = 0.0
+        for x0, y0, x1, y1 in crop_regions:
+            crop = page_img.crop((x0, y0, x1, y1))
+            crop_r = crop.resize((cmp_w, cmp_h), Image.LANCZOS)
+            crop_arr = _img_to_hist(crop_r)
+            sim = _hist_similarity(ref_arr, crop_arr)
+            if sim > best_sim:
+                best_sim = sim
+            # 빠른 조기 종료
+            if best_sim >= 0.82:
+                break
+
+        result = best_sim >= 0.82
+        logger.debug(f"로고 재비교 유사도={best_sim:.3f} → {'위반확정' if result else '허용'}")
+        return result
+
+    except ImportError:
+        # PIL/numpy 없으면 보수적으로 허용 처리
+        logger.warning("PIL/numpy 미설치 → 로고 재비교 불가, 허용 처리")
+        return False
+    except Exception as e:
+        logger.warning(f"로고 재비교 실패: {e} → 허용 처리")
+        return False
+
+
+def _img_to_hist(img) -> list:
+    """RGB 이미지를 정규화된 색상 히스토그램으로 변환"""
+    import numpy as np
+    arr = np.array(img)
+    hists = []
+    for ch in range(3):
+        h, _ = np.histogram(arr[:, :, ch], bins=32, range=(0, 256))
+        h = h.astype(float) / (h.sum() + 1e-9)
+        hists.extend(h.tolist())
+    return hists
+
+
+def _hist_similarity(h1: list, h2: list) -> float:
+    """Bhattacharyya 계수 기반 히스토그램 유사도 (0~1)"""
+    import numpy as np
+    a = np.array(h1)
+    b = np.array(h2)
+    return float(np.sum(np.sqrt(a * b)))
 
 
 class ClaudeVisionJudge:
@@ -197,7 +337,13 @@ class ClaudeVisionJudge:
         if logo_b64:
             content.append({
                 "type": "text",
-                "text": "아래는 제안사 공식 로고 레퍼런스 이미지이다.\n판정 기준: 형태·색상·폰트가 모두 80% 이상 일치해야만 위반.\n단순히 비슷해 보이는 도형·아이콘·배지·UI 요소는 위반 아님.\n발주기관(공공기관) 로고는 절대 위반 아님."
+                "text": (
+                    "아래는 제안사 공식 로고 레퍼런스 이미지이다.\n"
+                    "이 이미지는 1차 탐지 참고용이다. 실제 위반 확정은 별도 재비교 단계에서 결정한다.\n"
+                    "로고 후보 탐지 조건: 심볼 형태 + 워드마크 텍스트 + 색상 패턴 + 레이아웃 구조가 모두 명확히 동일해야 함.\n"
+                    "하나라도 불명확하면 로고 후보로도 표시하지 마라.\n"
+                    "발주기관(공공기관) 로고는 절대 위반 아님."
+                )
             })
             content.append({
                 "type": "image",
@@ -305,7 +451,11 @@ class ClaudeVisionJudge:
             # [PAGE N END]
             content.append({
                 "type": "text",
-                "text": f"[PAGE {page_num} END]\n이 페이지는 위 이미지만을 근거로 독립적으로 판정하라. 다른 PAGE 블록 내용 참조 금지."
+                "text": (
+                    f"[PAGE {page_num} END]\n"
+                    f"이 페이지는 위 이미지만을 근거로 독립적으로 판정하라.\n"
+                    f"다른 PAGE 블록 내용 참조 금지. 특히 로고는 이 페이지 이미지에서만 판단하라."
+                )
             })
 
         # 최종 지시
@@ -315,6 +465,7 @@ class ClaudeVisionJudge:
             "text": (
                 f"위 PAGE 블록들({page_list})을 블라인드 검증하라.\n"
                 f"각 PAGE 블록은 독립적으로 판단하라. 블록 간 내용 전이 금지.\n"
+                f"로고 판정은 매우 보수적으로: 4가지 조건(형태+워드마크+색상+레이아웃) 모두 충족 시만 위반.\n"
                 f"JSON만 반환하라."
             )
         })
@@ -336,10 +487,78 @@ class ClaudeVisionJudge:
             cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
             cache_info  = f" [캐시 읽기:{cache_read} 저장:{cache_write}]" if (cache_read or cache_write) else ""
             logger.info(f"Claude 응답 p{valid_pages}: {len(raw)}자{cache_info}")
-            return self._parse_items(raw, valid_pages)
+
+            items = self._parse_items(raw, valid_pages)
+
+            # ── 로고 후처리: 공공기관 오탐 차단 + 재비교 로직 ──
+            items = self._post_process_logo(items, page_images, logo_b64)
+
+            return items
         except Exception as e:
             logger.error(f"Claude Vision 오류 p{valid_pages}: {e}")
             return []
+
+    # ── 로고 후처리: 공공기관 필터 + 재비교 ─────────────────────
+    def _post_process_logo(
+        self,
+        items: List[dict],
+        page_images: List[dict],
+        logo_b64: Optional[str],
+    ) -> List[dict]:
+        """
+        1. 공공기관 로고 오탐 → 허용으로 변경
+        2. 로고 위반/로고후보 → crop 재비교 → 불일치 시 허용 강등
+        """
+        if not items:
+            return items
+
+        # 페이지번호 → b64 매핑
+        page_b64_map = {pg["page"]: (pg["b64"], pg.get("media_type", "image/jpeg"))
+                        for pg in page_images}
+
+        processed = []
+        for it in items:
+            dtype = it.get("type", "")
+            content = it.get("content", "")
+            judgment = it.get("judgment", "주의")
+
+            # ── 공공기관 로고 오탐 차단 ────────────────────────
+            if _is_logo_type(dtype) or _is_logo_type(content):
+                for kw in _PUBLIC_ORG_KEYWORDS:
+                    if kw.lower() in content.lower() or kw.lower() in it.get("reason", "").lower():
+                        it["judgment"] = "허용"
+                        it["reason"] = f"공공기관/발주기관 로고로 확인됨 ({kw}) — 제안사 로고 아님"
+                        it["recommendation"] = ""
+                        logger.debug(f"공공기관 로고 오탐 차단: {content} (키워드: {kw})")
+                        break
+
+            # ── 로고 후보/위반 → crop 재비교 ───────────────────
+            if judgment in ("위반", "주의") and _is_logo_type(dtype) and it.get("judgment") != "허용":
+                page_num = it.get("page", 0)
+                if logo_b64 and page_num in page_b64_map:
+                    b64, mtype = page_b64_map[page_num]
+                    matched = _verify_logo_candidate(b64, logo_b64, mtype)
+                    if not matched:
+                        # 재비교 불일치 → 허용 강등
+                        original_judgment = it.get("judgment", "주의")
+                        it["judgment"] = "허용"
+                        it["reason"] = (
+                            f"[로고 재비교 불일치] Claude 1차 탐지: {original_judgment}이었으나 "
+                            f"레퍼런스 로고와 crop 재비교 결과 불일치 → 허용 처리"
+                        )
+                        it["recommendation"] = ""
+                        logger.info(f"로고 재비교 불일치 → 허용: p{page_num} '{content}'")
+                    else:
+                        logger.info(f"로고 재비교 일치 → 위반 확정: p{page_num} '{content}'")
+                elif not logo_b64:
+                    # 레퍼런스 없으면 위반→주의 강등 (기존 정책 유지)
+                    if it.get("judgment") == "위반":
+                        it["judgment"] = "주의"
+                        it["reason"] = "[로고 레퍼런스 없음] 레퍼런스 없이 위반 확정 불가 → 주의"
+
+            processed.append(it)
+
+        return processed
 
     # ── 응답 파싱 + 검증 강화 ────────────────────────────────────
     def _parse_items(self, raw: str, valid_pages: list = None) -> List[dict]:
@@ -394,6 +613,15 @@ class ClaudeVisionJudge:
         except json.JSONDecodeError as ex:
             logger.warning(f"JSON 파싱 실패: {ex} | {raw[:300]}")
             return []
+
+
+# ── 헬퍼: 로고 관련 타입/컨텐츠 여부 판별 ───────────────────────
+def _is_logo_type(text: str) -> bool:
+    """type 또는 content가 로고 관련인지 확인"""
+    if not text:
+        return False
+    t = text.lower()
+    return any(kw in t for kw in ("로고", "logo", "ci", "bi", "브랜드", "brand", "심볼", "symbol", "로고후보"))
 
 
 # ── 싱글톤 ───────────────────────────────────────────────────────

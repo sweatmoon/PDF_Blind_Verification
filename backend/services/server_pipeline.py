@@ -452,6 +452,17 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
                 })
                 continue
 
+        # ── 공공기관 로고 오탐 추가 차단 (claude_judge 통과 후에도 재확인) ──────
+        from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
+        if (_is_logo_type(dtype) or _is_logo_type(content)) and it.get("judgment") != "허용":
+            for _kw in _PUBLIC_ORG_KEYWORDS:
+                if (_kw.lower() in content.lower()
+                        or _kw.lower() in it.get("reason", "").lower()):
+                    it["judgment"] = "허용"
+                    it["reason"] = f"공공기관/발주기관 로고 오탐 차단 ({_kw})"
+                    it["recommendation"] = ""
+                    break
+
         page_map.setdefault(p, []).append({
             "detection_type":  dtype,
             "detected_text":   content,
@@ -488,10 +499,15 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
                 existing_src = existing.get("source", "vision")
                 if existing_src == "vision":
                     existing["source"] = f"{rule_src}+vision"
-                # 판정은 더 강한 쪽으로
-                weight = {"위반": 2, "주의": 1, "허용": 0}
-                if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
-                    existing["verdict"] = h.get("judgment", "주의")
+                # ★ 로고 재비교로 허용 처리된 항목은 rule이 덮어쓰지 못함
+                from services.claude_judge import _is_logo_type as _ilt
+                if existing.get("verdict") == "허용" and _ilt(existing.get("detection_type", "")):
+                    pass  # 로고 재비교 허용 결과 보존
+                else:
+                    # 판정은 더 강한 쪽으로
+                    weight = {"위반": 2, "주의": 1, "허용": 0}
+                    if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
+                        existing["verdict"] = h.get("judgment", "주의")
             else:
                 # source: 'ocr'이면 OCR로 읽은 텍스트에서 탐지, 'rule'이면 PyMuPDF 텍스트에서 탐지
                 page_map.setdefault(p, []).append({

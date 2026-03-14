@@ -487,7 +487,18 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                 })
                 continue
 
-        # 크롭 이미지가 있는 페이지의 Vision 탐지 → 로고/업체명 위반 → 주의 강등
+        # ── 공공기관 로고 오탐 추가 차단 (claude_judge 통과 후에도 재확인) ──────
+        from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
+        if (_is_logo_type(dtype) or _is_logo_type(content)) and it.get("judgment") != "허용":
+            for _kw in _PUBLIC_ORG_KEYWORDS:
+                if (_kw.lower() in content.lower()
+                        or _kw.lower() in it.get("reason", "").lower()):
+                    it["judgment"] = "허용"
+                    it["reason"] = f"공공기관/발주기관 로고 오탐 차단 ({_kw})"
+                    it["recommendation"] = ""
+                    break
+
+        # ── 크롭 이미지가 있는 페이지의 Vision 탐지 → 로고/업체명 위반 → 주의 강등
         vision_verdict = it.get("judgment", "주의")
         vision_cropped = False
         if _cropped_pages.get(p) and vision_verdict == "위반" and any(
@@ -532,9 +543,11 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                 rule_src = h.get("source", "rule")  # 'rule' or 'ocr'
                 if existing_src == "vision":
                     existing["source"] = f"{rule_src}+vision"
+                # ★ 로고 재비교로 허용 처리된 항목은 rule이 덮어쓰지 못함
+                if existing.get("verdict") == "허용" and _is_logo_type(existing.get("detection_type", "")):
+                    pass  # 로고 재비교 허용 결과 보존
                 # cropped=True 인 rule 항목이면 Vision 판정도 주의로 강등
-                # (화면에 보이지 않는 크롭 영역 → 위반으로 처리 불가)
-                if h.get("cropped", False):
+                elif h.get("cropped", False):
                     weight_e = {"위반": 2, "주의": 1, "허용": 0}
                     if weight_e.get(existing["verdict"], 0) > 1:  # 위반이면 주의로 내림
                         existing["verdict"] = "주의"
