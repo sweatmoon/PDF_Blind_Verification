@@ -390,10 +390,7 @@
                 <th class="px-3 py-2 text-left font-medium">판정</th>
                 <th class="px-3 py-2 text-left font-medium">검출방법</th>
                 <th class="px-3 py-2 text-left font-medium">사유</th>
-                <th class="px-3 py-2 text-left font-medium">수정 권고</th>
-              </tr>
-            </thead>
-            <tbody id="allDetectionsTable" class="divide-y divide-slate-100"></tbody>
+              </tr> class="divide-y divide-slate-100"></tbody>
           </table>
         </div>
       </div>
@@ -594,7 +591,6 @@
                       <th class="px-3 py-2 text-left font-medium">판정</th>
                       <th class="px-3 py-2 text-left font-medium">검출방법</th>
                       <th class="px-3 py-2 text-left font-medium">사유</th>
-                      <th class="px-3 py-2 text-left font-medium">수정 권고</th>
                     </tr>
                   </thead>
                   <tbody id="db-allTable" class="divide-y divide-slate-100"></tbody>
@@ -1885,7 +1881,6 @@ function renderPageList(pages, filter = 'all') {
             </div>
           </div>
           ${d.reason ? `<p class="opacity-70 mt-0.5">${d.reason}</p>` : ''}
-          ${d.recommendation ? `<p class="text-indigo-700 font-medium mt-0.5">→ ${d.recommendation}</p>` : ''}
         </div>`;
       }).join('');
 
@@ -1920,7 +1915,6 @@ function renderPageList(pages, filter = 'all') {
               <span class="font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 break-all">${d.detected_text ? `"${d.detected_text.slice(0,120)}"` : '—'}</span>
               ${croppedBadge}${srcBadge}
             </div>
-            ${d.reason ? `<p class="text-xs text-slate-400 mt-0.5">${d.reason}</p>` : ''}
           </div>`;
         }).join('');
         return `<div class="mb-2 last:mb-0">
@@ -1996,7 +1990,6 @@ function renderMetaContent(pages) {
       </div>
       <code class="text-xs block mb-1">${(d.detected_text||'').slice(0,200)}</code>
       <p class="text-xs opacity-75">${d.reason||''}</p>
-      ${d.recommendation ? `<p class="text-xs text-indigo-700 mt-1">→ ${d.recommendation}</p>` : ''}
     </div>`;
   }).join('');
 }
@@ -2027,7 +2020,6 @@ function renderAllDetections(pages) {
       <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-medium ${vcls}">${d.verdict}</span></td>
       <td class="px-3 py-2">${srcBadge}</td>
       <td class="px-3 py-2 text-slate-500 max-w-xs">${(d.reason||'').slice(0,100)}</td>
-      <td class="px-3 py-2 text-indigo-600 max-w-xs">${(d.recommendation||'').slice(0,80)}</td>
     </tr>`;
   }).join('');
 }
@@ -2099,7 +2091,7 @@ function buildHTMLReport(r) {
         <td>${label}</td><td>${d.detection_type||''}</td>
         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(d.detected_text||'').slice(0,80)}</td>
         <td><b style="color:${vc2}">${v}</b></td>
-        <td>${d.reason||''}</td><td>${d.recommendation||''}</td>
+        <td>${d.reason||''}</td>
       </tr>`;
     }
   }
@@ -2134,8 +2126,8 @@ ${costLine}<b>검증일:</b> ${String(r.created_at||'').slice(0,19)}</p>
 </div>
 <h2>📝 검수 요약</h2><ul>${notes}</ul>
 <h2>🔍 상세 검출 결과</h2>
-<table><thead><tr><th>페이지</th><th>검출유형</th><th>검출내용</th><th>판정</th><th>판정 사유</th><th>수정 권고</th></tr></thead>
-<tbody>${rows||'<tr><td colspan="6" style="text-align:center;padding:20px;color:#6b7280">검출된 위반/주의 항목 없음</td></tr>'}</tbody></table>
+<table><thead><tr><th>페이지</th><th>검출유형</th><th>검출내용</th><th>판정</th><th>판정 사유</th></tr></thead>
+<tbody>${rows||'<tr><td colspan="5" style="text-align:center;padding:20px;color:#6b7280">검출된 위반/주의 항목 없음</td></tr>'}</tbody></table>
 <p style="margin-top:30px;font-size:11px;color:#94a3b8">본 리포트는 자동 검수 시스템에 의해 생성되었습니다. | 원본 파일은 검수 즉시 삭제됩니다.</p>
 </body></html>`;
 }
@@ -3332,8 +3324,6 @@ function dbRenderPages(report, filter) {
             <span class="text-xs px-1.5 py-0.5 rounded-full border ${(verdictBg[it.judgment]||'')}">${it.judgment}</span>
             ${srcBadge}
           </div>
-          ${it.reason ? `<p class="text-xs text-slate-500 mt-1">${esc(it.reason)}</p>` : ''}
-          ${it.recommendation ? `<p class="text-xs text-indigo-600 mt-0.5">→ ${esc(it.recommendation)}</p>` : ''}
         </div>`; }).join('');
       return `<div class="border rounded-lg ${typeBg} p-2.5 mb-2 last:mb-0">
         <div class="flex items-center gap-1.5 mb-1.5">
@@ -3363,7 +3353,6 @@ function dbRenderPages(report, filter) {
               <span class="text-xs font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 break-all">${esc(it.content||'')}</span>
               ${srcBadge}
             </div>
-            ${it.reason ? `<p class="text-xs text-slate-400 mt-0.5">${esc(it.reason)}</p>` : ''}
           </div>`;
         }).join('');
         return `<div class="mb-2 last:mb-0">
@@ -3435,7 +3424,7 @@ function dbRenderAll(report) {
   tbody.innerHTML = '';
   const items = report.items || [];
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-400 py-6 text-xs">검출 항목 없음</td></tr>';;
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-slate-400 py-6 text-xs">검출 항목 없음</td></tr>';;
     return;
   }
   const verdictCls = { '위반':'text-red-600','주의':'text-amber-600','허용':'text-green-600' };
@@ -3449,8 +3438,7 @@ function dbRenderAll(report) {
       <td class="px-3 py-2 font-mono text-slate-700 max-w-[160px] truncate" title="${esc(it.content||'')}">${esc(it.content||'')}</td>
       <td class="px-3 py-2 font-semibold ${verdictCls[it.judgment]||''}">${it.judgment||''}</td>
       <td class="px-3 py-2">${srcBadge}</td>
-      <td class="px-3 py-2 text-slate-500 max-w-[180px] truncate" title="${esc(it.reason||'')}">${esc(it.reason||'')}</td>
-      <td class="px-3 py-2 text-indigo-600 max-w-[180px] truncate" title="${esc(it.recommendation||'')}">${esc(it.recommendation||'')}</td>`;
+      <td class="px-3 py-2 text-slate-500 max-w-[180px] truncate" title="${esc(it.reason||'')}">${esc(it.reason||'')}</td>`;
     tbody.appendChild(tr);
   });
 }

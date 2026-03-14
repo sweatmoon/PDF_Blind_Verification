@@ -181,7 +181,6 @@
                   <th class="px-3 py-2 border-b">검출 내용</th>
                   <th class="px-3 py-2 border-b">판정</th>
                   <th class="px-3 py-2 border-b">사유</th>
-                  <th class="px-3 py-2 border-b">권고</th>
                 </tr>
               </thead>
               <tbody id="allTable"></tbody>
@@ -544,7 +543,6 @@ function renderPageList(pages, filter) {
             <span class="flex-shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${vc}">${d.verdict}</span>
           </div>
           ${d.reason?`<p class="opacity-70 mt-0.5">${d.reason}</p>`:''}
-          ${d.recommendation?`<p class="text-indigo-700 font-medium mt-0.5">→ ${d.recommendation}</p>`:''}
         </div>`;
       }).join('');
       return `<div class="mb-2">
@@ -591,7 +589,6 @@ function renderAllTable(pages) {
       <td class="px-3 py-2 max-w-xs"><span class="font-mono break-all">${(d.detected_text||d.image_description||'').slice(0,80)}</span></td>
       <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-medium ${vc}">${d.verdict}</span></td>
       <td class="px-3 py-2 text-slate-500 max-w-xs">${(d.reason||'').slice(0,100)}</td>
-      <td class="px-3 py-2 text-indigo-600 max-w-xs">${(d.recommendation||'').slice(0,80)}</td>
     </tr>`;
   }).join('');
 }
