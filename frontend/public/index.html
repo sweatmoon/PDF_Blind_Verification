@@ -2423,8 +2423,8 @@ function renderSavedReports() {
   const emptyEl   = document.getElementById('savedEmpty');
   const clearBtn  = document.getElementById('clearAllBtn');
 
-  // savedReportsList가 없으면(메인 화면에서 제거됨) 대시보드용 renderRecentJobsDb만 사용
-  if (!container) { renderRecentJobsDb?.(); return; }
+  // savedReportsList가 없으면(메인 화면에서 제거됨) 대시보드만 갱신
+  if (!container) { renderDashboard(); return; }
 
   if (!list.length) {
     if (emptyEl)  emptyEl.classList.remove('hidden');
