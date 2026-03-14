@@ -107,9 +107,9 @@
       </div>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- 좌측: 업로드 + 설정 -->
-      <div class="lg:col-span-2 space-y-4">
+    <div class="max-w-3xl mx-auto">
+      <!-- 업로드 + 설정 -->
+      <div class="space-y-4">
 
         <!-- PDF/PPTX 업로드 -->
         <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
@@ -204,27 +204,6 @@
 
       </div>
 
-      <!-- 우측: 검증 결과 저장함 -->
-      <div class="space-y-4">
-        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="font-semibold text-slate-700 flex items-center gap-2 text-sm">
-              <i class="fas fa-folder-open text-indigo-500"></i> 검증 결과 저장함
-            </h2>
-            <button onclick="clearAllSavedReports()" id="clearAllBtn"
-              class="hidden text-xs text-slate-400 hover:text-red-500 transition">
-              <i class="fas fa-trash mr-1"></i>전체 삭제
-            </button>
-          </div>
-          <div id="savedReportsList" class="space-y-2">
-            <div id="savedEmpty" class="text-center py-8 text-slate-300">
-              <i class="fas fa-inbox text-3xl mb-2 block"></i>
-              <p class="text-xs">저장된 결과가 없습니다</p>
-              <p class="text-xs mt-1">검증 완료 후 자동 저장됩니다</p>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -2399,6 +2378,9 @@ function renderSavedReports() {
   const container = document.getElementById('savedReportsList');
   const emptyEl   = document.getElementById('savedEmpty');
   const clearBtn  = document.getElementById('clearAllBtn');
+
+  // savedReportsList가 없으면(메인 화면에서 제거됨) 대시보드용 renderRecentJobsDb만 사용
+  if (!container) { renderRecentJobsDb?.(); return; }
 
   if (!list.length) {
     if (emptyEl)  emptyEl.classList.remove('hidden');
