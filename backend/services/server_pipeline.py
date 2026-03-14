@@ -389,9 +389,18 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
             p = 1
         if p < 1:
             p = 1
+        content = it.get("content", "")
+        dtype   = it.get("type", "기타")
+        # vision끼리 대소문자 무시 중복 제거
+        already = any(
+            d["detected_text"].lower() == content.lower() and d["detection_type"] == dtype
+            for d in page_map.get(p, [])
+        )
+        if already:
+            continue
         page_map.setdefault(p, []).append({
-            "detection_type":  it.get("type", "기타"),
-            "detected_text":   it.get("content", ""),
+            "detection_type":  dtype,
+            "detected_text":   content,
             "verdict":         it.get("judgment", "주의"),
             "reason":          it.get("reason", ""),
             "recommendation":  it.get("recommendation", ""),
