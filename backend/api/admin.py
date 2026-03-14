@@ -22,6 +22,41 @@ def get_dictionary():
     return JSONResponse(data)
 
 
+# ── 사전 전체 교체 (localStorage 백업 복원용) ──────────────────
+@router.post("/dictionary/restore")
+def restore_dictionary(body: dict):
+    """
+    localStorage 백업에서 사전 전체를 한 번에 복원.
+    body: { direct_identifiers: {...}, indirect_identifiers: {...}, allowed_terms: {...} }
+    """
+    valid_groups = {"direct_identifiers", "indirect_identifiers", "allowed_terms"}
+    current = load_dict()
+
+    for group_key in valid_groups:
+        if group_key not in body:
+            continue
+        group_data = body[group_key]
+        if not isinstance(group_data, dict):
+            continue
+        current[group_key] = {}
+        for subkey, items in group_data.items():
+            if isinstance(items, list):
+                current[group_key][subkey] = [
+                    i.strip() for i in items if str(i).strip()
+                ]
+
+    if not save_dict(current):
+        raise HTTPException(500, "사전 저장 실패")
+
+    get_rule_detector().reload()
+    total = sum(
+        len(v) for g in valid_groups
+        for v in current.get(g, {}).values()
+    )
+    logger.info(f"사전 복원 완료: 총 {total}개 항목")
+    return JSONResponse({"success": True, "total_items": total})
+
+
 # ── 사전 업데이트 ─────────────────────────────────────────────
 @router.put("/dictionary")
 def update_dictionary(req: DictionaryUpdateRequest):

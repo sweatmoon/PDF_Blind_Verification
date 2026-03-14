@@ -2046,6 +2046,46 @@ ${costLine}<b>검증일:</b> ${String(r.created_at||'').slice(0,19)}</p>
 // ─────────────────────────────────────────────────────────────
 // 관리자 사전
 // ─────────────────────────────────────────────────────────────
+// ── 사전 localStorage 백업/복원 ─────────────────────────────
+const DICT_STORAGE_KEY = 'blindVerify_dictionary';
+
+function _backupDict(dict) {
+  try { localStorage.setItem(DICT_STORAGE_KEY, JSON.stringify(dict)); } catch(e) {}
+}
+
+function _loadDictBackup() {
+  try {
+    const raw = localStorage.getItem(DICT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+function _isDictEmpty(dict) {
+  // direct/indirect/allowed 모든 배열이 비어있으면 true
+  const allArrays = [
+    ...Object.values(dict.direct_identifiers   || {}),
+    ...Object.values(dict.indirect_identifiers || {}),
+    ...Object.values(dict.allowed_terms        || {}),
+  ];
+  return allArrays.every(arr => !Array.isArray(arr) || arr.length === 0);
+}
+
+async function _restoreDictFromBackup(backup) {
+  try {
+    const res = await fetch('/api/admin/dictionary/restore', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(backup)
+    });
+    if (res.ok) {
+      showToast('🔄 서버 재시작으로 사전이 초기화되어 백업에서 자동 복원했습니다.', 'success');
+      return true;
+    }
+  } catch(e) {}
+  return false;
+}
+// ─────────────────────────────────────────────────────────────
+
 async function loadAdminData() {
   try {
     const [dictRes, cfgRes, visionKeyRes] = await Promise.all([
@@ -2053,9 +2093,24 @@ async function loadAdminData() {
       fetch('/api/admin/config'),
       fetch('/api/admin/vision-key'),
     ]);
-    const dict     = await dictRes.json();
+    let dict       = await dictRes.json();
     const cfg      = await cfgRes.json();
     const vkStatus = visionKeyRes.ok ? await visionKeyRes.json() : {configured: false};
+
+    // ── 서버 사전이 비어있으면 localStorage 백업에서 복원 ──
+    if (_isDictEmpty(dict)) {
+      const backup = _loadDictBackup();
+      if (backup && !_isDictEmpty(backup)) {
+        const restored = await _restoreDictFromBackup(backup);
+        if (restored) {
+          const freshRes = await fetch('/api/admin/dictionary');
+          dict = await freshRes.json();
+        }
+      }
+    } else {
+      // 서버에 데이터가 있으면 백업 갱신
+      _backupDict(dict);
+    }
 
     // Vision 키 상태 표시
     const vkBadge = document.getElementById('visionKeyBadge');
@@ -2263,14 +2318,14 @@ async function addDictItems(group, subkey, terms) {
     } else {
       showToast('추가 실패', 'error');
     }
-    loadAdminData();
+    await loadAdminData(); // 추가 후 즉시 백업 갱신
   } catch(e) { showToast('오류: '+e.message, 'error'); }
 }
 
 async function removeDictItem(group, subkey, term) {
   try {
     const res = await fetch(`/api/admin/dictionary/${group}/${subkey}/${encodeURIComponent(term)}`, { method: 'DELETE' });
-    if (res.ok) { showToast(`"${term}" 삭제됨`, 'success'); loadAdminData(); }
+    if (res.ok) { showToast(`"${term}" 삭제됨`, 'success'); await loadAdminData(); } // 삭제 후 즉시 백업 갱신
   } catch(e) { showToast('삭제 오류: '+e.message, 'error'); }
 }
 
