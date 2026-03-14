@@ -429,19 +429,130 @@ def test_tc5_symbol_based_logo_verdict():
 
 
 # ────────────────────────────────────────────────────────────────────
+# TC6: 인물사진 오탐 방지 — 새 로직 검증
+# ────────────────────────────────────────────────────────────────────
+def test_tc6_person_photo_false_positive():
+    """
+    새 인물사진 판정 로직 검증:
+      - 기본값 허용 원칙: 실제 사진 키워드 없으면 반드시 허용
+      - 아이콘/일러스트/픽토그램 → 허용
+      - 실루엣/단색 인물 → 허용
+      - 판단 불명확 → 허용
+      - 실제 사진 키워드 명시 → 위반 유지
+
+    두 필터 모두 검증:
+      (A) apply_face_filters()   ← server_pipeline 경유
+      (B) _post_process_faces()  ← claude_judge 경유
+    """
+    from services.server_pipeline import apply_face_filters, normalize_vision_items
+
+    # ── 케이스 정의 ────────────────────────────────────────────────
+    # format: (desc, dtype, content, reason, input_judgment, expected_judgment)
+    CASES = [
+        # [허용 케이스] 아이콘/그래픽 키워드 포함
+        ("아이콘",
+         "인물사진", "사람 아이콘",
+         "단색 아이콘 형태 — 실제 얼굴 없음",
+         "위반", "허용"),
+
+        ("픽토그램",
+         "인물", "직원 픽토그램",
+         "픽토그램 스타일 — 얼굴 디테일 없음",
+         "위반", "허용"),
+
+        ("실루엣",
+         "사진", "단색 실루엣 인물",
+         "실루엣 그래픽 — 피부색 없음",
+         "위반", "허용"),
+
+        ("벡터 일러스트",
+         "인물사진", "연구자 일러스트",
+         "벡터 스타일 일러스트 캐릭터",
+         "주의", "허용"),
+
+        ("다이어그램 아이콘",
+         "사람", "조직도 내 인물 아이콘",
+         "시스템 다이어그램 내 사람 아이콘 — 얼굴 없음",
+         "위반", "허용"),
+
+        ("단색 인물",
+         "인물", "단색 사람 그래픽",
+         "단색으로 표현된 사람 형태",
+         "위반", "허용"),
+
+        # [허용 케이스] 키워드 없어도 기본값 허용 (핵심 변경)
+        ("키워드 없음(기본 허용)",
+         "인물사진", "불명확한 인물",
+         "사람처럼 보이는 형태",
+         "위반", "허용"),  # ← 이전 로직에서는 위반 유지됐던 케이스
+
+        ("키워드 없음(주의→기본 허용)",
+         "인물", "어떤 사람",
+         "형태 확인됨",
+         "주의", "허용"),  # ← 이전 로직에서는 주의 유지됐던 케이스
+
+        # [위반 유지 케이스] 실제 사진 키워드 명시
+        ("실사 사진 — 위반 유지",
+         "인물사진", "실사 프로필 사진",
+         "피부색과 이목구비가 명확히 보이는 실사 사진",
+         "위반", "위반"),
+
+        ("촬영 사진 — 위반 유지",
+         "인물", "촬영된 인물 사진",
+         "카메라 촬영으로 확인됨, 얼굴 사진",
+         "위반", "위반"),
+    ]
+
+    # ── apply_face_filters() 검증 ──────────────────────────────────
+    print("  [apply_face_filters 검증]")
+    for desc, dtype, content, reason, inp_jdg, exp_jdg in CASES:
+        items = [_make_item(
+            page=1, dtype=dtype, content=content,
+            judgment=inp_jdg, reason=reason,
+        )]
+        items = normalize_vision_items(items)
+        result = apply_face_filters(items)
+        assert result, f"TC6-A/{desc}: 결과 없음"
+        actual = result[0].get("judgment", "")
+        assert actual == exp_jdg, (
+            f"TC6-A/{desc} 실패: 입력={inp_jdg} → 기대={exp_jdg} / 실제={actual}\n"
+            f"  (dtype={dtype}, reason={reason[:40]})"
+        )
+
+    # ── _post_process_faces() 검증 ────────────────────────────────
+    from services.claude_judge import _post_process_faces
+    print("  [_post_process_faces 검증]")
+    for desc, dtype, content, reason, inp_jdg, exp_jdg in CASES:
+        raw = [_make_item(
+            page=1, dtype=dtype, content=content,
+            judgment=inp_jdg, reason=reason,
+        )]
+        result = _post_process_faces(raw)
+        assert result, f"TC6-B/{desc}: 결과 없음"
+        actual = result[0].get("judgment", "")
+        assert actual == exp_jdg, (
+            f"TC6-B/{desc} 실패: 입력={inp_jdg} → 기대={exp_jdg} / 실제={actual}\n"
+            f"  (dtype={dtype}, reason={reason[:40]})"
+        )
+
+    print("✅ TC6 통과: 인물사진 오탐 방지 — 아이콘/일러스트/픽토그램/불명확 모두 허용, 실사 사진만 위반")
+
+
+# ────────────────────────────────────────────────────────────────────
 # 전체 실행
 # ────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import traceback
 
     tests = [
-        ("구문 검사",               test_syntax_check),
-        ("is_logo_type 단위",       test_is_logo_type),
-        ("TC1 ACTIVO 로고",         test_tc1_activo_logo_violation),
-        ("TC2 국가철도공단",         test_tc2_krail_logo_allowed),
-        ("TC3 실루엣/아이콘",        test_tc3_silhouette_icon_allowed),
-        ("TC4 이름목록 분류",        test_tc4_name_list_not_representative),
-        ("TC5 심볼기반 로고 판정",   test_tc5_symbol_based_logo_verdict),
+        ("구문 검사",                 test_syntax_check),
+        ("is_logo_type 단위",         test_is_logo_type),
+        ("TC1 ACTIVO 로고",           test_tc1_activo_logo_violation),
+        ("TC2 국가철도공단",           test_tc2_krail_logo_allowed),
+        ("TC3 실루엣/아이콘",          test_tc3_silhouette_icon_allowed),
+        ("TC4 이름목록 분류",          test_tc4_name_list_not_representative),
+        ("TC5 심볼기반 로고 판정",     test_tc5_symbol_based_logo_verdict),
+        ("TC6 인물사진 오탐 방지",     test_tc6_person_photo_false_positive),
     ]
 
     passed = 0

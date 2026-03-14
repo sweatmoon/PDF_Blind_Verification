@@ -450,11 +450,35 @@ _DUMMY_KEYWORDS: tuple = (
 # 얼굴/인물 타입 키워드
 _FACE_DTYPES_KW: tuple = ("인물", "사진", "얼굴", "face", "photo", "인물사진", "사람")
 
-# 실루엣/아이콘 허용 키워드 (reason/content에 포함 시 허용)
+# ★ 그래픽/아이콘 확정 키워드 (하나라도 있으면 무조건 허용)
 _ICON_ALLOW_KW: tuple = (
-    "실루엣", "silhouette", "아이콘", "icon", "픽토그램", "pictogram",
-    "벡터", "vector", "일러스트", "illust", "캐릭터", "character",
-    "다이어그램", "diagram", "단색", "monochrome", "스케치", "sketch",
+    "실루엣", "silhouette",
+    "아이콘", "icon",
+    "픽토그램", "pictogram",
+    "벡터", "vector",
+    "일러스트", "illust",
+    "캐릭터", "character",
+    "다이어그램", "diagram",
+    "단색", "monochrome",
+    "스케치", "sketch",
+    "그래픽", "graphic",
+    "이모지", "emoji",
+    "아이콘 형태", "icon style",
+    "사람 아이콘", "person icon",
+    "인물 아이콘",
+    "연구자 아이콘", "직원 아이콘", "사용자 아이콘",
+    "얼굴 없음", "눈코입 없음",
+)
+
+# ★ 실제 사진 확정 키워드 (이것이 명시될 때만 위반 유지)
+_REAL_PHOTO_KW_SP: tuple = (
+    "피부색", "피부 질감", "skin",
+    "이목구비",
+    "눈코입", "눈·코·입",
+    "사진 질감", "photo texture",
+    "실사", "real photo",
+    "카메라", "촬영",
+    "프로필 사진", "얼굴 사진",
 )
 
 # 공공기관 로고 허용 키워드 (하드코딩 보조)
@@ -649,17 +673,24 @@ def apply_logo_filters(items: list) -> list:
 # ─────────────────────────────────────────────────────────────────
 def apply_face_filters(items: list) -> list:
     """
-    인물사진 타입 항목에만 적용:
-    - 실루엣/아이콘/벡터/픽토그램 특징 → 허용
-    - 실제 얼굴 특징(피부색, 이목구비) → 위반 유지
-    메시지 규칙 (요구사항 8번):
-    허용: "실루엣/아이콘 이미지로 확인되어 허용 처리"
+    인물사진 타입 항목에만 적용.
+
+    ★ 핵심 로직 변경 (오탐 방지):
+    기존: 아이콘 키워드 있으면 허용, 없으면 위반 유지 (← 오탐 다수 발생)
+    변경: 실제 사진 키워드가 명시될 때만 위반 유지
+          그 외 (아이콘 키워드 있거나, 불명확) → 기본값 허용
+
+    판정 흐름:
+      1. 이미 허용 → 통과
+      2. 그래픽/아이콘 키워드 존재 → 허용
+      3. 실제 사진 키워드 존재 → 위반 유지
+      4. 불명확 (어느 쪽도 아님) → 기본값 허용
     """
     out = []
     for it in items:
-        dtype   = it.get("type", "")
-        content = (it.get("content") or "")
-        reason  = (it.get("reason") or "")
+        dtype    = it.get("type", "")
+        content  = (it.get("content") or "")
+        reason   = (it.get("reason") or "")
         judgment = it.get("judgment", "주의")
 
         # 얼굴/인물 타입 아니면 통과
@@ -673,15 +704,29 @@ def apply_face_filters(items: list) -> list:
             out.append(it)
             continue
 
-        # 실루엣/아이콘 특징 → 허용 강등
         combined = (dtype + " " + content + " " + reason).lower()
+
+        # ① 그래픽/아이콘 키워드 → 무조건 허용
         if any(kw in combined for kw in _ICON_ALLOW_KW):
             it = dict(it)
             it["judgment"]       = "허용"
-            it["reason"]         = "실루엣/아이콘 이미지로 확인되어 허용 처리"
+            it["reason"]         = "그래픽/아이콘/일러스트로 확인되어 허용 처리 (실제 사진 아님)"
             it["recommendation"] = ""
             it["_fp_filtered"]   = "icon_silhouette"
+            out.append(it)
+            continue
 
+        # ② 실제 사진 키워드 → 위반 유지
+        if any(kw in combined for kw in _REAL_PHOTO_KW_SP):
+            out.append(it)
+            continue
+
+        # ③ 불명확 → 기본값 허용 (실사 증거 없으면 오탐으로 간주)
+        it = dict(it)
+        it["judgment"]       = "허용"
+        it["reason"]         = "실제 촬영 사진으로 확인되지 않아 허용 처리 (사람 형태만으로 위반 판정 불가)"
+        it["recommendation"] = ""
+        it["_fp_filtered"]   = "no_real_photo_evidence"
         out.append(it)
     return out
 
