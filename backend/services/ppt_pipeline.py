@@ -445,58 +445,79 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         if already:
             continue
 
+        # ── 로고 타입 여부 사전 체크 ──────────────────────────────────────────
+        from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
+        _is_logo = _is_logo_type(dtype) or _is_logo_type(content)
+
         # ── 일반 명사 체크: _COMMON_WORDS에 해당하면 허용으로 처리
+        # ⚠ 로고 타입 항목은 로고로 판단된 객체은 텍스트 예외규칙 미적용
         import re as _re
         from services.rule_detector import _COMMON_WORDS as _CW
         content_stripped = content.strip()
 
         # 인력명/이름 관련 모든 type에 대해 _COMMON_WORDS 체크
         _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
-        if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
-            page_map.setdefault(p, []).append({
-                "detection_type":  dtype,
-                "detected_text":   content,
-                "verdict":         "허용",
-                "reason":          f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{content_stripped}'은 고유 인명이 아님)",
-                "recommendation":  "검증 불필요 – 일반 명사/단어로 확인됨",
-                "confidence":      0.98,
-                "source":          "vision",
-                "cropped":         False,
-            })
-            continue
-
-        # 2글자 이하 인력명: 허용 기관명 포함 여부로 오탐 필터
-        # Vision AI가 '국민' 검출 시 reason에 '국민건강보험공단' 같은 기관명이 언급된 경우 허용으로 처리
-        if len(content_stripped) <= 2 and (dtype in ("참여인력명", "인력명", "업체명", "대표자명") or "인력" in dtype or "이름" in dtype):
-            reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
-            _ORG_KEYWORDS = (
-                r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|'
-                r'건강보험|국민연금|서민금융|대국민|안전처|안전부'
-            )
-            if _re.search(_ORG_KEYWORDS, reason_text):
-                # skip 대신 허용으로 결과에 추가
+        if not _is_logo:
+            if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
                 page_map.setdefault(p, []).append({
                     "detection_type":  dtype,
                     "detected_text":   content,
                     "verdict":         "허용",
-                    "reason":          f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 (reason: {reason_text[:60]})",
-                    "recommendation":  "기관명 복합어로 확인됨, 검증 불필요",
-                    "confidence":      0.97,
+                    "reason":          f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{content_stripped}'은 고유 인명이 아님)",
+                    "recommendation":  "검증 불필요 – 일반 명사/단어로 확인됨",
+                    "confidence":      0.98,
                     "source":          "vision",
                     "cropped":         False,
                 })
                 continue
 
+            # 2글자 이하 인력명: 허용 기관명 포함 여부로 오탐 필터
+            # Vision AI가 '국민' 검출 시 reason에 '국민건강보험공단' 같은 기관명이 언급된 경우 허용으로 처리
+            if len(content_stripped) <= 2 and (dtype in ("참여인력명", "인력명", "업체명", "대표자명") or "인력" in dtype or "이름" in dtype):
+                reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
+                _ORG_KEYWORDS = (
+                    r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|'
+                    r'건강보험|국민연금|서민금융|대국민|안전처|안전부'
+                )
+                if _re.search(_ORG_KEYWORDS, reason_text):
+                    # skip 대신 허용으로 결과에 추가
+                    page_map.setdefault(p, []).append({
+                        "detection_type":  dtype,
+                        "detected_text":   content,
+                        "verdict":         "허용",
+                        "reason":          f"맥락상 기관명의 일부로 판단 – 인명 오탐 제외 (reason: {reason_text[:60]})",
+                        "recommendation":  "기관명 복합어로 확인됨, 검증 불필요",
+                        "confidence":      0.97,
+                        "source":          "vision",
+                        "cropped":         False,
+                    })
+                    continue
+
         # ── 공공기관 로고 오탐 추가 차단 (claude_judge 통과 후에도 재확인) ──────
-        from services.claude_judge import _is_logo_type, _PUBLIC_ORG_KEYWORDS
-        if (_is_logo_type(dtype) or _is_logo_type(content)) and it.get("judgment") != "허용":
+        # DB allowed_terms의 official_institutions 목록도 함께 참조
+        if _is_logo and it.get("judgment") != "허용":
+            # 1) 하드코딩 공공기관 키워드
+            _logo_allowed = False
+            _logo_kw = ""
             for _kw in _PUBLIC_ORG_KEYWORDS:
                 if (_kw.lower() in content.lower()
                         or _kw.lower() in it.get("reason", "").lower()):
-                    it["judgment"] = "허용"
-                    it["reason"] = f"공공기관/발주기관 로고 오탐 차단 ({_kw})"
-                    it["recommendation"] = ""
+                    _logo_allowed = True
+                    _logo_kw = _kw
                     break
+            # 2) DB allowed_terms official_institutions 참조
+            if not _logo_allowed:
+                _db_dict_logo = _dict  # 이미 로드된 _dict 재사용
+                _official = _db_dict_logo.get("allowed_terms", {}).get("official_institutions", [])
+                for _oi in _official:
+                    if _oi and _oi.strip().lower() in content.lower():
+                        _logo_allowed = True
+                        _logo_kw = _oi.strip()
+                        break
+            if _logo_allowed:
+                it["judgment"] = "허용"
+                it["reason"] = f"공공기관/발주기관 로고 오탐 차단 ({_logo_kw})"
+                it["recommendation"] = ""
 
         # ── 크롭 이미지가 있는 페이지의 Vision 탐지 → 로고/업체명 위반 → 주의 강등
         vision_verdict = it.get("judgment", "주의")
@@ -543,9 +564,11 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                 rule_src = h.get("source", "rule")  # 'rule' or 'ocr'
                 if existing_src == "vision":
                     existing["source"] = f"{rule_src}+vision"
-                # ★ 로고 재비교로 허용 처리된 항목은 rule이 덮어쓰지 못함
-                if existing.get("verdict") == "허용" and _is_logo_type(existing.get("detection_type", "")):
-                    pass  # 로고 재비교 허용 결과 보존
+                # ★ 로고 타입 항목은 rule이 verdict를 절대 덮어쓰지 못함
+                #   (로고로 판정된 객체는 텍스트 예외 규칙과 무관하게 판정 유지)
+                from services.claude_judge import _is_logo_type as _ilt
+                if _ilt(existing.get("detection_type", "")):
+                    pass  # 로고 항목: 기존 판정(위반/주의/허용 모두) 보존 — rule 덮어쓰기 금지
                 # cropped=True 인 rule 항목이면 Vision 판정도 주의로 강등
                 elif h.get("cropped", False):
                     weight_e = {"위반": 2, "주의": 1, "허용": 0}
