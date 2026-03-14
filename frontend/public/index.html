@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- BUILD: 20260314-v3 -->
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
@@ -1296,7 +1297,12 @@ async function startVerification() {
               renderDashboard();
               dbSelectDone(jobId);
             })
-            .catch(err => showToast('결과 로드 실패: ' + err.message, 'error'));
+            .catch(err => {
+              console.error('결과 로드 실패:', err);
+              // ReferenceError 등 JS 내부 오류는 토스트 표시 안 함
+              if (err instanceof TypeError || err instanceof ReferenceError) return;
+              showToast('결과 로드 실패: ' + err.message, 'error');
+            });
         } else if (d.status === 'failed') {
           sse.close();
           updateRecentJobStatus(jobId, 'failed');

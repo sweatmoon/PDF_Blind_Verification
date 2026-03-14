@@ -126,6 +126,7 @@ async def spa(full_path: str, request: Request):
                     "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(candidate.stat().st_mtime)),
                     "Vary":          "*",
                     "X-Content-Ver": etag[:8],
+                    "Clear-Site-Data": '"cache"',
                 })
         return Response(content=content, media_type=mt)
 
@@ -145,6 +146,7 @@ async def spa(full_path: str, request: Request):
                 "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(index.stat().st_mtime)),
                 "Vary":          "*",
                 "X-Content-Ver": etag[:8],
+                "Clear-Site-Data": '"cache"',
             },
         )
     return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
