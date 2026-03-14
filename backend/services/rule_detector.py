@@ -118,26 +118,13 @@ class RuleDetector:
 
     # ── 법인명 패턴 ───────────────────────────────────────────
     def _corp_names(self, text: str, page: int) -> list:
-        out, seen = [], set()
-        for m in _P["corp"].finditer(text):
-            v = m.group().strip()
-            if v in seen or len(v) < 3: continue
-            seen.add(v)
-            if self._is_allowed(v):
-                out.append(DetectionResult(
-                    page_number=page, detection_type=DetectionType.COMPANY_NAME,
-                    detected_text=v, verdict=VerdictType.ALLOWED,
-                    reason="허용 목록 등록 기관명 (발주기관 등)",
-                    recommendation="수정 불필요",
-                    confidence=0.85, source="rule"))
-            else:
-                out.append(DetectionResult(
-                    page_number=page, detection_type=DetectionType.COMPANY_NAME,
-                    detected_text=v, verdict=VerdictType.VIOLATION,
-                    reason="법인명 패턴 감지 – 제안사 업체명으로 추정",
-                    recommendation="업체명 삭제 또는 '제안사'로 대체",
-                    confidence=0.87, source="rule"))
-        return out
+        """
+        ※ 법인명 패턴 감지 완전 비활성화.
+          - 사전에 등록된 업체명은 _from_dict()에서 정확하게 검출
+          - 패턴 기반 오탐(컨소시엄사·협력사·발주기관 등) 방지
+          - 허용 목록의 ALLOWED 표시도 노이즈이므로 제거
+        """
+        return []  # 완전 비활성화: 모든 회사명 검출은 사전(_from_dict)에서만 수행
 
     # ── 전화번호 ──────────────────────────────────────────────
     def _phones(self, text: str, page: int) -> list:

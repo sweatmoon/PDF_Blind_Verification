@@ -1252,12 +1252,19 @@ async function startVerification() {
     });
 
     setStep('upload', 'done');
-    const jobId  = data.job_id;
+    const jobId    = data.job_id;
+    const queuePos = data.queue_pos ?? 0;   // 0 = 즉시 실행, n = 앞에 n개 대기
     state.currentJobId = jobId;
     addRecentJob(jobId, file.name, file.size);
 
-    setProgress(32, '서버에서 검증을 시작합니다…');
-    showToast('업로드 완료! 서버에서 검증이 시작됐습니다. 브라우저를 닫아도 계속 처리됩니다.', 'success');
+    // 큐 위치에 따라 메시지/토스트 분기
+    const queueMsg = queuePos > 0
+      ? `업로드 완료! 앞에 ${queuePos}개 작업이 처리 중입니다. 순서가 되면 자동으로 시작됩니다.`
+      : '업로드 완료! 서버에서 검증이 시작됐습니다. 브라우저를 닫아도 계속 처리됩니다.';
+    const progressMsg = queuePos > 0
+      ? `대기 중… (앞에 ${queuePos}개 작업 처리 중)`
+      : '서버에서 검증을 시작합니다…';
+    showToast(queueMsg, queuePos > 0 ? 'info' : 'success');
 
     // ── 2. 대시보드로 이동하여 실시간 진행률 표시 ───────────
     showPage('dashboard');
@@ -1266,7 +1273,7 @@ async function startVerification() {
 
     // 진행 중 카드 선택 (업로드 완료 단계 표시)
     dbSelectRunning(jobId, file.name);
-    dbUpdateSteps(32, '서버에서 검증을 시작합니다…');
+    dbUpdateSteps(32, progressMsg);
 
     // ── 3. SSE로 실시간 진행률 구독 ─────────────────────────
     const sse = new EventSource(`/api/jobs/${jobId}/progress`);
@@ -1282,6 +1289,21 @@ async function startVerification() {
         if (bar)   bar.style.width   = (d.progress || 0) + '%';
         if (msgEl) msgEl.textContent = d.message || '';
         if (pctEl) pctEl.textContent = (d.progress || 0) + '%';
+
+        // 대기 중(pending) 상태: 프로그레스바 펄스 효과
+        if (d.status === 'pending') {
+          if (bar) {
+            bar.style.width = '100%';
+            bar.classList.add('animate-pulse');
+            bar.style.background = 'linear-gradient(90deg, #94a3b8, #cbd5e1)';
+          }
+          if (pctEl) pctEl.textContent = '대기';
+        } else {
+          if (bar) {
+            bar.classList.remove('animate-pulse');
+            bar.style.background = '';
+          }
+        }
 
         if (d.status === 'completed') {
           sse.close();
@@ -2750,20 +2772,29 @@ function renderDashboard() {
       const card = document.createElement('div');
       const isActive = j.jobId === _dbSelectedId;
       const pct = j.progress || 0;
+      // pending vs processing 시각 구분
+      const serverJob = _dbServerJobs.find(sj => sj.job_id === j.jobId);
+      const isPending = serverJob && serverJob.status === 'pending';
+      const statusIcon  = isPending ? '🕐' : '⏳';
+      const barColor    = isPending ? 'bg-slate-300 animate-pulse' : 'bg-indigo-400';
+      const barWidth    = isPending ? '100%' : pct + '%';
+      const pctLabel    = isPending ? '대기' : pct + '%';
+      const msgText     = j.message || (isPending ? '대기 중…' : '분석 진행 중…');
+      const msgColor    = isPending ? 'text-slate-400' : 'text-slate-400';
       card.className = `job-card bg-white rounded-xl border p-3 cursor-pointer ${isActive ? 'border-indigo-400 shadow-md' : 'border-slate-100'}`;
       card.onclick = () => dbSelectRunning(j.jobId, j.filename, j.source);
       card.innerHTML = `
         <div class="flex items-center gap-2">
-          <span class="text-base status-processing">⏳</span>
+          <span class="text-base">${statusIcon}</span>
           <div class="flex-1 min-w-0">
             <p class="text-xs font-medium text-slate-700 truncate">${esc(j.filename)}</p>
             <div class="flex items-center gap-1 mt-0.5">
               <div class="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
-                <div class="h-full bg-indigo-400 rounded-full transition-all" style="width:${pct}%"></div>
+                <div class="h-full ${barColor} rounded-full transition-all" style="width:${barWidth}"></div>
               </div>
-              <span class="text-xs text-indigo-500 flex-shrink-0">${pct}%</span>
+              <span class="text-xs ${isPending ? 'text-slate-400' : 'text-indigo-500'} flex-shrink-0">${pctLabel}</span>
             </div>
-            <p class="text-xs text-slate-400 mt-0.5">${j.message || '분석 진행 중…'}</p>
+            <p class="text-xs ${msgColor} mt-0.5">${msgText}</p>
           </div>
         </div>`;
       runningList.appendChild(card);
@@ -2943,9 +2974,17 @@ function dbSelectRunning(jobId, filename, source) {
       const bar   = document.getElementById('db-procBar');
       const msgEl = document.getElementById('db-procMsg');
       const pctEl = document.getElementById('db-procPct');
-      if (bar)   { bar.style.width = pct + '%'; bar.style.background = ''; }
-      if (msgEl) { msgEl.textContent = sj.message || '처리 중…'; msgEl.style.color = ''; }
-      if (pctEl) { pctEl.textContent = pct + '%'; pctEl.style.color = ''; }
+
+      // 대기 중(pending) 상태 시각화
+      if (sj.status === 'pending') {
+        if (bar)   { bar.style.width = '100%'; bar.style.background = 'linear-gradient(90deg, #94a3b8, #cbd5e1)'; bar.classList.add('animate-pulse'); }
+        if (msgEl) { msgEl.textContent = sj.message || '대기 중…'; msgEl.style.color = '#64748b'; }
+        if (pctEl) { pctEl.textContent = '대기'; pctEl.style.color = '#64748b'; }
+      } else {
+        if (bar)   { bar.style.width = pct + '%'; bar.style.background = ''; bar.classList.remove('animate-pulse'); }
+        if (msgEl) { msgEl.textContent = sj.message || '처리 중…'; msgEl.style.color = ''; }
+        if (pctEl) { pctEl.textContent = pct + '%'; pctEl.style.color = ''; }
+      }
       dbUpdateSteps(pct, sj.message || '');
     }
     return;
