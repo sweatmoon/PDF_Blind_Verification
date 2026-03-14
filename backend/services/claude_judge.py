@@ -282,34 +282,66 @@ def _verify_logo_candidate(
         import numpy as np
         from PIL import Image
 
+        ref_bytes = base64.b64decode(logo_ref_b64)
+        ref_img   = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
+        ref_w, ref_h = ref_img.size
+
         crop_img = _extract_crop(page_b64, bbox)
         if crop_img is None:
             return False
 
-        ref_bytes = base64.b64decode(logo_ref_b64)
-        ref_img   = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
+        # ── crop 크기가 너무 작으면(fallback 우측하단) 페이지 전체 이미지 사용 ──
+        # bbox=None일 때 fallback crop은 일부만 잘라내므로,
+        # crop 면적이 ref의 30% 미만이면 페이지 전체 이미지로 대체
+        crop_area = crop_img.width * crop_img.height
+        ref_area  = ref_w * ref_h
+        if bbox is None and crop_area < ref_area * 0.3:
+            page_bytes = base64.b64decode(page_b64)
+            crop_img = Image.open(io.BytesIO(page_bytes)).convert("RGB")
+            logger.debug(f"bbox=None fallback → 페이지 전체 이미지 사용: {crop_img.size}")
 
-        # 비교 크기 통일
-        cmp_size = (128, 64)
+        # ── 비교 크기: 레퍼런스 비율을 유지한 표준 크기 ──────────────
+        # 가로세로 비율을 유지하지 않으면 SSIM이 크게 낮아짐
+        aspect = ref_w / max(ref_h, 1)
+        cmp_h  = 80
+        cmp_w  = max(80, int(cmp_h * aspect))
+        cmp_size = (cmp_w, cmp_h)
+
         crop_np = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
         ref_np  = np.array(ref_img.resize(cmp_size,  Image.LANCZOS))
 
-        # ── 1단계: SSIM ───────────────────────────────────────────
+        # ── 1단계: SSIM (배경 정규화 포함) ───────────────────────────
         ssim_score = _compute_ssim(ref_np, crop_np)
         logger.debug(f"[전체로고] SSIM={ssim_score:.3f}")
         if ssim_score >= _LOGO_SIM_THRESHOLD:
             logger.info(f"전체 로고 SSIM 일치={ssim_score:.3f} → 위반 확정")
             return True
 
-        # ── 2단계: ORB ────────────────────────────────────────────
+        # ── 2단계: ORB (배경 정규화 포함) ───────────────────────────
         orb_score = _compute_orb(ref_np, crop_np)
         logger.debug(f"[전체로고] ORB={orb_score:.3f}")
-        result = orb_score >= _LOGO_SIM_THRESHOLD
+        if orb_score >= _LOGO_SIM_THRESHOLD:
+            logger.info(f"전체 로고 ORB 일치={orb_score:.3f} → 위반 확정")
+            return True
+
+        # ── 3단계: 빨간 마스크 SSIM (배경색 독립 비교) ───────────────
+        # 누끼(검정 배경) 레퍼런스와 흰 배경 대상 모두에서 빨간 심볼을
+        # 이진화해 형태만 비교 → 배경색 차이에 완전히 강건
+        ref_full_np  = np.array(ref_img)   # 원본 크기 사용 (해상도 확보)
+        crop_full_np = np.array(crop_img)
+        red_score = _compute_red_mask_ssim(ref_full_np, crop_full_np)
+        logger.debug(f"[전체로고] red_mask={red_score:.3f}")
+        if red_score >= _LOGO_SIM_THRESHOLD:
+            logger.info(
+                f"전체 로고 red_mask 일치={red_score:.3f} → 위반 확정"
+            )
+            return True
+
         logger.info(
             f"전체 로고 SSIM={ssim_score:.3f} ORB={orb_score:.3f} "
-            f"→ {'위반 확정' if result else '불일치(심볼 단계 진행)'}"
+            f"red_mask={red_score:.3f} → 불일치(심볼 단계 진행)"
         )
-        return result
+        return False
 
     except ImportError as e:
         logger.warning(f"로고 재비교 라이브러리 미설치: {e} → 허용 처리")
@@ -457,15 +489,28 @@ def _verify_symbol_candidate(
         import cv2
         from PIL import Image
 
+        sym_bytes = base64.b64decode(symbol_ref_b64)
+        sym_img   = Image.open(io.BytesIO(sym_bytes)).convert("RGB")
+        sym_w, sym_h = sym_img.size
+
         crop_img = _extract_crop(page_b64, bbox, pad=15)
         if crop_img is None:
             return False
 
-        sym_bytes = base64.b64decode(symbol_ref_b64)
-        sym_img   = Image.open(io.BytesIO(sym_bytes)).convert("RGB")
+        # ── bbox=None fallback crop이 너무 작으면 페이지 전체 사용 ──
+        crop_area = crop_img.width * crop_img.height
+        sym_area  = sym_w * sym_h
+        if bbox is None and crop_area < sym_area * 0.3:
+            page_bytes = base64.b64decode(page_b64)
+            crop_img = Image.open(io.BytesIO(page_bytes)).convert("RGB")
+            logger.debug(f"bbox=None fallback → 페이지 전체 이미지 사용: {crop_img.size}")
 
-        # ── 정사각형 비교 크기 사용 (심볼 특성 보존) ──────────────
-        cmp_size = (96, 96)
+        # ── 심볼 비율을 유지한 비교 크기 (96px 높이 기준) ──────────
+        aspect   = sym_w / max(sym_h, 1)
+        cmp_h    = 96
+        cmp_w    = max(32, int(cmp_h * aspect))
+        cmp_size = (cmp_w, cmp_h)
+
         crop_np = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
         sym_np  = np.array(sym_img.resize(cmp_size,  Image.LANCZOS))
 
@@ -501,8 +546,19 @@ def _verify_symbol_candidate(
         except Exception as _te:
             logger.debug(f"Template matching 실패: {_te}")
 
+        # 4단계: 빨간 마스크 SSIM (배경색 독립 비교)
+        # 누끼 심볼 레퍼런스와 흰 배경 대상 모두에서 빨간 픽셀을 이진화해 형태 비교
+        sym_full_np  = np.array(sym_img)
+        crop_full_np = np.array(crop_img)
+        red_score = _compute_red_mask_ssim(sym_full_np, crop_full_np)
+        logger.debug(f"[심볼] red_mask={red_score:.3f}")
+        if red_score >= _SYMBOL_SIM_THRESHOLD:
+            logger.info(f"심볼 red_mask 일치={red_score:.3f} → 심볼 검출 확정")
+            return True
+
         logger.info(
-            f"심볼 SSIM={ssim_score:.3f} ORB={orb_score:.3f} → 불일치"
+            f"심볼 SSIM={ssim_score:.3f} ORB={orb_score:.3f} "
+            f"red_mask={red_score:.3f} → 불일치"
         )
         return False
 
@@ -593,13 +649,54 @@ def _has_wordmark_nearby(
         return False
 
 
+def _normalize_bg_to_white(np_img) -> object:
+    """
+    이미지 배경(검정)을 흰색으로 교체하는 정규화.
+
+    레퍼런스 로고가 '투명 배경(누끼)을 검정으로 저장한 PNG'인 경우
+    흰 배경 이미지와 SSIM 비교 시 0에 가깝게 나오는 문제를 해결.
+
+    전략:
+      1. 코너 평균 밝기 < 80 → 어두운 배경으로 판단
+      2. 검정에 가까운 픽셀(R<40 & G<40 & B<40)만 흰색(255,255,255)으로 교체
+         → 빨간 심볼·어두운 텍스트 등 전경 색상은 그대로 유지
+      3. 밝은 배경이면 그대로 반환
+    """
+    try:
+        import numpy as np
+        h, w = np_img.shape[:2]
+        cs = max(1, min(10, h // 6, w // 6))
+        corners = np.concatenate([
+            np_img[:cs, :cs].reshape(-1, 3),
+            np_img[:cs, -cs:].reshape(-1, 3),
+            np_img[-cs:, :cs].reshape(-1, 3),
+            np_img[-cs:, -cs:].reshape(-1, 3),
+        ], axis=0)
+        if corners.mean() >= 80:
+            # 이미 밝은 배경 → 그대로 반환
+            return np_img
+        # 어두운 배경: 검정에 가까운 픽셀만 흰색으로 교체
+        out = np_img.copy()
+        dark_mask = (out[:, :, 0] < 40) & (out[:, :, 1] < 40) & (out[:, :, 2] < 40)
+        out[dark_mask] = [255, 255, 255]
+        return out.astype(np_img.dtype)
+    except Exception:
+        return np_img
+
+
 def _compute_ssim(ref_np, crop_np) -> float:
-    """Grayscale SSIM 유사도 (0~1)"""
+    """
+    Grayscale SSIM 유사도 (0~1).
+    비교 전 배경색을 흰색으로 자동 정규화하여
+    '검정 배경 레퍼런스 vs 흰 배경 대상' 문제를 해결.
+    """
     try:
         from skimage.metrics import structural_similarity as ssim
         import cv2
-        ref_gray  = cv2.cvtColor(ref_np,  cv2.COLOR_RGB2GRAY)
-        crop_gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+        ref_norm  = _normalize_bg_to_white(ref_np)
+        crop_norm = _normalize_bg_to_white(crop_np)
+        ref_gray  = cv2.cvtColor(ref_norm,  cv2.COLOR_RGB2GRAY)
+        crop_gray = cv2.cvtColor(crop_norm, cv2.COLOR_RGB2GRAY)
         score, _ = ssim(ref_gray, crop_gray, full=True)
         return float(max(0.0, score))
     except Exception as e:
@@ -610,12 +707,15 @@ def _compute_ssim(ref_np, crop_np) -> float:
 def _compute_orb(ref_np, crop_np) -> float:
     """
     ORB feature match 기반 유사도 (0~1).
-    매칭 비율 = good_matches / max(kp_ref, kp_crop)
+    매칭 비율 = good_matches / max(kp_ref, kp_crop).
+    비교 전 배경색을 흰색으로 자동 정규화.
     """
     try:
         import cv2
-        ref_gray  = cv2.cvtColor(ref_np,  cv2.COLOR_RGB2GRAY)
-        crop_gray = cv2.cvtColor(crop_np, cv2.COLOR_RGB2GRAY)
+        ref_norm  = _normalize_bg_to_white(ref_np)
+        crop_norm = _normalize_bg_to_white(crop_np)
+        ref_gray  = cv2.cvtColor(ref_norm,  cv2.COLOR_RGB2GRAY)
+        crop_gray = cv2.cvtColor(crop_norm, cv2.COLOR_RGB2GRAY)
 
         orb = cv2.ORB_create(nfeatures=500)
         kp1, des1 = orb.detectAndCompute(ref_gray,  None)
@@ -635,6 +735,51 @@ def _compute_orb(ref_np, crop_np) -> float:
     except Exception as e:
         logger.debug(f"ORB 실패: {e}")
         return 0.0
+
+
+def _compute_red_mask_ssim(ref_np, crop_np, sz: tuple = (64, 64)) -> float:
+    """
+    빨간색 픽셀 마스크 이진화 후 SSIM 비교.
+
+    배경색이 달라도(검정 vs 흰색) 빨간 심볼 형태만 비교하므로
+    누끼 레퍼런스 이미지에 강건하다.
+
+    반환값: 0~1 (1=완전 일치), 빨간 픽셀 부족 시 -1.0 (비교 불가)
+    """
+    try:
+        import cv2
+        from skimage.metrics import structural_similarity as ssim
+
+        def to_red_binary(np_img, target_sz):
+            bgr = cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR)
+            hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+            m1 = cv2.inRange(hsv, (0,  60, 60), (12,  255, 255))
+            m2 = cv2.inRange(hsv, (168, 60, 60), (180, 255, 255))
+            mask = cv2.bitwise_or(m1, m2)
+            # 안티앨리어싱 팽창
+            kernel = np.ones((3, 3), np.uint8)
+            mask = cv2.dilate(mask, kernel, iterations=1)
+            resized = cv2.resize(mask, target_sz, interpolation=cv2.INTER_AREA)
+            _, binary = cv2.threshold(resized, 64, 255, cv2.THRESH_BINARY)
+            return binary, mask.sum() // 255  # (이진화 이미지, 원본 빨간 픽셀 수)
+
+        import numpy as np
+        ref_bin,  ref_red_cnt  = to_red_binary(ref_np,  sz)
+        crop_bin, crop_red_cnt = to_red_binary(crop_np, sz)
+
+        # 빨간 픽셀이 너무 적으면 비교 의미 없음
+        ref_total  = ref_np.shape[0]  * ref_np.shape[1]
+        crop_total = crop_np.shape[0] * crop_np.shape[1]
+        if ref_red_cnt / max(ref_total, 1) < 0.01 or crop_red_cnt / max(crop_total, 1) < 0.01:
+            logger.debug(f"[red_mask] 빨간 픽셀 부족: ref={ref_red_cnt}, crop={crop_red_cnt}")
+            return -1.0  # 비교 불가 신호
+
+        score, _ = ssim(ref_bin, crop_bin, full=True)
+        logger.debug(f"[red_mask] SSIM={score:.3f}  (ref_red={ref_red_cnt}, crop_red={crop_red_cnt})")
+        return float(max(0.0, score))
+    except Exception as e:
+        logger.debug(f"red_mask SSIM 실패: {e}")
+        return -1.0
 
 
 class ClaudeVisionJudge:
