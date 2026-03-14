@@ -19,6 +19,23 @@ def _normalize_name(text: str) -> str:
     return re.sub(r'[\s\u3000·•_\-/·\.·,]', '', text)
 
 
+# ── 인명으로 등록될 수 없는 일반 명사/단어 목록 ──────────────────
+# 사전에 인력명/대표자명으로 등록돼 있어도 이 목록에 해당하면 허용(맥락상 일반어)으로 처리
+_COMMON_WORDS: set[str] = {
+    # 일반 명사
+    "국민", "전일", "전국", "공공", "민간", "민원", "민간", "대국민",
+    "중앙", "지방", "광역", "기초", "지역", "현장", "실무", "담당",
+    "대표", "책임", "총괄", "수석", "선임", "주임", "팀장", "부장",
+    "이사", "전무", "상무", "전체", "일반", "공통", "기본", "기준",
+    "관리", "운영", "개발", "설계", "구축", "분석", "검토", "지원",
+    "사업", "과제", "업무", "서비스", "시스템", "솔루션", "플랫폼",
+    "전문", "기술", "품질", "보안", "안전", "효율", "성과", "목표",
+    "계획", "결과", "현황", "내용", "방법", "방안", "절차", "기준",
+    # 숫자/단위처럼 쓰이는 것
+    "일일", "매일", "당일", "익일", "전일", "금일",
+}
+
+
 # ── 기관/단체명 맥락 키워드 (인명 오탐 방지용) ─────────────────────
 # 2글자 인력명이 이 단어들과 함께 붙어 있으면 기관명의 일부로 판단해 오탐 처리
 _ORG_CONTEXT_SUFFIXES = re.compile(
@@ -242,6 +259,20 @@ class RuleDetector:
                 # 인력명·대표자명: 정규화 텍스트에서도 추가 매칭 (홍 길 동 → 홍길동)
                 if subcat in ("personnel_names", "representative_names"):
                     norm_term = _normalize_name(term)
+
+                    # ── 일반 명사 사전 체크: 사람 이름이 될 수 없는 단어 → 허용으로 처리
+                    if norm_term in _COMMON_WORDS or term in _COMMON_WORDS:
+                        k = (term[:60] + "_common_word", dtype)
+                        if k not in seen:
+                            seen.add(k)
+                            out.append(DetectionResult(
+                                page_number=page, detection_type=dtype,
+                                detected_text=term,
+                                verdict=VerdictType.ALLOWED,
+                                reason=f"맥락상 일반 명사로 판단 – 인명 오탐 제외 ('{term}'은 고유 인명이 아님)",
+                                recommendation="검증 불필요 – 일반 명사/단어로 확인됨",
+                                confidence=0.98, source="rule"))
+                        continue
 
                     # ① 정규화 텍스트에서 매칭 (공백·기호 우회 탐지)
                     if norm_term and len(norm_term) >= 2:
