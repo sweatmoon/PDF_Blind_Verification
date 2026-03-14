@@ -313,12 +313,16 @@ class ClaudeVisionJudge:
                 hits = rule_hits[page_key]
                 violations = [h for h in hits if h.get("judgment") == "위반"]
                 cautions   = [h for h in hits if h.get("judgment") == "주의"]
-                hint_lines = [f"⚠️ [{pg['page']}페이지 텍스트 추출 탐지 결과 — 반드시 위반으로 판정할 것]"]
+                hint_lines = [f"[{pg['page']}페이지 텍스트 레이어에서 이미 탐지된 항목 — 아래 항목 각각을 JSON 결과에 그대로 포함할 것]"]
                 for h in violations:
-                    hint_lines.append(f"  【위반 확정】{h.get('type','')}: \"{h.get('content','')}\" → 반드시 위반으로 출력하라")
+                    c = h.get('content', '')
+                    t = h.get('type', '')
+                    hint_lines.append(f'  - type: "{t}", content: "{c}", judgment: "위반"')
                 for h in cautions:
-                    hint_lines.append(f"  【주의 확정】{h.get('type','')}: \"{h.get('content','')}\" → 반드시 주의 이상으로 출력하라")
-                hint_lines.append("위 항목들은 텍스트 추출로 이미 확인된 사실이므로 이미지에서 보이지 않더라도 반드시 위반으로 포함시켜라.")
+                    c = h.get('content', '')
+                    t = h.get('type', '')
+                    hint_lines.append(f'  - type: "{t}", content: "{c}", judgment: "주의"')
+                hint_lines.append("※ 위 항목들은 텍스트 추출로 확인된 실제 탐지값입니다. content 값을 요약하거나 바꾸지 말고 위에 명시된 값을 그대로 JSON에 출력하십시오.")
                 content.append({
                     "type": "text",
                     "text": "\n".join(hint_lines)

@@ -416,12 +416,25 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         dtype   = it.get("type", "기타")
 
         # ── "텍스트 추출 탐지" 더미 항목 필터링 ──────────────────────
-        # Claude가 rule_hits 힌트를 받아서 "텍스트 추출로 확인된 위반 요소 존재" 같은
-        # 더미 결과를 반환할 때 이를 제외 (실제 탐지 내용이 없는 메타 항목)
-        _DUMMY_TYPES = ("텍스트 추출 탐지", "텍스트추출탐지", "텍스트 탐지", "텍스트탐지")
-        _DUMMY_CONTENTS = ("텍스트 추출로 확인된 위반 요소 존재", "텍스트 추출 위반 확인",
-                           "텍스트 추출로 확인된 위반")
-        if dtype in _DUMMY_TYPES or content.strip() in _DUMMY_CONTENTS:
+        # Claude가 rule_hits 힌트를 받아서 구체적인 이름 대신 요약 문구를 반환하는 경우 제외
+        _DUMMY_TYPES = (
+            "텍스트 추출 탐지", "텍스트추출탐지", "텍스트 탐지", "텍스트탐지",
+            "텍스트 탐지 실명", "텍스트탐지실명", "참여인력 실명", "텍스트 실명",
+        )
+        _DUMMY_CONTENTS = (
+            "텍스트 추출로 확인된 위반 요소 존재",
+            "텍스트 추출 위반 확인",
+            "텍스트 추출로 확인된 위반",
+            "텍스트 추출로 탐지된 사전 등록 실명",
+            "사전 등록 실명 목록의 이름들이 텍스트 추출로 탐지됨",
+            "텍스트 추출로 사전 등록 실명이 탐지됨",
+        )
+        # content에 특정 키워드가 포함된 더미 패턴도 제거
+        _DUMMY_KEYWORDS = ("텍스트 추출로 탐지된", "사전 등록 실명 목록", "텍스트 추출로 사전 등록")
+        _content_strip = content.strip()
+        if (dtype in _DUMMY_TYPES
+                or _content_strip in _DUMMY_CONTENTS
+                or any(kw in _content_strip for kw in _DUMMY_KEYWORDS)):
             continue
 
         already = any(
