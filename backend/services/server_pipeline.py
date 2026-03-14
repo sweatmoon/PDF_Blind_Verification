@@ -381,27 +381,6 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
     """제대로 하면 규칙 탐지(OCR 포함) + Vision 결과를 페이지별로 합산"""
     page_map: dict[int, list] = {}
 
-    # DB 등록 사전 항목 수집 (Vision 오탐 필터용)
-    from core.config import load_dict as _load_dict
-    _dict = _load_dict()
-    _direct = _dict.get("direct_identifiers", {})
-    _indirect = _dict.get("indirect_identifiers", {})
-    _db_company_terms: set[str] = set()
-    for _key in ("company_names", "english_names", "abbreviations",
-                 "representative_names", "emails", "domains", "brand_names", "urls"):
-        for _t in (_direct.get(_key) or []):
-            if _t and str(_t).strip():
-                _db_company_terms.add(str(_t).strip().lower())
-    for _key in ("color_names", "solution_names", "slogans", "org_names", "service_names"):
-        for _t in (_indirect.get(_key) or []):
-            if _t and str(_t).strip():
-                _db_company_terms.add(str(_t).strip().lower())
-    _COMPANY_DTYPES = {
-        "제안사명", "업체명", "회사명", "영문명", "영문명·도메인", "도메인", "이메일",
-        "브랜드명", "고유색상", "솔루션명", "슬로건", "조직명", "서비스명",
-        "대표자명", "약칭",
-    }
-
     # Vision 항목 처리
     for it in vision_items:
         try:
@@ -441,24 +420,10 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
         if already:
             continue
 
-        # ★★★ DB 등록 사전 검증 필터 (업체 관련 오탐 차단) ★★★
+        # ── 일반 명사 체크
         from services.rule_detector import _COMMON_WORDS as _CW
         import re as _re
         content_stripped = content.strip()
-        _dtype_norm = dtype.strip()
-        if _dtype_norm in _COMPANY_DTYPES and it.get("judgment") in ("위반", "주의"):
-            _content_lower = content_stripped.lower()
-            _matched = any(
-                _db_term and (_db_term in _content_lower or _content_lower in _db_term)
-                for _db_term in _db_company_terms
-                if _db_term
-            )
-            if not _matched:
-                import logging as _logging
-                _logging.getLogger("server_pipeline").debug(
-                    f"[DB 검증 필터] p{p} '{content}' ({dtype}) → DB 미등록, 오탐 제외"
-                )
-                continue
         _NAME_DTYPES = ("참여인력명", "인력명", "업체명", "대표자명", "기타", "인물명", "이름", "성명")
         if content_stripped in _CW and (dtype in _NAME_DTYPES or "인력" in dtype or "이름" in dtype or "명" in dtype):
             page_map.setdefault(p, []).append({
