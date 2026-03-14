@@ -275,6 +275,15 @@ class ServerPipeline:
 
         rule_total = sum(len(v) for v in rule_hits_by_page.values())
         logger.info(f"[{job_id}] 규칙 탐지 완료: {rule_total}건 (OCR 포함)")
+        # 규칙 탐지 상세 로그
+        for _pg, _hits in rule_hits_by_page.items():
+            for _h in _hits:
+                logger.info(
+                    f"[{job_id}] rule_hit | page={_pg} "
+                    f"type={_h.get('type','?')} "
+                    f"judgment={_h.get('judgment','?')} "
+                    f"content={str(_h.get('content',''))[:40]!r}"
+                )
 
         # ── OCR 품질 로그 (요구사항 7번) ────────────────────────────
         for i in range(total):

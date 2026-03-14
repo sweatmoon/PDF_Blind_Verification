@@ -262,6 +262,15 @@ class PPTServerPipeline:
 
         rule_total = sum(len(v) for v in rule_hits_by_page.values())
         logger.info(f"[{job_id}] 규칙 탐지 완료: {rule_total}건")
+        # 규칙 탐지 상세 로그
+        for _pg, _hits in rule_hits_by_page.items():
+            for _h in _hits:
+                logger.info(
+                    f"[{job_id}] rule_hit | page={_pg} "
+                    f"type={_h.get('type','?')} "
+                    f"judgment={_h.get('judgment','?')} "
+                    f"content={str(_h.get('content',''))[:40]!r}"
+                )
         prog(50, f"규칙 탐지 {rule_total}건 · Vision AI 분석 시작…")
 
         # ── 5. 슬라이드 이미지 렌더링 (Claude Vision용) ─────────
@@ -384,6 +393,17 @@ class PPTServerPipeline:
             f"위반:{report['violation_count']} 주의:{report['caution_count']} | "
             f"모드: {' + '.join(mode_desc)}"
         )
+        # 최종 결과 상세 로그
+        for _pr in report.get("page_results", []):
+            for _det in _pr.get("detections", []):
+                if _det.get("verdict") in ("위반", "주의"):
+                    logger.info(
+                        f"[{job_id}] final_det | page={_pr['page_number']} "
+                        f"verdict={_det.get('verdict')} "
+                        f"type={_det.get('detection_type','?')} "
+                        f"source={_det.get('source','?')} "
+                        f"text={str(_det.get('detected_text',''))[:40]!r}"
+                    )
         return report
 
 
