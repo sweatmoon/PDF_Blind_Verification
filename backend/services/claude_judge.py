@@ -121,6 +121,11 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
   Q. "사람 형태가 보이는 그래픽/아이콘/일러스트인가?"
   → YES → 무조건 【허용】 (사람 형태 = 위반 이 아님)
 
+★★★ 인물 사진으로 판정 시 반드시 bbox를 포함하라 — 이미지 재검증에 사용됨 ★★★
+- 인물 후보(위반/주의) 탐지 시 반드시 해당 인물이 위치한 bbox를 [x1,y1,x2,y2]로 표시
+- bbox를 특정할 수 없어도 최대한 추정값을 포함하라 (null 사용 지양)
+- bbox가 없으면 후처리 재검증을 수행할 수 없어 오탐 방지가 불가능해짐
+
 ━━━ 우선순위 4-B — 회사 로고 판정 (매우 보수적으로) ━━━
 
 【로고 위반 판정 조건 — 아래 4가지 모두 충족해야만 위반】
@@ -211,12 +216,15 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
   ]
 }
 - bbox는 이미지 내 검출 영역의 픽셀 좌표 (좌상단 x1,y1 / 우하단 x2,y2)
-- bbox를 특정할 수 없으면 null로 설정
+- bbox를 특정할 수 없어도 최대한 추정값을 포함하라 (null 사용 지양)
 - 로고/로고후보 탐지 시 반드시 bbox를 포함하라 — 재비교에 사용됨
+- 인물사진/인물/얼굴 탐지 시 반드시 bbox를 포함하라 — 이미지 재검증에 사용됨
+- bbox가 없으면 후처리 재검증을 수행할 수 없어 오탐 방지가 불가능해짐
 - 문제 없는 페이지는 포함하지 않아도 된다
 - 한 페이지에 위반 요소 N개면 items 배열에 N개 항목
 - 로고 후보(1차 탐지)는 type="로고후보"로 표시하고 judgment="주의"로 설정
-- 최종 위반 확정은 코드에서 bbox crop 후 SSIM/ORB 재비교로 결정"""
+- 최종 위반 확정은 코드에서 bbox crop 후 SSIM/ORB 재비교로 결정
+- 인물 최종 위반 확정은 코드에서 bbox crop 후 이미지 재분류로 결정"""
 
 
 # ── threshold ────────────────────────────────────────────────────
@@ -1018,8 +1026,13 @@ class ClaudeVisionJudge:
                 logo_symbol_b64=logo_symbol_b64,
                 company_dict=company_dict,
             )
-            # ── 얼굴/인물사진 오탐 후처리 ──────────────────────
-            items = _post_process_faces(items)
+            # ── 얼굴/인물사진 오탐 후처리 (bbox 기반 이미지 재검증) ───
+            items = _post_process_faces(
+                items,
+                page_images=page_images,
+                client=self._client,
+                model=_cfg.CLAUDE_MODEL if self.enabled else "",
+            )
 
             return items
         except Exception as e:
@@ -1378,7 +1391,284 @@ _GRAPHIC_KW: tuple = (
 )
 
 
-def _post_process_faces(items: List[dict]) -> List[dict]:
+# ── 인물 사진 bbox crop 후 이미지 재분류 ─────────────────────────────────────
+_FACE_VERIFY_PROMPT = """이 이미지 crop을 보고 아래 세 가지 중 하나로만 답하라.
+
+판단 기준:
+  real_photo    → 피부 질감이 보이고, 눈·코·입 이목구비가 식별되며, 카메라로 촬영된 실사 인물 사진임이 90% 이상 확실한 경우
+  icon_or_silhouette → 단색 실루엣, 사람 아이콘, 픽토그램, 벡터 일러스트, 캐릭터, 얼굴 디테일 없는 그래픽 중 하나라도 해당하는 경우
+  unknown       → 이미지가 너무 작거나 흐릿해 판단 불가, 또는 위 두 가지 모두에 해당하지 않는 경우
+
+반드시 아래 JSON 형식으로만 답하라:
+{"result": "real_photo" 또는 "icon_or_silhouette" 또는 "unknown", "reason": "간단한 판단 근거"}"""
+
+
+def _verify_face_candidate(
+    page_b64: str,
+    bbox: Optional[list],
+    client=None,
+    model: str = "",
+) -> str:
+    """
+    인물 사진 후보 bbox 영역을 crop 후 Claude Vision으로 재분류.
+
+    반환값:
+      "real_photo"         — 피부질감·이목구비 확인, 실제 카메라 촬영 사진
+      "icon_or_silhouette" — 아이콘/실루엣/픽토그램/일러스트 등 그래픽 요소
+      "unknown"            — 판단 불충분, 허용 처리
+
+    client: anthropic.Anthropic 인스턴스 (없으면 이미지 기반 휴리스틱 사용)
+    model: Claude 모델명 (없으면 core.config에서 읽음)
+    """
+    try:
+        crop_img = _extract_crop(page_b64, bbox, pad=8)
+        if crop_img is None:
+            logger.debug("[face_verify] crop 실패 → unknown")
+            return "unknown"
+
+        # ── 이미지 기반 휴리스틱 1차 검사 (라이브러리만으로 처리) ──────────────
+        #    색상 다양성: 단색/실루엣이면 고유 색상 수가 매우 적음
+        try:
+            import numpy as np
+            from PIL import Image as _PIL
+
+            # crop 이미지를 작게 리사이즈해 색상 분석
+            thumb = crop_img.resize((64, 64), _PIL.LANCZOS).convert("RGB")
+            arr = np.array(thumb)
+
+            # 1) 고유 색상 수 → 실루엣/아이콘은 색상이 매우 단순
+            pixels = arr.reshape(-1, 3)
+            # 색상을 32단위로 양자화해 유니크 색상 수 계산
+            quantized = (pixels // 32).astype(np.int32)
+            unique_colors = len(set(map(tuple, quantized.tolist())))
+
+            # 2) 채도 분산 → 실사 사진은 채도 변화가 풍부
+            import cv2
+            hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
+            sat_std = float(hsv[:, :, 1].std())
+
+            # 3) 엣지 복잡도 → 실루엣/아이콘은 단순한 윤곽선, 실사는 복잡한 엣지
+            gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            edge_ratio = float(edges.sum() // 255) / max(64 * 64, 1)
+
+            logger.debug(
+                f"[face_verify] unique_colors={unique_colors}, "
+                f"sat_std={sat_std:.1f}, edge_ratio={edge_ratio:.3f}"
+            )
+
+            # 단색/실루엣 판단: 색상이 매우 단순하고 채도 변화 없으면
+            if unique_colors <= 12 and sat_std < 25:
+                logger.info(
+                    f"[face_verify] 휴리스틱 → icon_or_silhouette "
+                    f"(unique_colors={unique_colors}, sat_std={sat_std:.1f})"
+                )
+                return "icon_or_silhouette"
+
+            # 벡터/플랫 일러스트 판단: 색상이 적당히 있으나 채도가 낮거나
+            # 엣지가 너무 단순 (벡터 경계는 sharp하지만 수가 적음)
+            if unique_colors <= 20 and sat_std < 40 and edge_ratio < 0.05:
+                logger.info(
+                    f"[face_verify] 휴리스틱 → icon_or_silhouette (벡터/플랫 일러스트)"
+                )
+                return "icon_or_silhouette"
+
+        except Exception as _he:
+            logger.debug(f"[face_verify] 휴리스틱 실패: {_he}")
+
+        # ── Claude Vision 재판정 (client가 있는 경우) ──────────────────────────
+        if client is not None:
+            try:
+                buf = io.BytesIO()
+                crop_img.save(buf, format="JPEG", quality=85)
+                crop_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+                _model = model or ""
+                try:
+                    import core.config as _cfg2
+                    _model = _model or _cfg2.CLAUDE_MODEL
+                except Exception:
+                    _model = _model or "claude-3-5-haiku-20241022"
+
+                resp = client.messages.create(
+                    model=_model,
+                    max_tokens=256,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": crop_b64,
+                                }
+                            },
+                            {"type": "text", "text": _FACE_VERIFY_PROMPT},
+                        ]
+                    }]
+                )
+                raw = resp.content[0].text.strip()
+                # JSON 파싱
+                raw_clean = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`")
+                s = raw_clean.find("{")
+                e = raw_clean.rfind("}")
+                if s != -1 and e != -1:
+                    obj = json.loads(raw_clean[s:e+1])
+                    result = obj.get("result", "unknown")
+                    reason = obj.get("reason", "")
+                    if result in ("real_photo", "icon_or_silhouette", "unknown"):
+                        logger.info(
+                            f"[face_verify] Claude 재판정 → {result}: {reason[:60]}"
+                        )
+                        return result
+
+                logger.debug(f"[face_verify] Claude 응답 파싱 실패: {raw[:100]}")
+
+            except Exception as _ce:
+                logger.warning(f"[face_verify] Claude 재판정 실패: {_ce}")
+
+        # ── 기본값: unknown (허용 처리) ─────────────────────────────────────────
+        logger.debug("[face_verify] 재판정 불가 → unknown")
+        return "unknown"
+
+    except Exception as e:
+        logger.warning(f"[face_verify] 전체 오류: {e} → unknown")
+        return "unknown"
+
+
+def _post_process_faces(
+    items: List[dict],
+    page_images: Optional[List[dict]] = None,
+    client=None,
+    model: str = "",
+) -> List[dict]:
+    """
+    인물사진 타입 항목 후처리 — bbox 기반 이미지 재검증 포함.
+
+    수정된 파이프라인:
+      Claude Vision → 인물 후보 + bbox
+      → bbox crop → _verify_face_candidate() 이미지 재분류
+      → real_photo       → 위반 유지
+      → icon_or_silhouette → 허용 ("아이콘/실루엣/일러스트로 확인되어 허용 처리")
+      → unknown          → 허용 ("실제 촬영 사진으로 확인되지 않아 허용 처리")
+
+    키워드 필터(_REAL_PHOTO_KW, _GRAPHIC_KW)는 2차 힌트로만 사용:
+      - 이미지 재검증이 가능한 경우 → 이미지 판정 우선
+      - page_images 없거나 bbox 없는 경우 → 키워드 필터 폴백
+
+    인자:
+      items       : Claude Vision이 반환한 아이템 리스트
+      page_images : [{"page": N, "b64": ..., "media_type": ...}, ...]
+                    없으면 키워드 필터만 적용 (하위 호환)
+      client      : anthropic.Anthropic 인스턴스 (None이면 휴리스틱만)
+      model       : Claude 모델명
+    """
+    # 페이지번호 → b64 매핑
+    page_b64_map: dict = {}
+    if page_images:
+        for pg in page_images:
+            page_b64_map[pg["page"]] = pg["b64"]
+
+    out = []
+    for it in items:
+        dtype    = (it.get("type")    or "").lower()
+        content  = (it.get("content") or "").lower()
+        reason   = (it.get("reason")  or "").lower()
+        judgment = it.get("judgment", "주의")
+
+        # 얼굴/인물 타입 아니면 그대로 통과
+        is_face = any(kw in dtype for kw in _FACE_DTYPE_KW)
+        if not is_face:
+            out.append(it)
+            continue
+
+        # 이미 허용 → 통과
+        if judgment == "허용":
+            out.append(it)
+            continue
+
+        # ── 1단계: 이미지 재검증 (bbox + page_images 모두 있는 경우) ──────────
+        page_num = it.get("page")
+        raw_bbox = it.get("bbox")
+        bbox: Optional[list] = None
+        if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+            try:
+                bbox = [float(v) for v in raw_bbox]
+            except (TypeError, ValueError):
+                bbox = None
+
+        page_b64 = page_b64_map.get(page_num) if page_num is not None else None
+
+        if page_b64 is not None:
+            # bbox가 없어도 페이지 전체로 시도 (None bbox → _extract_crop fallback)
+            face_class = _verify_face_candidate(
+                page_b64, bbox, client=client, model=model
+            )
+
+            if face_class == "real_photo":
+                # 이미지 재검증 결과: 실제 사진 → 위반 유지
+                logger.info(
+                    f"[face_verify] 실제 사진 확인 → 위반 유지: "
+                    f"p{page_num} '{it.get('content', '')[:40]}'"
+                )
+                out.append(it)
+                continue
+
+            elif face_class == "icon_or_silhouette":
+                # 이미지 재검증 결과: 아이콘/실루엣 → 허용
+                it = dict(it)
+                it["judgment"]       = "허용"
+                it["reason"]         = "아이콘/실루엣/일러스트로 확인되어 허용 처리 (이미지 재검증)"
+                it["recommendation"] = ""
+                logger.info(
+                    f"[face_verify] 아이콘/실루엣 확인 → 허용: "
+                    f"p{page_num} '{it.get('content', '')[:40]}'"
+                )
+                out.append(it)
+                continue
+
+            else:  # unknown
+                # 이미지 재검증 결과: 불충분 → 허용
+                it = dict(it)
+                it["judgment"]       = "허용"
+                it["reason"]         = "실제 촬영 사진으로 확인되지 않아 허용 처리 (이미지 재검증 불충분)"
+                it["recommendation"] = ""
+                logger.info(
+                    f"[face_verify] 재검증 불충분 → 허용: "
+                    f"p{page_num} '{it.get('content', '')[:40]}'"
+                )
+                out.append(it)
+                continue
+
+        # ── 2단계: 키워드 폴백 (page_images 없거나 page 불일치) ──────────────
+        combined = dtype + " " + content + " " + reason
+
+        # ① 그래픽/아이콘 키워드 존재 → 무조건 허용
+        if any(kw in combined for kw in _GRAPHIC_KW):
+            it = dict(it)
+            it["judgment"]       = "허용"
+            it["reason"]         = "그래픽/아이콘/일러스트로 확인되어 허용 처리 (실제 사진 아님)"
+            it["recommendation"] = ""
+            logger.debug(f"얼굴 오탐 허용: '{it.get('content', '')}' (그래픽 키워드 검출)")
+            out.append(it)
+            continue
+
+        # ② 실제 사진 키워드 존재 → 위반 유지
+        if any(kw in combined for kw in _REAL_PHOTO_KW):
+            logger.debug(f"실제 사진 확인 → 위반 유지: '{it.get('content', '')}' (실사 키워드 검출)")
+            out.append(it)
+            continue
+
+        # ③ 불명확 (어느 쪽도 아님) → 기본값 허용
+        #    "사람 형태"만 있고 실제 사진 증거 없음 → 오탐으로 간주
+        it = dict(it)
+        it["judgment"]       = "허용"
+        it["reason"]         = "실제 촬영 사진으로 확인되지 않아 허용 처리 (사람 형태만으로 위반 판정 불가)"
+        it["recommendation"] = ""
+        logger.debug(f"얼굴 불명확 허용: '{it.get('content', '')}' (실사 증거 없음)")
+        out.append(it)
+    return out
     """
     인물사진 타입 항목 후처리.
 
