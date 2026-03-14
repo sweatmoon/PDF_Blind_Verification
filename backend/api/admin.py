@@ -143,12 +143,15 @@ def delete_item(group: str, subcategory: str, item: str):
 @router.get("/config")
 def get_config():
     import core.config as cfg
+    key = cfg.ANTHROPIC_API_KEY or ""
+    masked = (key[:8] + "…" + key[-4:]) if len(key) > 12 else ("설정됨" if key else "")
     return JSONResponse({
         "auto_delete_minutes":      cfg.AUTO_DELETE_MIN,
         "max_file_size_mb":         cfg.MAX_FILE_SIZE_MB,
         "ocr_enabled":              cfg.OCR_ENABLED,
         "claude_enabled":           cfg.CLAUDE_ENABLED,
         "claude_model":             cfg.CLAUDE_MODEL,
+        "claude_key_masked":        masked,
         "google_vision_configured": bool(cfg.get_google_vision_key()),
         "allowed_formats":          ["PDF"],
     })

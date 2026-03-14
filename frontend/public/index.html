@@ -2136,6 +2136,29 @@ async function loadAdminData() {
       ['official_institutions', '공공기관'],
     ]);
 
+    // Claude API 키 상태 복원 (관리자 페이지 방문 시마다 최신 서버 상태 반영)
+    const apiKeyInput   = document.getElementById('apiKeyInput');
+    const apiKeyStatusEl = document.getElementById('apiKeyStatus');
+    const claudeBadge   = document.getElementById('claudeModeBadge');
+    if (cfg.claude_enabled) {
+      state.apiKeyApplied = true;
+      // 입력 필드: 로컬스토리지 키 우선 표시
+      const savedKey = localStorage.getItem('claudeApiKey');
+      if (apiKeyInput && !apiKeyInput.value && savedKey) apiKeyInput.value = savedKey;
+      if (apiKeyStatusEl) {
+        const masked = cfg.claude_key_masked || '설정됨';
+        apiKeyStatusEl.textContent = `✓ 활성화됨 (${masked})`;
+        apiKeyStatusEl.className = 'text-xs text-green-600';
+      }
+      if (claudeBadge) { claudeBadge.textContent = '활성'; claudeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
+    } else {
+      if (apiKeyStatusEl && !apiKeyInput?.value) {
+        apiKeyStatusEl.textContent = 'API 키를 입력하고 적용하세요.';
+        apiKeyStatusEl.className = 'text-xs text-slate-400';
+      }
+      if (claudeBadge) { claudeBadge.textContent = '비활성'; claudeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal'; }
+    }
+
     // 시스템 설정 카드 (DOM API 사용)
     const sysEl = document.getElementById('sysConfig');
     sysEl.innerHTML = '';
@@ -3493,7 +3516,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (res.ok) {
       const cfg = await res.json();
       if (cfg.claude_enabled) {
-        // ✅ Claude 활성 상태
+        // ✅ Claude 활성 상태 (서버가 이미 키 보유)
         state.apiKeyApplied = true;
         // 헤더: 녹색 "서비스 정상"
         headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full items-center';
@@ -3507,10 +3530,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 관리자 배지
         const badge = document.getElementById('claudeModeBadge');
         if (badge) { badge.textContent = '활성'; badge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
-        document.getElementById('claudeStatusBadge').classList.remove('hidden');
-        document.getElementById('claudeStatusText').textContent = 'Claude Vision 활성';
+        const claudeBadge = document.getElementById('claudeStatusBadge');
+        if (claudeBadge) claudeBadge.classList.remove('hidden');
+        const claudeText = document.getElementById('claudeStatusText');
+        if (claudeText) claudeText.textContent = 'Claude Vision 활성';
+        // 입력 필드: 마스킹 키 표시 (로컬스토리지 키 우선, 없으면 서버 마스킹 값)
+        const apiKeyInput = document.getElementById('apiKeyInput');
         const apiKeyStatusEl = document.getElementById('apiKeyStatus');
-        if (apiKeyStatusEl) { apiKeyStatusEl.textContent = '✓ Claude AI 이미 활성화됨'; apiKeyStatusEl.className = 'text-xs text-green-600'; }
+        if (apiKeyInput) {
+          if (!apiKeyInput.value && savedKey) apiKeyInput.value = savedKey;
+        }
+        if (apiKeyStatusEl) {
+          const masked = cfg.claude_key_masked || '설정됨';
+          apiKeyStatusEl.textContent = `✓ Claude AI 활성화됨 (${masked})`;
+          apiKeyStatusEl.className = 'text-xs text-green-600';
+        }
+        // 로컬스토리지 키가 없어도 서버 활성화 상태 유지 표시
+        if (!savedKey && cfg.claude_key_masked) {
+          localStorage.setItem('claudeKeyMasked', cfg.claude_key_masked);
+        }
       } else {
         // ❌ Claude 비활성 — 저장된 키로 재시도
         if (savedKey) {
@@ -3566,6 +3604,11 @@ async function _autoReapplyKey(key) {
     });
     if (res.ok) {
       state.apiKeyApplied = true;
+      // 로컬스토리지에 재저장 (다음 새로고침을 위해)
+      localStorage.setItem('claudeApiKey', key);
+      // 입력 필드 채우기
+      const apiKeyInput = document.getElementById('apiKeyInput');
+      if (apiKeyInput && !apiKeyInput.value) apiKeyInput.value = key;
       // 헤더 배지: 녹색으로
       const headerStatusEl = document.getElementById('headerStatus');
       if (headerStatusEl) {
