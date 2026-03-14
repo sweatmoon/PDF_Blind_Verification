@@ -340,7 +340,15 @@ class PPTServerPipeline:
         prog(90, "결과 합산 중…")
 
         # ── 7. 규칙 + Vision 합산 ──────────────────────────────
-        merged = _merge_results(rule_hits_by_page, all_vision_items, total)
+        # 페이지별 크롭 이미지 여부 맵 생성 (Vision 단독 탐지 결과 강등용)
+        page_has_cropped: dict[int, bool] = {}
+        for i in range(total):
+            for j, img_d in enumerate(slide_images.get(i, [])):
+                if img_d.get("is_cropped", False):
+                    page_has_cropped[i + 1] = True
+                    break
+
+        merged = _merge_results(rule_hits_by_page, all_vision_items, total, page_has_cropped)
 
         # ── 8. 원본 파일 삭제 ──────────────────────────────────
         svc.close()
@@ -366,8 +374,14 @@ class PPTServerPipeline:
 
 
 # ── 결과 합산 (server_pipeline과 동일) ──────────────────────────
-def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: int) -> dict:
+def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: int,
+                   page_has_cropped: dict = None) -> dict:
+    """
+    page_has_cropped: {page_number(1-based): True} — 해당 페이지에 크롭 이미지가 있음
+    Vision AI가 위반으로 탐지해도 크롭 이미지가 있는 페이지의 로고/업체명은 주의로 강등
+    """
     page_map: dict[int, list] = {}
+    _cropped_pages = page_has_cropped or {}
 
     for it in vision_items:
         try:
@@ -399,14 +413,24 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
             if _re.search(_ORG_KEYWORDS, reason_text):
                 continue
 
+        # 크롭 이미지가 있는 페이지의 Vision 탐지 → 로고/업체명 위반 → 주의 강등
+        vision_verdict = it.get("judgment", "주의")
+        vision_cropped = False
+        if _cropped_pages.get(p) and vision_verdict == "위반" and any(
+            kw in dtype for kw in ("로고", "업체", "회사", "브랜드")
+        ):
+            vision_verdict = "주의"
+            vision_cropped = True
+
         page_map.setdefault(p, []).append({
             "detection_type":  dtype,
             "detected_text":   content,
-            "verdict":         it.get("judgment", "주의"),
-            "reason":          it.get("reason", ""),
-            "recommendation":  it.get("recommendation", ""),
+            "verdict":         vision_verdict,
+            "reason":          it.get("reason", "") + (" [크롭 영역 밖 – 화면에 보이지 않음]" if vision_cropped else ""),
+            "recommendation":  "크롭된 이미지의 숨겨진 영역에서 검출 – 직접 노출 아님, 이미지 재편집 권장" if vision_cropped else it.get("recommendation", ""),
             "confidence":      0.9,
             "source":          "vision",
+            "cropped":         vision_cropped,
         })
 
     for page_str, hits in rule_hits_by_page.items():
@@ -434,10 +458,20 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                 rule_src = h.get("source", "rule")  # 'rule' or 'ocr'
                 if existing_src == "vision":
                     existing["source"] = f"{rule_src}+vision"
-                # 판정은 더 강한 쪽으로
-                weight = {"위반": 2, "주의": 1, "허용": 0}
-                if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
-                    existing["verdict"] = h.get("judgment", "주의")
+                # cropped=True 인 rule 항목이면 Vision 판정도 주의로 강등
+                # (화면에 보이지 않는 크롭 영역 → 위반으로 처리 불가)
+                if h.get("cropped", False):
+                    weight_e = {"위반": 2, "주의": 1, "허용": 0}
+                    if weight_e.get(existing["verdict"], 0) > 1:  # 위반이면 주의로 내림
+                        existing["verdict"] = "주의"
+                        existing["cropped"] = True
+                        existing["reason"] = (existing.get("reason") or "") + " [크롭 영역 밖 – 화면에 보이지 않음]"
+                        existing["recommendation"] = "크롭된 이미지의 숨겨진 영역에서 검출 – 직접 노출 아님, 이미지 재편집 권장"
+                else:
+                    # 판정은 더 강한 쪽으로
+                    weight = {"위반": 2, "주의": 1, "허용": 0}
+                    if weight.get(h.get("judgment", "주의"), 0) > weight.get(existing["verdict"], 0):
+                        existing["verdict"] = h.get("judgment", "주의")
             else:
                 # 새 항목 추가
                 page_map.setdefault(p, []).append({
