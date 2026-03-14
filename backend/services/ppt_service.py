@@ -35,7 +35,7 @@ class SlideData:
     slide_number: int          # 1-based
     text:         str  = ""    # 모든 텍스트 합산
     text_items:   list = field(default_factory=list)  # [(source, text), ...]
-    images:       list = field(default_factory=list)  # image dicts
+    images:       list = field(default_factory=list)  # image dicts (crop_visible 포함)
     hyperlinks:   list = field(default_factory=list)  # [url, ...]
     is_hidden:    bool = False
 
@@ -154,12 +154,36 @@ class PPTService:
                     img_ext  = shape.image.ext          # "jpeg", "png", …
                     pil_img  = Image.open(io.BytesIO(img_blob))
                     w, h     = pil_img.size
+
+                    # 크롭 정보 추출: python-pptx의 crop 속성 (0.0 ~ 1.0 비율)
+                    # crop_left/right/top/bottom: 잘려나간 비율 (0이면 크롭 없음)
+                    crop_info = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
+                    is_cropped = False
+                    try:
+                        cl = getattr(shape, 'crop_left',   0) or 0
+                        ct = getattr(shape, 'crop_top',    0) or 0
+                        cr = getattr(shape, 'crop_right',  0) or 0
+                        cb = getattr(shape, 'crop_bottom', 0) or 0
+                        # python-pptx crop 값은 914400분의 1 단위 (EMU ratio)이므로 나누기
+                        # 실제로는 비율(0.0~1.0)로 직접 반환됨
+                        crop_info = {
+                            "left":   round(float(cl), 4),
+                            "top":    round(float(ct), 4),
+                            "right":  round(float(cr), 4),
+                            "bottom": round(float(cb), 4),
+                        }
+                        is_cropped = any(v > 0.01 for v in crop_info.values())
+                    except Exception:
+                        pass
+
                     images.append({
-                        "data": img_blob,
-                        "ext":  img_ext,
-                        "w":    w,
-                        "h":    h,
-                        "pil":  pil_img,
+                        "data":       img_blob,
+                        "ext":        img_ext,
+                        "w":          w,
+                        "h":          h,
+                        "pil":        pil_img,
+                        "crop_info":  crop_info,
+                        "is_cropped": is_cropped,
                     })
             except Exception:
                 pass

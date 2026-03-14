@@ -108,7 +108,14 @@ class RuleDetector:
         out = []
         for m in _P["email"].finditer(text):
             email = m.group()
-            if self._is_allowed(email):
+            allowed_reason = self._get_allowed_reason(email)
+            if allowed_reason:
+                out.append(DetectionResult(
+                    page_number=page, detection_type=DetectionType.EMAIL,
+                    detected_text=email, verdict=VerdictType.ALLOWED,
+                    reason=f"허용 목록 등록 항목 – {allowed_reason}",
+                    recommendation="허용 목록에 의해 제외 처리됨",
+                    confidence=0.97, source="rule"))
                 continue
             out.append(DetectionResult(
                 page_number=page, detection_type=DetectionType.EMAIL,
@@ -127,7 +134,14 @@ class RuleDetector:
             url = m.group().strip()
             if len(url) < 8:
                 continue
-            if self._is_allowed(url):
+            allowed_reason = self._get_allowed_reason(url)
+            if allowed_reason:
+                out.append(DetectionResult(
+                    page_number=page, detection_type=DetectionType.URL,
+                    detected_text=url, verdict=VerdictType.ALLOWED,
+                    reason=f"허용 목록 등록 항목 – {allowed_reason}",
+                    recommendation="허용 목록에 의해 제외 처리됨",
+                    confidence=0.85, source="rule"))
                 continue
             out.append(DetectionResult(
                 page_number=page, detection_type=DetectionType.URL,
@@ -237,8 +251,18 @@ class RuleDetector:
                             else re.escape(norm_term)
                         )
                         for m in re.finditer(norm_pattern, _norm_text, re.I):
-                            # 2글자 이하: 기관명 맥락 오탐 필터
+                            # 2글자 이하: 기관명 맥락 오탐 필터 → 허용으로 반환
                             if len(norm_term) <= 2 and _is_org_context(norm_term, _norm_text, m.start(), m.end()):
+                                k = (norm_term[:60] + "_allowed_norm", dtype)
+                                if k not in seen:
+                                    seen.add(k)
+                                    out.append(DetectionResult(
+                                        page_number=page, detection_type=dtype,
+                                        detected_text=term,
+                                        verdict=VerdictType.ALLOWED,
+                                        reason="맥락상 기관명의 일부로 판단 – 오탐 제외 (공백/기호 분리 형태)",
+                                        recommendation="기관명 복합어로 확인됨, 검증 불필요",
+                                        confidence=0.97, source="rule"))
                                 continue
                             k = (norm_term[:60], dtype)
                             if k in seen: continue
@@ -257,8 +281,19 @@ class RuleDetector:
                     else:
                         pattern = re.escape(term)
                     for m in re.finditer(pattern, text, re.I):
-                        # 2글자 이하: 기관명 맥락 오탐 필터
+                        # 2글자 이하: 기관명 맥락 오탐 필터 → 허용으로 반환
                         if len(term) <= 2 and _is_org_context(term, text, m.start(), m.end()):
+                            matched = m.group()
+                            k = (matched[:60] + "_allowed", dtype)
+                            if k not in seen:
+                                seen.add(k)
+                                out.append(DetectionResult(
+                                    page_number=page, detection_type=dtype,
+                                    detected_text=matched,
+                                    verdict=VerdictType.ALLOWED,
+                                    reason="맥락상 기관명의 일부로 판단 – 오탐 제외",
+                                    recommendation="기관명 복합어로 확인됨, 검증 불필요",
+                                    confidence=0.99, source="rule"))
                             continue
                         matched = m.group()
                         k = (matched[:60], dtype)
@@ -300,12 +335,16 @@ class RuleDetector:
 
     # ── 허용 확인 ─────────────────────────────────────────────
     def _is_allowed(self, term: str) -> bool:
+        return bool(self._get_allowed_reason(term))
+
+    def _get_allowed_reason(self, term: str) -> str:
+        """허용 목록에 해당하면 이유 문자열 반환, 아니면 빈 문자열 반환"""
         tl = term.lower()
-        for terms in self.dictionary.get("allowed_terms", {}).values():
+        for cat, terms in self.dictionary.get("allowed_terms", {}).items():
             for t in terms:
                 if t and t.lower() in tl:
-                    return True
-        return False
+                    return f"{cat} 허용 목록 ({t})"
+        return ""
 
 
 _inst: RuleDetector | None = None

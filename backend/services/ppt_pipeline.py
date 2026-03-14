@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from services.rule_detector import get_rule_detector
+from services.rule_detector import get_rule_detector, _is_org_context
 from services.claude_judge  import get_claude_judge, ClaudeVisionJudge
 from services.ocr_service   import get_ocr
 from services.ppt_service   import PPTService
@@ -106,16 +106,19 @@ class PPTServerPipeline:
         prog(20, f"텍스트 추출 완료 ({text_count}/{total}슬라이드) · OCR 시작…")
 
         # ── 3. 슬라이드 이미지 OCR (Google Vision 배치) ────────
-        ocr_results: dict[tuple, str] = {}   # (slide_idx, img_idx) → text
+        ocr_results: dict[tuple, str]      = {}  # (slide_idx, img_idx) → text
+        ocr_cropped_flags: dict[tuple, bool] = {}  # (slide_idx, img_idx) → 크롭 여부
 
         # OCR 대상 이미지 수집 (60px 이상)
+        # (i, j, pil, is_cropped) 형태 — 크롭 여부 함께 전달
         ocr_targets: List[tuple] = []
         for i in range(total):
             for j, img_d in enumerate(slide_images.get(i, [])):
-                w, h = img_d.get("w", 0), img_d.get("h", 0)
-                pil  = img_d.get("pil")
+                w, h       = img_d.get("w", 0), img_d.get("h", 0)
+                pil        = img_d.get("pil")
+                is_cropped = img_d.get("is_cropped", False)
                 if pil and w >= 60 and h >= 60:
-                    ocr_targets.append((i, j, pil))
+                    ocr_targets.append((i, j, pil, is_cropped))
 
         if ocr_targets and ocr_on:
             engine = "Google Vision" if gv_on else "Tesseract"
@@ -130,7 +133,7 @@ class PPTServerPipeline:
 
                 def _gv_batch(items):
                     # gv_ocr_batch는 [(key, pil), ...] 형식
-                    gv_input = [(k, pil) for k, (_, _, pil) in enumerate(items)]
+                    gv_input = [(k, pil) for k, (_, _, pil, _c) in enumerate(items)]
                     return self.ocr.gv_ocr_batch(gv_input)
 
                 batch_tasks = [
@@ -141,19 +144,24 @@ class PPTServerPipeline:
 
                 for batch, result in zip(batches, batch_results):
                     for k, text in result.items():
-                        si, ii, _ = batch[k]
+                        si, ii, _pil, is_cropped = batch[k]
                         if text.strip():
                             ocr_results[(si, ii)] = text
+                            # 크롭된 이미지에서 검출된 텍스트임을 표시
+                            if is_cropped:
+                                ocr_cropped_flags[(si, ii)] = True
 
                 prog(40, f"Google Vision OCR 완료 ({len(ocr_targets)}개 이미지)")
 
             else:
                 # Tesseract 폴백
-                for k, (si, ii, pil) in enumerate(ocr_targets):
+                for k, (si, ii, pil, is_cropped) in enumerate(ocr_targets):
                     text = await loop.run_in_executor(
                         _executor, self.ocr.from_image, pil)
                     if text and text.strip():
                         ocr_results[(si, ii)] = text
+                        if is_cropped:
+                            ocr_cropped_flags[(si, ii)] = True
                     pct = 22 + int(k / len(ocr_targets) * 18)
                     prog(min(pct, 40), f"Tesseract OCR… {k+1}/{len(ocr_targets)}")
 
@@ -168,17 +176,21 @@ class PPTServerPipeline:
             slide_num = i + 1
             combined_text = slide_texts.get(i, "")
 
-            # OCR 텍스트 병합
-            ocr_texts_for_slide = []
+            # OCR 텍스트 병합 (크롭 여부도 추적)
+            ocr_texts_for_slide  = []   # (text, is_cropped) 튜플 리스트
             for j in range(len(slide_images.get(i, []))):
-                ot = ocr_results.get((i, j), "")
+                ot         = ocr_results.get((i, j), "")
+                is_cropped = ocr_cropped_flags.get((i, j), False)
                 if ot.strip():
-                    ocr_texts_for_slide.append(ot)
+                    ocr_texts_for_slide.append((ot, is_cropped))
 
-            # 텍스트 + OCR 합산
+            # 텍스트 + OCR 합산 (크롭 여부 무관하게 모두 탐지)
             full_text = combined_text
             if ocr_texts_for_slide:
-                full_text += "\n" + "\n".join(ocr_texts_for_slide)
+                full_text += "\n" + "\n".join(t for t, _ in ocr_texts_for_slide)
+
+            # 크롭된 OCR 텍스트 집합 (판정 강등용)
+            cropped_ocr_texts = {t for t, c in ocr_texts_for_slide if c}
 
             # 숨겨진 슬라이드 경고
             hidden_hits = []
@@ -194,23 +206,42 @@ class PPTServerPipeline:
                 })
 
             hits = self.rules.detect(full_text, slide_num)
-            all_hits = hidden_hits + [
-                {
+            all_hits = list(hidden_hits)
+            for h in hits:
+                det_text = h.detected_text or ""
+                verdict  = h.verdict.value
+
+                # OCR에서 검출됐는지 판별
+                from_ocr = any(
+                    det_text.strip() in ot
+                    for ot, _ in ocr_texts_for_slide
+                ) if det_text else False
+
+                # 크롭된 이미지 OCR에서만 검출 + 텍스트 레이어에 없음 → '주의'로 강등
+                from_cropped_only = (
+                    from_ocr and
+                    bool(det_text) and
+                    any(det_text.strip() in ct for ct in cropped_ocr_texts) and
+                    det_text.strip() not in combined_text
+                )
+                if from_cropped_only and verdict == "위반":
+                    verdict  = "주의"
+                    h_reason = (h.reason or "") + " [크롭 영역 밖 – 화면에 보이지 않음]"
+                    h_rec    = "크롭된 이미지의 숨겨진 영역에서 검출 – 직접 노출 아님, 이미지 재편집 권장"
+                else:
+                    h_reason = h.reason
+                    h_rec    = h.recommendation
+
+                all_hits.append({
                     "type":           h.detection_type.value,
-                    "content":        h.detected_text or "",
-                    "judgment":       h.verdict.value,
-                    "reason":         h.reason,
-                    "recommendation": h.recommendation,
+                    "content":        det_text,
+                    "judgment":       verdict,
+                    "reason":         h_reason,
+                    "recommendation": h_rec,
                     "confidence":     h.confidence,
-                    "source":         "ocr" if (
-                        h.detected_text and any(
-                            h.detected_text.strip() in ot
-                            for ot in ocr_texts_for_slide
-                        )
-                    ) else "rule",
-                }
-                for h in hits
-            ]
+                    "source":         "ocr" if from_ocr else "rule",
+                    "cropped":        from_cropped_only,
+                })
 
             if all_hits:
                 rule_hits_by_page[str(slide_num)] = all_hits
@@ -347,13 +378,27 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
             p = 1
         content = it.get("content", "")
         dtype   = it.get("type", "기타")
-        # vision끼리 대소문자 무시 중복 제거
+
+        # 대소문자 무시 중복 제거
         already = any(
             d["detected_text"].lower() == content.lower() and d["detection_type"] == dtype
             for d in page_map.get(p, [])
         )
         if already:
             continue
+
+        # 2글자 이하 인력명: 허용 기관명 포함 여부로 오탐 필터
+        # Vision AI가 '국민' 검출 시 reason에 '국민건강보험공단' 같은 기관명이 언급된 경우 스킵
+        if len(content.strip()) <= 2 and dtype in ("참여인력명", "인력명", "업체명", "대표자명"):
+            import re as _re
+            reason_text = it.get("reason", "") + " " + it.get("recommendation", "")
+            _ORG_KEYWORDS = (
+                r'공단|공사|위원회|연구원|연구소|진흥원|협회|학회|재단|센터|기관|'
+                r'건강보험|국민연금|서민금융|대국민|안전처|안전부'
+            )
+            if _re.search(_ORG_KEYWORDS, reason_text):
+                continue
+
         page_map.setdefault(p, []).append({
             "detection_type":  dtype,
             "detected_text":   content,
@@ -403,6 +448,7 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                     "recommendation":  h.get("recommendation", ""),
                     "confidence":      h.get("confidence", 0.95),
                     "source":          h.get("source", "rule"),
+                    "cropped":         h.get("cropped", False),
                 })
 
     return page_map
@@ -462,6 +508,7 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
                 "reason":         d.get("reason", ""),
                 "recommendation": d.get("recommendation", ""),
                 "source":         d.get("source", "rule"),
+                "cropped":        d.get("cropped", False),
             })
 
     return {

@@ -1851,10 +1851,15 @@ function renderPageList(pages, filter = 'all') {
         // 소스 배지: OCR / AI / 규칙
         const src = d.source || 'rule';
         const srcBadge = buildSourceBadge(src);
+        // 크롭 배지: PPT 크롭으로 화면에 보이지 않는 영역에서 검출
+        const croppedBadge = d.cropped
+          ? `<span class="text-xs px-1.5 py-0.5 rounded font-medium bg-slate-100 text-slate-500 border border-slate-200" title="PPT 크롭으로 화면에 보이지 않는 영역에서 검출">크롭숨김</span>`
+          : '';
         return `<div class="text-xs px-2.5 py-2 rounded border ${vcls} mb-1">
           <div class="flex items-center justify-between gap-2 mb-0.5">
             <span class="font-mono break-all">${d.detected_text ? `"${(d.detected_text).slice(0,150)}"` : (d.image_description ? `[이미지] ${d.image_description}` : '—')}</span>
             <div class="flex items-center gap-1 flex-shrink-0">
+              ${croppedBadge}
               ${srcBadge}
               <span class="text-xs px-1.5 py-0.5 rounded font-medium ${vcls}">${d.verdict}</span>
             </div>
@@ -1882,6 +1887,7 @@ function renderPageList(pages, filter = 'all') {
           <span class="font-semibold text-slate-700 text-sm">${page.page_number}페이지</span>
           ${v > 0 ? `<span class="ml-2 text-xs text-red-600">${v}건 위반</span>` : ''}
           ${c > 0 ? `<span class="ml-1 text-xs text-amber-600">${c}건 주의</span>` : ''}
+          ${(() => { const a = (page.allowed_count || 0); return a > 0 ? `<span class="ml-1 text-xs text-green-600">${a}건 허용(제외)</span>` : ''; })()}
           ${v===0&&c===0 ? '<span class="ml-2 text-xs text-green-600">이상 없음</span>' : ''}
         </div>
         <i class="fas fa-chevron-down text-slate-400 text-xs toggle-icon transition-transform"></i>
