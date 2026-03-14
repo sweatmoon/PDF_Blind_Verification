@@ -66,7 +66,7 @@
       <span id="claudeStatusBadge" class="hidden sm:inline-flex text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-medium items-center">
         <i class="fas fa-robot mr-1"></i><span id="claudeStatusText">Claude AI</span>
       </span>
-      <span id="headerStatus" class="hidden sm:inline-flex text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full items-center cursor-pointer" onclick="showPage('admin')" title="관리자 페이지에서 Claude API 키를 설정하세요">
+      <span id="headerStatus" class="hidden text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full items-center cursor-pointer" onclick="showPage('admin')" title="관리자 페이지에서 Claude API 키를 설정하세요">
         <i class="fas fa-exclamation-circle text-red-500 mr-1" style="font-size:10px"></i><span class="hidden md:inline">API 키 미설정</span>
       </span>
       <button onclick="showPage('admin')" class="text-xs text-slate-500 hover:text-indigo-600 p-1.5 rounded hover:bg-slate-100 transition">
@@ -2137,9 +2137,11 @@ async function loadAdminData() {
     ]);
 
     // Claude API 키 상태 복원 (관리자 페이지 방문 시마다 최신 서버 상태 반영)
-    const apiKeyInput   = document.getElementById('apiKeyInput');
+    const apiKeyInput    = document.getElementById('apiKeyInput');
     const apiKeyStatusEl = document.getElementById('apiKeyStatus');
-    const claudeBadge   = document.getElementById('claudeModeBadge');
+    const claudeBadge    = document.getElementById('claudeModeBadge');
+    const headerStatusEl = document.getElementById('headerStatus');
+    const warningBanner  = document.getElementById('apiKeyWarningBanner');
     if (cfg.claude_enabled) {
       state.apiKeyApplied = true;
       // 입력 필드: 로컬스토리지 키 우선 표시
@@ -2151,12 +2153,31 @@ async function loadAdminData() {
         apiKeyStatusEl.className = 'text-xs text-green-600';
       }
       if (claudeBadge) { claudeBadge.textContent = '활성'; claudeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-normal'; }
+      // ✅ 헤더 배지 → 녹색 "서비스 정상"
+      if (headerStatusEl) {
+        headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full items-center';
+        headerStatusEl.innerHTML = '<i class="fas fa-circle text-green-500 mr-1" style="font-size:8px"></i><span class="hidden md:inline">서비스 정상</span>';
+        headerStatusEl.removeAttribute('onclick');
+        headerStatusEl.removeAttribute('title');
+        headerStatusEl.style.cursor = '';
+        headerStatusEl.classList.remove('hidden');
+      }
+      if (warningBanner) warningBanner.classList.add('hidden');
     } else {
       if (apiKeyStatusEl && !apiKeyInput?.value) {
         apiKeyStatusEl.textContent = 'API 키를 입력하고 적용하세요.';
         apiKeyStatusEl.className = 'text-xs text-slate-400';
       }
       if (claudeBadge) { claudeBadge.textContent = '비활성'; claudeBadge.className = 'text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-normal'; }
+      // ❌ 헤더 배지 → 빨간 "API 키 미설정"
+      if (headerStatusEl) {
+        headerStatusEl.className = 'hidden sm:inline-flex text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full items-center cursor-pointer';
+        headerStatusEl.innerHTML = '<i class="fas fa-exclamation-circle text-red-500 mr-1" style="font-size:10px"></i><span class="hidden md:inline">API 키 미설정</span>';
+        headerStatusEl.onclick = () => showPage('admin');
+        headerStatusEl.title = '관리자 페이지에서 Claude API 키를 설정하세요';
+        headerStatusEl.classList.remove('hidden');
+      }
+      if (warningBanner) warningBanner.classList.remove('hidden');
     }
 
     // 시스템 설정 카드 (DOM API 사용)
