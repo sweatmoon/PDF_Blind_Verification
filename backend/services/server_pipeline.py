@@ -675,16 +675,20 @@ def apply_face_filters(items: list) -> list:
     """
     인물사진 타입 항목에만 적용.
 
-    ★ 핵심 로직 변경 (오탐 방지):
-    기존: 아이콘 키워드 있으면 허용, 없으면 위반 유지 (← 오탐 다수 발생)
-    변경: 실제 사진 키워드가 명시될 때만 위반 유지
-          그 외 (아이콘 키워드 있거나, 불명확) → 기본값 허용
-
-    판정 흐름:
+    ★ 처리 흐름:
+      0. claude_judge._post_process_faces에서 이미 재검증된 항목(_face_reverified=True)
+         → 해당 판정을 그대로 신뢰하고 통과 (중복 처리 금지)
       1. 이미 허용 → 통과
       2. 그래픽/아이콘 키워드 존재 → 허용
       3. 실제 사진 키워드 존재 → 위반 유지
-      4. 불명확 (어느 쪽도 아님) → 기본값 허용
+      4. 불명확 (어느 쪽도 아님) → 위반 유지 (안전 방향)
+         - bbox 없거나 page_images 없는 경우 키워드 폴백에서 키워드 미확인
+         - 실사 가능성 있으므로 위반으로 유지하고 리뷰 유도
+
+    ★ 정책 근거:
+      - 5회 중 1회만 검출되는 현상의 근본 원인 제거
+      - 이 함수는 1차 텍스트 키워드 필터로만 작동
+      - 이미지 재검증(_post_process_faces)에서 판정된 결과 우선
     """
     out = []
     for it in items:
@@ -696,6 +700,12 @@ def apply_face_filters(items: list) -> list:
         # 얼굴/인물 타입 아니면 통과
         is_face_type = any(kw in dtype for kw in _FACE_DTYPES_KW)
         if not is_face_type:
+            out.append(it)
+            continue
+
+        # ★ 0. _post_process_faces에서 이미 이미지 재검증된 항목 → 그대로 통과
+        #    (claude_judge에서 real_photo / icon_or_silhouette / unknown 판정 완료)
+        if it.get("_face_reverified"):
             out.append(it)
             continue
 
@@ -721,12 +731,14 @@ def apply_face_filters(items: list) -> list:
             out.append(it)
             continue
 
-        # ③ 불명확 → 기본값 허용 (실사 증거 없으면 오탐으로 간주)
-        it = dict(it)
-        it["judgment"]       = "허용"
-        it["reason"]         = "실제 촬영 사진으로 확인되지 않아 허용 처리 (사람 형태만으로 위반 판정 불가)"
-        it["recommendation"] = ""
-        it["_fp_filtered"]   = "no_real_photo_evidence"
+        # ③ 불명확 → 위반 유지 (안전 방향)
+        #    이미지 재검증(_post_process_faces)을 통과하지 못한 경우로,
+        #    실사 사진 가능성이 있으므로 위반을 유지하고 최종 판단을 리뷰어에게 넘김
+        import logging as _lg
+        _lg.getLogger(__name__).debug(
+            f"[apply_face_filters] 불명확 → 위반 유지 (안전): "
+            f"dtype={dtype!r} content={content[:30]!r}"
+        )
         out.append(it)
     return out
 

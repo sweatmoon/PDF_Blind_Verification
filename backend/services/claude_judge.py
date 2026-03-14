@@ -1641,6 +1641,8 @@ def _post_process_faces(
 
             if face_class == "real_photo":
                 # 이미지 재검증 결과: 실제 사진 → 위반 유지
+                it = dict(it)
+                it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
                 logger.info(
                     f"[face_verify] 실제 사진 확인 → 위반 유지: "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
@@ -1654,6 +1656,7 @@ def _post_process_faces(
                 it["judgment"]       = "허용"
                 it["reason"]         = "아이콘/실루엣/일러스트로 확인되어 허용 처리 (이미지 재검증)"
                 it["recommendation"] = ""
+                it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
                 logger.info(
                     f"[face_verify] 아이콘/실루엣 확인 → 허용: "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
@@ -1671,12 +1674,15 @@ def _post_process_faces(
                     it["judgment"]       = "허용"
                     it["reason"]         = "그래픽/아이콘으로 확인되어 허용 처리 (이미지 재검증 후 키워드 확인)"
                     it["recommendation"] = ""
+                    it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
                     logger.info(
                         f"[face_verify] unknown+그래픽키워드 → 허용: "
                         f"p{page_num} '{it.get('content', '')[:40]}'"
                     )
                 else:
                     # unknown + 그래픽 키워드 없음 → 위반 유지 (실사 가능성)
+                    it = dict(it)
+                    it["_face_reverified"] = True  # ★ server_pipeline 중복 처리 방지
                     logger.info(
                         f"[face_verify] unknown → 위반 유지 (실사 가능성): "
                         f"p{page_num} '{it.get('content', '')[:40]}'"
