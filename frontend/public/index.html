@@ -2364,11 +2364,15 @@ function renderSavedReports() {
     const riskColor = entry.risk_level === 'HIGH'   ? 'bg-red-100 text-red-700' :
                       entry.risk_level === 'MEDIUM' ? 'bg-amber-100 text-amber-700' :
                                                       'bg-green-100 text-green-700';
+    const isPptx = (entry.filename || '').toLowerCase().endsWith('.pptx');
+    const fileIcon = isPptx
+      ? '<i class="fas fa-file-powerpoint text-indigo-400 mt-0.5 flex-shrink-0"></i>'
+      : '<i class="fas fa-file-pdf text-red-400 mt-0.5 flex-shrink-0"></i>';
     const card = document.createElement('div');
     card.className = 'group relative border border-slate-100 rounded-xl p-3 hover:border-indigo-200 hover:bg-indigo-50/40 transition cursor-pointer';
     card.innerHTML = `
       <div class="flex items-start gap-2" onclick="openSavedReport('${entry.jobId}')">
-        <i class="fas fa-file-pdf text-red-400 mt-0.5 flex-shrink-0"></i>
+        ${fileIcon}
         <div class="flex-1 min-w-0">
           <p class="text-xs font-medium text-slate-700 truncate" title="${esc(entry.filename)}">${esc(entry.filename)}</p>
           <p class="text-xs text-slate-400 mt-0.5">${entry.page_count}p · ${formatSize(entry.fileSize)} · ${timeAgo(entry.savedAt)}</p>
@@ -2770,12 +2774,16 @@ function renderDashboard() {
                                                         'bg-green-100 text-green-700 border-green-200';
       const riskLabel = entry.risk_level === 'HIGH' ? '고위험' : entry.risk_level === 'MEDIUM' ? '중위험' : '저위험';
       const isActive  = entry.jobId === _dbSelectedId;
+      const isPptx2 = (entry.filename || '').toLowerCase().endsWith('.pptx');
+      const fileIcon2 = isPptx2
+        ? '<i class="fas fa-file-powerpoint text-indigo-400 mt-0.5 flex-shrink-0"></i>'
+        : '<i class="fas fa-file-pdf text-red-400 mt-0.5 flex-shrink-0"></i>';
       const card = document.createElement('div');
       card.className = `job-card group relative bg-white rounded-xl border p-3 cursor-pointer ${isActive ? 'border-indigo-400 shadow-md' : 'border-slate-100'}`;
       card.onclick = () => dbSelectDone(entry.jobId);
       card.innerHTML = `
         <div class="flex items-start gap-2">
-          <i class="fas fa-file-pdf text-red-400 mt-0.5 flex-shrink-0"></i>
+          ${fileIcon2}
           <div class="flex-1 min-w-0">
             <p class="text-xs font-semibold text-slate-700 truncate" title="${esc(entry.filename)}">${esc(entry.filename)}</p>
             <p class="text-xs text-slate-400 mt-0.5">${entry.page_count != null ? entry.page_count+'p · ' : ''}${formatSize(entry.fileSize)} · ${entry._serverOnly ? '서버 완료' : timeAgo(entry.savedAt)}</p>
