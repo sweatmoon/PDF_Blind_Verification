@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from models.schemas import JobStatus
 from services.file_manager import validate_pdf, register_ttl, delete_job_files
 from services.server_pipeline import get_server_pipeline
+from services.ppt_pipeline import get_ppt_pipeline
 from core.config import (
     get_logger, sanitize_filename, generate_job_id,
     get_job_tmp_dir, get_job, set_job, update_job, delete_job, list_jobs,
@@ -33,13 +34,28 @@ def _max_bytes() -> int:
     return _MB * 1024 * 1024
 
 
+ALLOWED_EXTENSIONS = {".pdf", ".pptx"}
+PPTX_MAGIC = b"PK"   # ZIP 기반 포맷 (OOXML)
+
+
+def _detect_file_type(fname: str, first_chunk: bytes) -> str:
+    """파일명 + 매직바이트로 파일 타입 감지. 'pdf' 또는 'pptx' 반환"""
+    ext = Path(fname).suffix.lower()
+    if ext == ".pdf" and first_chunk[:5].startswith(b"%PDF-"):
+        return "pdf"
+    if ext == ".pptx" and first_chunk[:2] == PPTX_MAGIC:
+        return "pptx"
+    return ""
+
+
 # ── 업로드 & 서버사이드 검증 시작 ────────────────────────────────
 @router.post("/upload")
 async def dashboard_upload(request: Request, bg: BackgroundTasks,
                             file: UploadFile = File(...)):
     fname = (file.filename or "document.pdf").strip()
-    if not fname.lower().endswith(".pdf"):
-        raise HTTPException(400, "PDF 파일만 업로드 가능합니다.")
+    ext   = Path(fname).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, "PDF 또는 PPTX 파일만 업로드 가능합니다.")
 
     safe_name = sanitize_filename(fname)
     job_id    = generate_job_id()
@@ -47,9 +63,11 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
     dest      = job_dir / safe_name
 
     # 스트리밍으로 바로 파일에 기록 (메모리에 전체 로드 X)
-    first_chunk = True
-    total_size  = 0
-    max_bytes   = _max_bytes()
+    first_chunk_data = b""
+    first_chunk_done = False
+    file_type        = ""
+    total_size       = 0
+    max_bytes        = _max_bytes()
     try:
         with open(dest, "wb") as fp:
             while True:
@@ -62,13 +80,15 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
                     dest.unlink(missing_ok=True)
                     from core.config import MAX_FILE_SIZE_MB as _MB
                     raise HTTPException(413, f"파일 크기 초과 (최대 {_MB}MB)")
-                # 첫 청크에서 PDF 헤더 검사
-                if first_chunk:
-                    if len(chunk) < 5 or not chunk[:5].startswith(b"%PDF-"):
+                # 첫 청크에서 파일 타입 검사
+                if not first_chunk_done:
+                    first_chunk_data = chunk[:16]
+                    file_type = _detect_file_type(fname, first_chunk_data)
+                    if not file_type:
                         fp.close()
                         dest.unlink(missing_ok=True)
-                        raise HTTPException(400, "유효하지 않은 PDF 파일입니다.")
-                    first_chunk = False
+                        raise HTTPException(400, "유효하지 않은 파일입니다. (PDF 또는 PPTX만 허용)")
+                    first_chunk_done = True
                 fp.write(chunk)
     except HTTPException:
         raise
@@ -82,7 +102,8 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
 
     set_job(job_id, {
         "job_id":     job_id,
-        "mode":       "server",   # 서버사이드 파이프라인 표시
+        "mode":       "server",
+        "file_type":  file_type,   # 'pdf' or 'pptx'
         "status":     JobStatus.PENDING.value,
         "progress":   0,
         "message":    "검증 대기 중…",
@@ -94,18 +115,24 @@ async def dashboard_upload(request: Request, bg: BackgroundTasks,
         "error":      None,
     })
     register_ttl(job_id)
-    bg.add_task(_run_server_pipeline, job_id, dest, fname)
 
-    logger.info(f"대시보드 업로드: {safe_name} ({total_size/1024:.1f} KB) job={job_id}")
+    # 파일 타입에 따라 파이프라인 분기
+    if file_type == "pptx":
+        bg.add_task(_run_ppt_pipeline, job_id, dest, fname)
+    else:
+        bg.add_task(_run_server_pipeline, job_id, dest, fname)
+
+    logger.info(f"대시보드 업로드: {safe_name} ({total_size/1024:.1f} KB) job={job_id} type={file_type}")
     return JSONResponse({
-        "job_id":   job_id,
-        "status":   "pending",
-        "filename": fname,
-        "message":  "서버에서 검증을 시작합니다. 브라우저를 닫아도 계속 처리됩니다.",
+        "job_id":    job_id,
+        "status":    "pending",
+        "filename":  fname,
+        "file_type": file_type,
+        "message":   "서버에서 검증을 시작합니다. 브라우저를 닫아도 계속 처리됩니다.",
     })
 
 
-# ── 백그라운드 실행 ────────────────────────────────────────────
+# ── 백그라운드 실행 (PDF) ───────────────────────────────────────
 async def _run_server_pipeline(job_id: str, path: Path, filename: str):
     update_job(job_id, status=JobStatus.PROCESSING.value, message="검증 시작…")
     try:
@@ -117,7 +144,31 @@ async def _run_server_pipeline(job_id: str, path: Path, filename: str):
                    message="검증 완료",
                    report=report)
     except Exception as e:
-        logger.error(f"[{job_id}] 파이프라인 오류: {e}", exc_info=True)
+        logger.error(f"[{job_id}] PDF 파이프라인 오류: {e}", exc_info=True)
+        update_job(job_id,
+                   status=JobStatus.FAILED.value,
+                   progress=0,
+                   message=f"검증 실패: {str(e)[:100]}",
+                   error=str(e))
+        try:
+            delete_job_files(job_id)
+        except Exception:
+            pass
+
+
+# ── 백그라운드 실행 (PPTX) ──────────────────────────────────────
+async def _run_ppt_pipeline(job_id: str, path: Path, filename: str):
+    update_job(job_id, status=JobStatus.PROCESSING.value, message="PPTX 검증 시작…")
+    try:
+        pipeline = get_ppt_pipeline()
+        report   = await pipeline.run(job_id, path, filename)
+        update_job(job_id,
+                   status=JobStatus.COMPLETED.value,
+                   progress=100,
+                   message="검증 완료",
+                   report=report)
+    except Exception as e:
+        logger.error(f"[{job_id}] PPT 파이프라인 오류: {e}", exc_info=True)
         update_job(job_id,
                    status=JobStatus.FAILED.value,
                    progress=0,

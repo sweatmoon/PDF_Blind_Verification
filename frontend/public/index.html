@@ -101,7 +101,7 @@
     <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-6 flex gap-3">
       <i class="fas fa-lock text-indigo-500 mt-0.5 flex-shrink-0"></i>
       <div class="text-sm text-indigo-800">
-        <strong>보안 안내:</strong> 업로드된 PDF는 검증 즉시 서버에서 완전 삭제됩니다.
+        <strong>보안 안내:</strong> 업로드된 PDF/PPTX는 검증 즉시 서버에서 완전 삭제됩니다.
         OCR 이미지·중간 파일·결과 캐시 모두 TTL 30분 후 자동 삭제됩니다.
         원본 문서는 관리자도 열람 불가합니다.
       </div>
@@ -111,27 +111,31 @@
       <!-- 좌측: 업로드 + 설정 -->
       <div class="lg:col-span-2 space-y-4">
 
-        <!-- PDF 업로드 -->
+        <!-- PDF/PPTX 업로드 -->
         <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <h2 class="font-semibold text-slate-700 mb-4 flex items-center gap-2">
-            <i class="fas fa-file-arrow-up text-indigo-500"></i> PDF 업로드
+            <i class="fas fa-file-arrow-up text-indigo-500"></i> 파일 업로드
           </h2>
           <div id="dropZone"
                class="border-2 border-dashed border-slate-300 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50/50 transition-all"
                ondrop="handleDrop(event)" ondragover="handleDragOver(event)"
                ondragleave="handleDragLeave(event)" onclick="document.getElementById('fileInput').click()">
             <div id="dropIcon" class="text-5xl text-slate-300 mb-3">
-              <i class="fas fa-file-pdf"></i>
+              <i class="fas fa-file-powerpoint"></i>
             </div>
-            <p class="text-slate-600 font-medium mb-1">PDF 파일을 드래그하거나 클릭하여 업로드</p>
-            <p class="text-xs text-slate-400">최대 300MB · PDF 형식만 지원</p>
-            <input type="file" id="fileInput" accept=".pdf" class="hidden" onchange="handleFileSelect(event)">
+            <p class="text-slate-600 font-medium mb-1">PPTX 또는 PDF 파일을 드래그하거나 클릭하여 업로드</p>
+            <p class="text-xs text-slate-400">최대 300MB · <span class="text-indigo-500 font-medium">PPTX 권장</span> (PDF도 지원)</p>
+            <div class="flex items-center justify-center gap-3 mt-2">
+              <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-600"><i class="fas fa-star mr-1"></i>PPTX: 텍스트 100% 추출</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">PDF: OCR 방식</span>
+            </div>
+            <input type="file" id="fileInput" accept=".pptx,.pdf" class="hidden" onchange="handleFileSelect(event)">
           </div>
 
           <!-- 파일 정보 -->
           <div id="fileInfo" class="hidden mt-4 bg-slate-50 rounded-lg p-3 flex items-center gap-3">
-            <div class="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0">
-              <i class="fas fa-file-pdf text-red-500"></i>
+            <div id="fileIconBox" class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0">
+              <i id="fileTypeIcon" class="fas fa-file-powerpoint text-indigo-500"></i>
             </div>
             <div class="flex-1 min-w-0">
               <p id="fileName" class="font-medium text-slate-700 truncate text-sm"></p>
@@ -257,7 +261,7 @@
             <div class="w-6 h-6 rounded-full border-2 border-slate-200 flex items-center justify-center flex-shrink-0 text-xs">
               <i class="fas fa-upload"></i>
             </div>
-            <span>PDF 서버 업로드</span>
+            <span id="step-upload-label">파일 서버 업로드</span>
             <span id="step-upload-time" class="ml-auto text-xs text-slate-300"></span>
           </div>
           <div id="step-scan" class="flex items-center gap-3 text-sm text-slate-400 step-item py-1">
@@ -499,7 +503,7 @@
           <div id="db-procSteps" class="space-y-1.5 mb-4 text-xs">
             <div id="db-step-upload" class="flex items-center gap-2 text-slate-400">
               <i class="fas fa-upload w-3 text-center"></i>
-              <span class="flex-1">PDF 업로드</span>
+              <span class="flex-1">파일 업로드</span>
               <span id="db-step-upload-label" class="text-slate-300">대기</span>
             </div>
             <div id="db-step-analyze" class="flex items-center gap-2 text-slate-400">
@@ -849,8 +853,11 @@ function handleFileSelect(e) {
   if (file) processFile(file);
 }
 async function processFile(file) {
-  if (!file.name.toLowerCase().endsWith('.pdf')) {
-    showToast('PDF 파일만 업로드 가능합니다.', 'error'); return;
+  const fname = file.name.toLowerCase();
+  const isPPTX = fname.endsWith('.pptx');
+  const isPDF  = fname.endsWith('.pdf');
+  if (!isPPTX && !isPDF) {
+    showToast('PPTX 또는 PDF 파일만 업로드 가능합니다.', 'error'); return;
   }
   if (file.size > 300 * 1024 * 1024) {
     showToast('파일 크기가 300MB를 초과합니다.', 'error'); return;
@@ -860,17 +867,35 @@ async function processFile(file) {
   document.getElementById('fileName').textContent = file.name;
   document.getElementById('fileSize').textContent = formatSize(file.size);
   document.getElementById('uploadBtn').disabled = false;
-  document.getElementById('dropIcon').innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
 
-  // PDF.js로 페이지 수 미리 읽어 비용 추정
-  try {
-    const ab = await file.arrayBuffer();
-    const doc = await pdfjsLib.getDocument({data: ab}).promise;
-    state.pdfDoc = doc;
-    state.totalPages = doc.numPages;
-    showCostEstimate(doc.numPages);
-  } catch(e) {
-    console.warn('PDF.js 미리 읽기 실패:', e);
+  // 파일 타입별 아이콘 + 색상
+  const iconBox  = document.getElementById('fileIconBox');
+  const icon     = document.getElementById('fileTypeIcon');
+  const dropIcon = document.getElementById('dropIcon');
+  if (isPPTX) {
+    iconBox.className = 'w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0';
+    icon.className    = 'fas fa-file-powerpoint text-indigo-500';
+    dropIcon.innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
+  } else {
+    iconBox.className = 'w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center flex-shrink-0';
+    icon.className    = 'fas fa-file-pdf text-red-500';
+    dropIcon.innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
+  }
+
+  // PDF인 경우 PDF.js로 페이지 수 미리 읽기
+  if (isPDF) {
+    try {
+      const ab = await file.arrayBuffer();
+      const doc = await pdfjsLib.getDocument({data: ab}).promise;
+      state.pdfDoc = doc;
+      state.totalPages = doc.numPages;
+      showCostEstimate(doc.numPages);
+    } catch(e) {
+      console.warn('PDF.js 미리 읽기 실패:', e);
+    }
+  } else {
+    state.pdfDoc = null;
+    state.totalPages = 0;
   }
 }
 
@@ -884,8 +909,14 @@ function clearFile() {
   document.getElementById('costEstimate').classList.add('hidden');
   document.getElementById('uploadBtn').disabled = true;
   document.getElementById('fileInput').value = '';
-  document.getElementById('dropIcon').innerHTML = '<i class="fas fa-file-pdf"></i>';
+  // 드롭존 아이콘 초기화 (PPTX 기본)
+  document.getElementById('dropIcon').innerHTML = '<i class="fas fa-file-powerpoint"></i>';
   document.getElementById('dropIcon').className = 'text-5xl text-slate-300 mb-3';
+  // 파일 정보 나옵돕수 아이콘도 초기화
+  const iconBox = document.getElementById('fileIconBox');
+  const icon    = document.getElementById('fileTypeIcon');
+  if (iconBox) iconBox.className = 'w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center flex-shrink-0';
+  if (icon)    icon.className    = 'fas fa-file-powerpoint text-indigo-500';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1147,19 +1178,37 @@ async function startVerification() {
     return;
   }
 
-  const file = state.selectedFile;
+  const file    = state.selectedFile;
+  const isPPTX   = file.name.toLowerCase().endsWith('.pptx');
+  const fileLabel = isPPTX ? 'PPTX' : 'PDF';
   const btn  = document.getElementById('uploadBtn');
   btn.disabled = true;
   document.getElementById('uploadBtnText').textContent = '업로드 중…';
 
   // 처리 화면으로 전환
   document.getElementById('processingFileName').textContent = file.name;
-  setProgress(0, 'PDF 업로드 준비 중…');
+  setProgress(0, `${fileLabel} 업로드 준비 중…`);
   showPage('processing');
   setStep('upload', 'active');
 
+  // 처리 단계 레이블 업데이트
+  const stepUploadLabel = document.getElementById('step-upload-label');
+  if (stepUploadLabel) stepUploadLabel.textContent = `${fileLabel} 서버 업로드`;
+  const stepScanLabel = document.querySelector('#step-scan span:not(.ml-auto)');
+  if (stepScanLabel) {
+    stepScanLabel.textContent = isPPTX
+      ? '텍스트 직접 추출 (python-pptx) + 규칙 탐지'
+      : '텍스트 스캔 + 규칙 탐지';
+  }
+  const stepRenderLabel = document.querySelector('#step-render span:not(.ml-auto)');
+  if (stepRenderLabel) {
+    stepRenderLabel.textContent = isPPTX
+      ? '이미지 추출 + OCR 분석'
+      : '페이지 이미지 변환 (서버)';
+  }
+
   try {
-    // ── 1. PDF 서버 업로드 (XHR로 진행률 표시) ────────────
+    // ── 1. 파일 서버 업로드 (XHR로 진행률 표시) ────────────────
     const data = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const fd  = new FormData();
