@@ -713,7 +713,10 @@ class PPTServerPipeline:
                     page_has_cropped[i + first_slide_num] = True
                     break
 
-        merged_result = _merge_results(rule_hits_by_page, all_vision_items, total, page_has_cropped)
+        # page_images를 {page_num: b64} 딕셔너리로 변환 (crop_b64 생성용)
+        page_b64_map: dict[int, str] = {pi["page"]: pi["b64"] for pi in page_images}
+        merged_result = _merge_results(rule_hits_by_page, all_vision_items, total, page_has_cropped,
+                                       page_b64_map=page_b64_map)
         merged        = merged_result["page_map"]
         master_items  = merged_result["master_items"]
         layout_items  = merged_result["layout_items"]
@@ -760,7 +763,8 @@ class PPTServerPipeline:
 
 # ── 결과 합산 (server_pipeline 공유 함수 재사용 + PPT 전용 크롭 처리) ──────────
 def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: int,
-                   page_has_cropped: dict = None) -> dict:
+                   page_has_cropped: dict = None,
+                   page_b64_map: dict = None) -> dict:
     """
     page_has_cropped: {page_number(1-based): True} — 해당 페이지에 크롭 이미지가 있음
     Vision AI가 위반으로 탐지해도 크롭 이미지가 있는 페이지의 로고/업체명은 주의로 강등.
@@ -812,9 +816,51 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
 
     # ── 6단계(PPT 전용): Vision→page_map 구성 + rule_hits 병합 ──
     page_map: dict[int, list] = {}
+    _page_b64_map = page_b64_map or {}
 
     for it in adjusted:
         p = it.get("_page_int", 1)
+
+        # person_candidate 타입이면 bbox crop → crop_b64 생성
+        crop_b64 = None
+        if "person_candidate" in it.get("type", ""):
+            bbox = it.get("bbox")
+            slide_b64 = _page_b64_map.get(p)
+            if bbox and slide_b64:
+                try:
+                    import base64 as _b64, io as _io
+                    from PIL import Image as _Image
+                    raw = _b64.b64decode(slide_b64)
+                    slide_img = _Image.open(_io.BytesIO(raw)).convert("RGB")
+                    sw, sh = slide_img.size
+                    bx1, by1, bx2, by2 = [float(v) for v in bbox]
+                    # 상대좌표(0~1) vs 절대좌표 자동 감지
+                    # face_scan은 상대좌표, Claude Vision은 절대좌표로 올 수 있음
+                    if max(bx1, by1, bx2, by2) <= 1.5:
+                        # 상대좌표 → 절대좌표 변환
+                        x1 = int(bx1 * sw)
+                        y1 = int(by1 * sh)
+                        x2 = int(bx2 * sw)
+                        y2 = int(by2 * sh)
+                    else:
+                        x1, y1, x2, y2 = int(bx1), int(by1), int(bx2), int(by2)
+                    # 15% 여백 추가
+                    pad_x = int((x2 - x1) * 0.15)
+                    pad_y = int((y2 - y1) * 0.15)
+                    x1 = max(0, x1 - pad_x)
+                    y1 = max(0, y1 - pad_y)
+                    x2 = min(sw, x2 + pad_x)
+                    y2 = min(sh, y2 + pad_y)
+                    if x2 > x1 and y2 > y1:
+                        crop = slide_img.crop((x1, y1, x2, y2))
+                        # 최대 160x160 으로 축소 (썸네일 크기)
+                        crop.thumbnail((160, 160), _Image.LANCZOS)
+                        buf = _io.BytesIO()
+                        crop.save(buf, format="JPEG", quality=75)
+                        crop_b64 = _b64.b64encode(buf.getvalue()).decode("utf-8")
+                except Exception as _e:
+                    logger.debug(f"person crop 실패 p{p}: {_e}")
+
         page_map.setdefault(p, []).append({
             "detection_type":  it.get("type",           "기타"),
             "detected_text":   it.get("content",        ""),
@@ -822,10 +868,11 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
             "reason":          it.get("reason",          ""),
             "recommendation":  it.get("recommendation",  ""),
             "confidence":      it.get("confidence",      0.9),
-            "source":          it.get("source", "vision"),   # layout/master/slide 보존
+            "source":          it.get("source", "vision"),
             "struct_source":   it.get("struct_source",   ""),
-            "affected_pages":  it.get("affected_pages",  []),  # 마스터/레이아웃 영향 슬라이드
+            "affected_pages":  it.get("affected_pages",  []),
             "cropped":         it.get("_ppt_cropped",    False),
+            "crop_b64":        crop_b64,   # 인물사진 썸네일 (person_candidate만)
             "_fp_filtered":    it.get("_fp_filtered",    ""),
             "_is_logo":        (
                 _is_logo_type(it.get("type", ""))
