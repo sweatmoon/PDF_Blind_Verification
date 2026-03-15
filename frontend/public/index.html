@@ -2495,7 +2495,8 @@ async function clearAllSavedReports() {
 }
 
 function renderSavedReports() {
-  const list      = getSavedReports();
+  // 최신 작업이 위에 오도록 savedAt 기준 내림차순 정렬
+  const list      = getSavedReports().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
   const container = document.getElementById('savedReportsList');
   const emptyEl   = document.getElementById('savedEmpty');
   const clearBtn  = document.getElementById('clearAllBtn');
@@ -2928,7 +2929,9 @@ function renderDashboard() {
       _serverOnly: true,
     }));
 
-  const allDone = [...list, ...serverDone];
+  // 최신 작업이 위에 오도록 savedAt 기준 내림차순 정렬
+  const allDone = [...list, ...serverDone]
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 
   if (allDone.length === 0) {
     if (emptyEl)   emptyEl.classList.remove('hidden');
