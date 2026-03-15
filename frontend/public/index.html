@@ -1967,7 +1967,7 @@ function renderPageList(pages, filter = 'all') {
         <div class="mt-2 border border-green-200 rounded-lg bg-green-50">
           <button onclick="event.stopPropagation();const el=document.getElementById('${aId}');el.classList.toggle('hidden');this.querySelector('.chv2').classList.toggle('fa-chevron-down');this.querySelector('.chv2').classList.toggle('fa-chevron-up')"
                   class="w-full flex items-center justify-between px-3 py-2 text-xs text-green-700 font-medium hover:bg-green-100 rounded-lg transition">
-            <span>🟢 오탐 제외(허용) ${aDetCount}건 — 맥락상 일반 명사 / 기관명으로 판단</span>
+            <span>🟢 오탐 제외(허용) ${aDetCount}건</span>
             <i class="fas fa-chevron-down chv2 text-green-400 text-xs"></i>
           </button>
           <div id="${aId}" class="hidden px-3 pb-2 pt-1 border-t border-green-200">
@@ -3469,7 +3469,7 @@ function dbRenderPages(report, filter) {
         <div class="mt-2 border border-green-200 rounded-lg bg-green-50">
           <button onclick="event.stopPropagation();const el=document.getElementById('${allowedId}');el.classList.toggle('hidden');this.querySelector('.chv').classList.toggle('fa-chevron-down');this.querySelector('.chv').classList.toggle('fa-chevron-up')"
                   class="w-full flex items-center justify-between px-3 py-2 text-xs text-green-700 font-medium hover:bg-green-100 rounded-lg transition">
-            <span><i class="fas fa-circle-check mr-1.5"></i>오탐 제외(허용) ${aCount}건 — 맥락상 일반 명사 / 기관명으로 판단</span>
+            <span><i class="fas fa-circle-check mr-1.5"></i>오탐 제외(허용) ${aCount}건</span>
             <i class="fas fa-chevron-down chv text-green-400 text-xs"></i>
           </button>
           <div id="${allowedId}" class="hidden px-3 pb-2 pt-1 border-t border-green-200">
