@@ -537,8 +537,10 @@ def normalize_vision_items(vision_items: list) -> list:
             p = int(it.get("page", 0))
         except (ValueError, TypeError):
             p = 1
-        if p < 1:
-            p = 1
+        # p < 1 강제 제거: firstSlideNum=0인 PPTX는 page=0이 정상이므로
+        # 음수(-1 마스터/레이아웃 가상 페이지 등)만 1로 보정
+        if p < 0:
+            p = 0
 
         content = (it.get("content") or "").strip()
         dtype   = (it.get("type")    or "기타").strip()
@@ -551,8 +553,15 @@ def normalize_vision_items(vision_items: list) -> list:
         if any(kw in content for kw in _DUMMY_KEYWORDS):
             continue
 
-        # 중복 제거 (페이지 + 타입 + 컨텐츠 소문자)
-        key = (p, dtype, content.lower())
+        # 중복 제거: person_candidate는 bbox 기반으로 구분 (같은 페이지 여러 얼굴 허용)
+        # 그 외 타입은 기존대로 (페이지 + 타입 + 컨텐츠) 기준
+        if "person_candidate" in dtype:
+            # bbox를 key에 포함해 얼굴별로 고유 구분
+            _bbox = it.get("bbox")
+            _bbox_key = tuple(round(v, 3) for v in _bbox) if _bbox and len(_bbox) >= 4 else id(it)
+            key = (p, dtype, _bbox_key)
+        else:
+            key = (p, dtype, content.lower())
         if key in seen:
             continue
         seen.add(key)
