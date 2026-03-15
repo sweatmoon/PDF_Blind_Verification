@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 import asyncio, base64, json
-from datetime import datetime
+from core.config import now_kst_iso
 from pathlib import Path
 from typing import Optional, List
 
@@ -98,7 +98,7 @@ async def upload_and_verify(request: Request,
         "filename":   fname,          # 원본 파일명 표시
         "safe_name":  safe_name,
         "file_size":  len(content),
-        "created_at": datetime.now().isoformat(),
+        "created_at": now_kst_iso(),
         "report":     None,
         "error":      None,
     })
@@ -160,7 +160,7 @@ def init_job(req: InitJobRequest):
         "filename":   fname,
         "safe_name":  sanitize_filename(fname),
         "file_size":  req.file_size,
-        "created_at": datetime.now().isoformat(),
+        "created_at": now_kst_iso(),
         "report":     None,
         "error":      None,
     })

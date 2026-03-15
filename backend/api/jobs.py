@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio, json
 from collections import deque
 from datetime import datetime
+from core.config import now_kst_iso
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request
@@ -118,7 +119,7 @@ async def dashboard_upload(request: Request,
         "filename":   fname,
         "safe_name":  safe_name,
         "file_size":  total_size,
-        "created_at": datetime.now().isoformat(),
+        "created_at": now_kst_iso(),
         "report":     None,
         "error":      None,
     })
@@ -182,6 +183,7 @@ async def _run_server_pipeline(job_id: str, path: Path, filename: str):
                    status=JobStatus.COMPLETED.value,
                    progress=100,
                    message="검증 완료",
+                   page_count=report.get("page_count") if report else None,
                    report=report)
     except Exception as e:
         logger.error(f"[{job_id}] PDF 파이프라인 오류: {e}", exc_info=True)
@@ -206,6 +208,7 @@ async def _run_ppt_pipeline(job_id: str, path: Path, filename: str):
                    status=JobStatus.COMPLETED.value,
                    progress=100,
                    message="검증 완료",
+                   page_count=report.get("page_count") if report else None,
                    report=report)
     except Exception as e:
         logger.error(f"[{job_id}] PPT 파이프라인 오류: {e}", exc_info=True)
@@ -246,6 +249,7 @@ def job_list():
             "risk_level": (j.get("report") or {}).get("risk_level"),
             "violation_count": (j.get("report") or {}).get("violation_count"),
             "caution_count":   (j.get("report") or {}).get("caution_count"),
+            "page_count":      (j.get("report") or {}).get("page_count") or j.get("page_count"),
             "error":      j.get("error"),
         })
     # 최신순 정렬

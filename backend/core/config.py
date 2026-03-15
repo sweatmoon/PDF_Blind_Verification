@@ -2,7 +2,20 @@
 중앙 설정 및 공통 유틸리티
 """
 import os, uuid, json, logging, re
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# ── KST 시간 유틸리티 ────────────────────────────────────────────
+# Railway 서버는 UTC 기준으로 동작하므로 명시적으로 KST(UTC+9) 적용
+_KST = timezone(timedelta(hours=9))
+
+def now_kst() -> datetime:
+    """KST 기준 현재 datetime 반환"""
+    return datetime.now(tz=_KST)
+
+def now_kst_iso() -> str:
+    """KST 기준 현재 시각을 ISO 8601 문자열로 반환 (예: 2026-03-15T11:30:00+09:00)"""
+    return now_kst().isoformat(timespec="seconds")
 
 # ── 경로 ──────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent.parent          # backend/

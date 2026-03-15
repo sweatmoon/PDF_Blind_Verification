@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     curl \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -27,6 +28,7 @@ RUN mkdir -p /app/tmp /app/logs /app/data/reports \
     && chmod +x /app/start.sh
 
 ENV PORT=8080
+ENV TZ=Asia/Seoul
 EXPOSE 8080
 
 WORKDIR /app/backend

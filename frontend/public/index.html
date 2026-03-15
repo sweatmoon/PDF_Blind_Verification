@@ -2466,14 +2466,48 @@ async function removeDictItem(group, subkey, term) {
 // 검증 결과 저장함 (localStorage, 최대 20개)
 // ─────────────────────────────────────────────────────────────
 const SAVED_REPORTS_KEY = 'savedReports';
-const MAX_SAVED = 20;
+const MAX_SAVED = 50;  // localStorage 최대 저장 개수 (충분히 확보)
 
 function getSavedReports() {
-  try { return JSON.parse(localStorage.getItem(SAVED_REPORTS_KEY) || '[]'); }
-  catch(e) { return []; }
+  try {
+    const raw = localStorage.getItem(SAVED_REPORTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch(e) {
+    console.warn('[저장함] 파싱 오류, 초기화:', e);
+    localStorage.removeItem(SAVED_REPORTS_KEY);
+    return [];
+  }
 }
 function setSavedReports(list) {
-  localStorage.setItem(SAVED_REPORTS_KEY, JSON.stringify(list));
+  try {
+    localStorage.setItem(SAVED_REPORTS_KEY, JSON.stringify(list));
+  } catch(e) {
+    // localStorage 용량 초과 시: report 본문 제거 후 메타만 저장
+    if (e.name === 'QuotaExceededError' || e.code === 22) {
+      try {
+        const metaOnly = list.map(r => {
+          const { report, ...meta } = r;
+          return meta;
+        });
+        localStorage.setItem(SAVED_REPORTS_KEY, JSON.stringify(metaOnly));
+        console.warn('[저장함] 용량 초과 → report 본문 제거 후 메타만 저장');
+      } catch(e2) {
+        // 그래도 넘치면 절반만 저장
+        try {
+          const half = list.slice(0, Math.floor(list.length / 2)).map(r => {
+            const { report, ...meta } = r;
+            return meta;
+          });
+          localStorage.setItem(SAVED_REPORTS_KEY, JSON.stringify(half));
+          console.warn('[저장함] 용량 초과 → 절반만 저장');
+        } catch(e3) {
+          console.error('[저장함] localStorage 저장 불가:', e3);
+        }
+      }
+    }
+  }
 }
 
 // 검증 완료 시 리포트 저장
@@ -2486,6 +2520,7 @@ function saveReportToStorage(jobId, filename, fileSize, report) {
     filename,
     fileSize,
     savedAt:        Date.now(),
+    createdAt:      report.created_at || null,  // 서버 KST 기록 시각 (정렬 기준)
     violation_count: report.violation_count || 0,
     caution_count:   report.caution_count   || 0,
     allowed_count:   report.allowed_count   || 0,
@@ -2494,7 +2529,13 @@ function saveReportToStorage(jobId, filename, fileSize, report) {
     report:          report,  // 리포트 전체 저장
   };
   filtered.unshift(entry);
-  setSavedReports(filtered.slice(0, MAX_SAVED));
+  // MAX_SAVED 초과 시 오래된 항목부터 제거 (createdAt 기준 정렬 후 자르기)
+  const sorted = filtered.sort((a, b) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : (a.savedAt || 0);
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : (b.savedAt || 0);
+    return tb - ta;  // 최신순
+  });
+  setSavedReports(sorted.slice(0, MAX_SAVED));
   renderSavedReports();
 }
 
@@ -2622,19 +2663,28 @@ async function dbFetchServerJobs() {
     _dbServerJobs = jobs;
 
     // 완료된 job 중 localStorage에 없는 것 → 서버에서 report 로드
+    // (백그라운드에서 순차적으로 처리, 한 번에 최대 3개만)
     const saved = getSavedReports();
     const savedIds = new Set(saved.map(r => r.jobId));
+    const toFetch = jobs
+      .filter(j => j.status === 'completed' && !savedIds.has(j.job_id))
+      .slice(0, 3);  // 한 번에 최대 3개만 (API 과부하 방지)
+    for (const job of toFetch) {
+      // localStorage가 여유 있을 때만 자동 저장
+      const currentSaved = getSavedReports();
+      if (currentSaved.length >= MAX_SAVED) break;
+      try {
+        const rr = await fetch(`/api/jobs/${job.job_id}/report`);
+        if (rr.ok) {
+          const report = await rr.json();
+          saveReportToStorage(job.job_id, job.filename, job.file_size || 0, report);
+          savedIds.add(job.job_id);  // 루프 내 중복 저장 방지
+        }
+      } catch(e) { /* ignore */ }
+    }
+
+    // 진행 중 job: SSE 구독 + UI 즉시 복원 + localStorage 백업
     for (const job of jobs) {
-      if (job.status === 'completed' && !savedIds.has(job.job_id)) {
-        try {
-          const rr = await fetch(`/api/jobs/${job.job_id}/report`);
-          if (rr.ok) {
-            const report = await rr.json();
-            saveReportToStorage(job.job_id, job.filename, job.file_size || 0, report);
-          }
-        } catch(e) { /* ignore */ }
-      }
-      // 진행 중 job: SSE 구독 + UI 즉시 복원 + localStorage 백업
       if (job.status === 'pending' || job.status === 'processing') {
         // localStorage에 현재 상태 백업 (새로고침/재시작 대비)
         localStorage.setItem('activeJobId',       job.job_id);
@@ -2946,23 +2996,34 @@ function renderDashboard() {
   Array.from(doneList.children).forEach(c => { if (c.id !== 'db-empty') c.remove(); });
 
   // 서버 completed job 중 localStorage에 없는 것도 추가
+  // (보조 표시용 - report 없이 메타만 표시)
   const serverDone = _dbServerJobs
     .filter(j => j.status === 'completed' && !savedIds.has(j.job_id))
     .map(j => ({
       jobId: j.job_id,
       filename: j.filename,
       fileSize: j.file_size || 0,
-      savedAt: Date.now(),
-      page_count: null,
-      risk_level: null,
-      violation_count: null,
-      caution_count: null,
+      savedAt: j.created_at ? new Date(j.created_at).getTime() : Date.now(),
+      createdAt: j.created_at || null,
+      page_count: j.page_count || null,
+      risk_level: j.risk_level || null,
+      violation_count: j.violation_count || null,
+      caution_count: j.caution_count || null,
       _serverOnly: true,
     }));
 
-  // 최신 작업이 위에 오도록 savedAt 기준 내림차순 정렬
-  const allDone = [...list, ...serverDone]
-    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  // 중복 제거: jobId 기준으로 savedList 우선, serverDone은 보조
+  const seenIds = new Set(list.map(e => e.jobId));
+  const uniqueServerDone = serverDone.filter(e => !seenIds.has(e.jobId));
+
+  // 최신 작업이 위에 오도록 정렬
+  // 우선순위: createdAt(서버 KST 기록) > savedAt(로컬 저장 시각)
+  const _sortKey = e => {
+    if (e.createdAt) return new Date(e.createdAt).getTime();
+    return e.savedAt || 0;
+  };
+  const allDone = [...list, ...uniqueServerDone]
+    .sort((a, b) => _sortKey(b) - _sortKey(a));
 
   if (allDone.length === 0) {
     if (emptyEl)   emptyEl.classList.remove('hidden');
@@ -2989,7 +3050,7 @@ function renderDashboard() {
           ${fileIcon2}
           <div class="flex-1 min-w-0">
             <p class="text-xs font-semibold text-slate-700 truncate" title="${esc(entry.filename)}">${esc(entry.filename)}</p>
-            <p class="text-xs text-slate-400 mt-0.5">${entry.page_count != null ? entry.page_count+'p · ' : ''}${formatSize(entry.fileSize)} · ${entry._serverOnly ? '서버 완료' : timeAgo(entry.savedAt)}</p>
+            <p class="text-xs text-slate-400 mt-0.5">${entry.page_count != null ? entry.page_count+'p · ' : ''}${formatSize(entry.fileSize)} · ${timeAgo(entry.createdAt ? new Date(entry.createdAt).getTime() : entry.savedAt)}</p>
             <div class="flex items-center gap-1.5 mt-1.5">
               ${entry._serverOnly
                 ? `<span class="text-xs px-1.5 py-0.5 rounded-full border bg-slate-100 text-slate-500 border-slate-200">결과 보기</span>`

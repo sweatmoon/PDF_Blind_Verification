@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from core.config import now_kst
 from pathlib import Path
 from typing import List
 
@@ -338,6 +339,6 @@ class Pipeline:
             total_pages=total, risk_level=risk,
             violation_count=v, caution_count=c, allowed_count=a,
             page_results=page_results, summary=summary,
-            created_at=datetime.now(),
+            created_at=now_kst(),
             processing_time_seconds=elapsed,
         )

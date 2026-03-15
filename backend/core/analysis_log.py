@@ -1,34 +1,16 @@
 """
-분석 로그 모듈 — 검증 전 과정을 job_id별 JSON 파일로 기록
+분석 로그 모듈 — 검증 전 과정을 job_id별 JSON 파일 + stdout으로 기록
 
-로그 파일: logs/analysis/<job_id>.jsonl
-포맷: 각 줄이 독립적인 JSON 이벤트 (JSON Lines)
+로그 파일 : logs/analysis/<job_id>.jsonl  (로컬/샌드박스 환경)
+stdout    : Railway 등 클라우드 환경에서 Logs 탭으로 확인 가능
 
-이벤트 구조:
-{
-  "ts":    "2025-03-14T12:34:56.789",   # 타임스탬프
-  "job":   "abc123",                     # job_id
-  "stage": "face_verify",               # 파이프라인 단계
-  "event": "skin_heuristic",            # 세부 이벤트명
-  "data":  { ... }                      # 단계별 세부 데이터
-}
-
-주요 stage 목록:
-  pipeline          — 전체 파이프라인 흐름 (시작/종료/단계별 소요시간)
-  rule_detect       — 규칙 기반 텍스트 탐지
-  ocr               — OCR 처리
-  claude_request    — Claude Vision API 요청
-  claude_response   — Claude Vision API 응답 (원문 + 파싱 결과)
-  logo_postprocess  — 로고 후처리 (pHash/SSIM/ORB 수치 포함)
-  face_postprocess  — 인물 후보 후처리 (bbox별 판정 흐름)
-  face_verify       — _verify_face_candidate 내부 단계별 수치
-                      (skin_fg, sat_std, mediapipe 신뢰도 등)
-  server_pipeline   — server_pipeline 필터 적용 결과
-  final_result      — 최종 위반/주의/허용 항목 요약
+출력 형식 (stdout):
+  [ALOG] job=abc123 stage=face_verify event=low_skin | skin_fg=0.08 fg_sat_std=12.1 result=icon_or_silhouette
 """
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -58,6 +40,21 @@ def _get_handle(job_id: str):
     return _handles[job_id]
 
 
+def _fmt_stdout(jid: str, stage: str, event: str, data: dict) -> str:
+    """Railway Logs에서 읽기 좋은 한 줄 포맷"""
+    # data를 key=value 형태로 평탄화 (중첩 dict/list는 JSON으로)
+    parts = []
+    for k, v in data.items():
+        if isinstance(v, (dict, list)):
+            parts.append(f"{k}={json.dumps(v, ensure_ascii=False)}")
+        elif isinstance(v, float):
+            parts.append(f"{k}={v:.3f}")
+        else:
+            parts.append(f"{k}={v}")
+    detail = " ".join(parts) if parts else ""
+    return f"[ALOG] job={jid} stage={stage} event={event} | {detail}"
+
+
 def set_job(job_id: str):
     """현재 스레드의 활성 job_id 설정"""
     _local.job_id = job_id
@@ -75,7 +72,7 @@ def log(
     job_id: Optional[str] = None,
 ):
     """
-    분석 이벤트 1건을 JSONL 파일에 기록.
+    분석 이벤트 1건을 JSONL 파일 + stdout에 동시 기록.
 
     Args:
         stage:  파이프라인 단계명 (예: "face_verify", "logo_postprocess")
@@ -85,7 +82,7 @@ def log(
     """
     jid = job_id or get_job()
     if not jid:
-        return  # job_id 없으면 무시
+        return
 
     entry = {
         "ts":    datetime.now().isoformat(timespec="milliseconds"),
@@ -95,11 +92,18 @@ def log(
         "data":  data,
     }
     try:
+        # ① 파일 기록 (로컬/샌드박스)
         fh = _get_handle(jid)
         with _lock:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
-        pass  # 로그 실패가 서비스에 영향 주지 않도록
+        pass
+
+    try:
+        # ② stdout 출력 (Railway Logs 탭에서 확인)
+        print(_fmt_stdout(jid, stage, event, data), flush=True)
+    except Exception:
+        pass
 
 
 def close_job(job_id: str):

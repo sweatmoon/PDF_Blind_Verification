@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio, base64, io, time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from core.config import now_kst_iso
 from pathlib import Path
 from typing import List, Optional
 
@@ -1113,7 +1114,7 @@ def _build_report(job_id: str, filename: str, total_pages: int,
         "page_count":              total_pages,
         "processing_time_seconds": elapsed,
         "elapsed_sec":             elapsed,
-        "created_at":              datetime.now().isoformat(),
+        "created_at":              now_kst_iso(),
         "risk_level":              risk,
         "violation_count":         vc_total,
         "caution_count":           cc_total,
