@@ -272,6 +272,71 @@ class PPTServerPipeline:
                     f"judgment={_h.get('judgment','?')} "
                     f"content={str(_h.get('content',''))[:40]!r}"
                 )
+
+        # ── 4-B. 슬라이드 마스터 / 레이아웃 텍스트 규칙 탐지 ────────
+        # 슬라이드 본문에 이미 나온 텍스트는 제외 (중복 탐지 방지)
+        master_text_hits: list[dict] = []   # source=master 탐지 결과
+        layout_text_hits: list[dict] = []   # source=layout 탐지 결과
+        try:
+            lm_texts = svc.extract_layout_master_texts()
+            logger.info(f"[{job_id}] 마스터/레이아웃 텍스트 {len(lm_texts)}개 규칙 탐지 시작")
+
+            # 슬라이드 본문에 이미 등장한 텍스트 집합 (중복 방지용)
+            all_slide_texts: set[str] = set()
+            for i in range(total):
+                for line in (slide_texts.get(i, "")).splitlines():
+                    s = line.strip()
+                    if s:
+                        all_slide_texts.add(s)
+
+            for lm in lm_texts:
+                t        = lm["text"]
+                source   = lm["source"]           # "master" | "layout"
+                affected = lm["affected_slides"]   # [slide_num, ...]
+
+                # 슬라이드 본문에 이미 있는 텍스트 스킵
+                if t in all_slide_texts:
+                    continue
+
+                # 대표 슬라이드 번호 (없으면 0 → 가상 마스터 페이지 -1용)
+                repr_slide = affected[0] if affected else 0
+
+                hits = self.rules.detect(t, repr_slide)
+                for h in hits:
+                    det_text = h.detected_text or ""
+                    verdict  = h.verdict.value
+                    entry = {
+                        "type":           h.detection_type.value,
+                        "content":        det_text,
+                        "judgment":       verdict,
+                        "reason":         (h.reason or "") + f" [슬라이드 {source}에서 탐지]",
+                        "recommendation": h.recommendation or "슬라이드 마스터/레이아웃에서 해당 텍스트를 제거하세요.",
+                        "confidence":     h.confidence,
+                        "source":         f"rule/{source}",
+                        "struct_source":  source,
+                        "affected_pages": affected,
+                        "_struct_logo":   False,
+                        "_shape_name":    "",
+                        "_logo_case":     "",
+                    }
+                    if source == "master":
+                        master_text_hits.append(entry)
+                    else:
+                        layout_text_hits.append(entry)
+                    logger.info(
+                        f"[{job_id}] master_rule_hit | source={source} "
+                        f"type={h.detection_type.value} "
+                        f"judgment={verdict} "
+                        f"content={det_text[:40]!r} "
+                        f"affected={len(affected)}슬라이드"
+                    )
+
+            m_total = len(master_text_hits) + len(layout_text_hits)
+            logger.info(f"[{job_id}] 마스터/레이아웃 규칙 탐지 완료: {m_total}건 "
+                        f"(master={len(master_text_hits)}, layout={len(layout_text_hits)})")
+        except Exception as e:
+            logger.warning(f"[{job_id}] 마스터/레이아웃 텍스트 규칙 탐지 실패: {e}")
+
         prog(50, f"규칙 탐지 {rule_total}건 · Vision AI 분석 시작…")
 
         # ── 5. 슬라이드 이미지 렌더링 (Claude Vision용) ─────────
@@ -650,6 +715,10 @@ class PPTServerPipeline:
         master_items  = merged_result["master_items"]
         layout_items  = merged_result["layout_items"]
 
+        # 4-B에서 수집한 마스터/레이아웃 텍스트 규칙 탐지 결과 병합
+        master_items = master_items + master_text_hits
+        layout_items = layout_items + layout_text_hits
+
         # ── 8. 원본 파일 삭제 ──────────────────────────────────
         svc.close()
         try:
@@ -890,7 +959,43 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
     master_section = _struct_section(master_items, "master")
     layout_section = _struct_section(layout_items, "layout")
 
+    # ── page_number=-1 가상 페이지: 마스터/레이아웃 탐지 결과 ─────────
+    # (page_number=0 은 메타데이터용으로 이미 예약됨)
+    # 마스터·레이아웃 detections를 페이지 카드와 동일한 dict 형태로 변환
+    def _to_page_det(d: dict) -> dict:
+        return {
+            "detection_type":  d.get("detection_type", "로고"),
+            "detected_text":   d.get("detected_text", ""),
+            "verdict":         d.get("verdict", "위반"),
+            "reason":          d.get("reason", ""),
+            "recommendation":  d.get("recommendation", ""),
+            "confidence":      d.get("confidence", 0.9),
+            "source":          d.get("source", "master"),
+            "struct_source":   d.get("source", "master"),   # "master" | "layout"
+            "affected_pages":  d.get("affected_pages", []),
+            "cropped":         False,
+        }
+
+    struct_dets = (
+        [_to_page_det(d) for d in master_section["detections"]]
+        + [_to_page_det(d) for d in layout_section["detections"]]
+    )
+
     page_results = []
+    # 마스터/레이아웃 탐지 항목이 있으면 page_number=-1 카드를 맨 앞에 삽입
+    if struct_dets:
+        s_vc = sum(1 for d in struct_dets if d["verdict"] == "위반")
+        s_cc = sum(1 for d in struct_dets if d["verdict"] == "주의")
+        s_ac = sum(1 for d in struct_dets if d["verdict"] == "허용")
+        page_results.append({
+            "page_number":     -1,         # -1 = 슬라이드 마스터/레이아웃 가상 페이지
+            "thumbnail_b64":   None,
+            "detections":      struct_dets,
+            "violation_count": s_vc,
+            "caution_count":   s_cc,
+            "allowed_count":   s_ac,
+        })
+
     for p in range(1, total_slides + 1):
         dets = page_map.get(p, [])
         vc = sum(1 for d in dets if d["verdict"] == "위반")
@@ -905,13 +1010,11 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
             "allowed_count":   ac,
         })
 
+    # page_number=-1(마스터/레이아웃 가상 페이지) 포함 전체 집계
+    # → 이미 page_results 맨 앞에 삽입됐으므로 별도 가산 불필요
     vc_total = sum(p["violation_count"] for p in page_results)
     cc_total = sum(p["caution_count"]   for p in page_results)
     ac_total = sum(p["allowed_count"]   for p in page_results)
-
-    # 마스터/레이아웃 위반도 전체 카운트에 포함
-    vc_total += master_section["violation_count"] + layout_section["violation_count"]
-    cc_total += master_section["caution_count"]   + layout_section["caution_count"]
 
     if vc_total >= 5:                    risk = "HIGH"
     elif vc_total >= 1 or cc_total >= 5: risk = "MEDIUM"

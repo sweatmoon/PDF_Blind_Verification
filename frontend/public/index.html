@@ -1928,20 +1928,92 @@ function renderStructResults(masterResults, layoutResults) {
   }).join('');
 }
 
+function renderMasterCard(page) {
+  // page_number=-1 : 슬라이드 마스터/레이아웃 전용 카드
+  const v = page.violation_count || 0;
+  const c = page.caution_count   || 0;
+  const statusColor = v > 0 ? 'border-red-300 bg-red-50' : c > 0 ? 'border-amber-300 bg-amber-50' : 'border-green-200 bg-green-50';
+  const headerColor = v > 0 ? 'bg-red-100 text-red-700' : c > 0 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700';
+  const badgeColor  = v > 0 ? 'bg-red-600' : c > 0 ? 'bg-amber-500' : 'bg-green-500';
+  const badgeText   = v > 0 ? `위반 ${v}` : c > 0 ? `주의 ${c}` : '이상없음';
+  const icon        = v > 0 ? 'fa-crown text-red-500' : c > 0 ? 'fa-crown text-amber-500' : 'fa-crown text-green-500';
+
+  const VERDICT_ORDER = { '위반': 0, '주의': 1, '허용': 2 };
+  const dets = page.detections || [];
+  const issueDetList = dets.filter(d => d.verdict === '위반' || d.verdict === '주의');
+
+  const typeMap = {};
+  for (const d of issueDetList) {
+    const key = d.detection_type || '기타';
+    if (!typeMap[key]) typeMap[key] = [];
+    typeMap[key].push(d);
+  }
+
+  const groupsHtml = Object.entries(typeMap).map(([type, items]) => {
+    items.sort((a, b) => (VERDICT_ORDER[a.verdict]||9) - (VERDICT_ORDER[b.verdict]||9));
+    const worst = items[0]?.verdict || '주의';
+    const gc = worst === '위반' ? 'border-red-200 bg-white' : 'border-amber-200 bg-white';
+    const tc = worst === '위반' ? 'text-red-600' : 'text-amber-600';
+    const itemsHtml = items.map(d => {
+      const vc2 = d.verdict === '위반' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+      const srcLabel = d.struct_source === 'master' ? '마스터' : '레이아웃';
+      const srcBadge = `<span class="text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium"><i class="fas fa-crown mr-0.5" style="font-size:9px"></i>${srcLabel}</span>`;
+      const affectedHtml = d.affected_pages && d.affected_pages.length > 0
+        ? `<span class="text-xs text-slate-400 ml-1"><i class="fas fa-sitemap mr-0.5"></i>${d.affected_pages.length}개 슬라이드 공통</span>`
+        : '';
+      return `<div class="flex items-center gap-1.5 flex-wrap py-0.5">
+        <span class="text-xs px-2 py-0.5 rounded-full font-semibold ${vc2}">${d.verdict}</span>
+        <span class="text-sm font-medium text-slate-800">${d.detected_text || d.detection_type}</span>
+        ${srcBadge}${affectedHtml}
+        ${d.reason ? `<span class="text-xs text-slate-400 w-full mt-0.5">${d.reason}</span>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="border rounded-lg px-3 py-2 ${gc}">
+      <div class="text-xs font-semibold ${tc} mb-1"><i class="fas fa-tag mr-1"></i>${type}</div>
+      ${itemsHtml}
+    </div>`;
+  }).join('');
+
+  const emptyHtml = issueDetList.length === 0
+    ? `<p class="text-xs text-green-600 py-1"><i class="fas fa-check-circle mr-1"></i>마스터/레이아웃에서 탐지된 항목 없음</p>`
+    : '';
+
+  return `<div class="border-2 rounded-xl overflow-hidden shadow-sm page-card ${statusColor}" style="border-style:dashed">
+    <div class="flex items-center justify-between px-4 py-2.5 ${headerColor}">
+      <div class="flex items-center gap-2 font-semibold text-sm">
+        <i class="fas ${icon}"></i>
+        <span>슬라이드 마스터 / 레이아웃</span>
+        <span class="text-xs font-normal opacity-70">— 모든 슬라이드에 공통 적용</span>
+      </div>
+      <span class="text-xs px-2.5 py-1 rounded-full text-white font-bold ${badgeColor}">${badgeText}</span>
+    </div>
+    <div class="p-3 space-y-2 bg-white">
+      ${groupsHtml}${emptyHtml}
+    </div>
+  </div>`;
+}
+
 function renderPageList(pages, filter = 'all') {
   const container = document.getElementById('pageList');
-  const realPages = pages.filter(p => p.page_number > 0);
+  // page_number=-1 은 마스터/레이아웃 가상 페이지 — 별도 처리
+  const masterPage = pages.find(p => p.page_number === -1);
+  const realPages  = pages.filter(p => p.page_number > 0);
+
   let filtered = realPages;
   if (filter === 'violation') filtered = realPages.filter(p => p.violation_count > 0);
   else if (filter === 'caution') filtered = realPages.filter(p => p.caution_count > 0 && p.violation_count === 0);
   else if (filter === 'clean') filtered = realPages.filter(p => p.violation_count === 0 && p.caution_count === 0);
 
-  if (filtered.length === 0) {
+  // 마스터 카드는 필터와 무관하게 항상 맨 위 표시
+  // (위반 없어도 초록 카드로 노출 — 다른 페이지와 동일 UX)
+  const masterHtml = masterPage ? renderMasterCard(masterPage) : '';
+
+  if (filtered.length === 0 && !masterPage) {
     container.innerHTML = '<p class="text-center text-slate-400 text-sm py-8">해당 조건의 페이지가 없습니다.</p>';
     return;
   }
 
-  container.innerHTML = filtered.map(page => {
+  container.innerHTML = masterHtml + filtered.map(page => {
     const v = page.violation_count || 0;
     const c = page.caution_count   || 0;
     const statusColor = v > 0 ? 'border-red-200 bg-red-50' : c > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50';
@@ -2127,7 +2199,7 @@ function renderAllDetections(pages) {
   const allDets = [];
   pages.forEach(p => {
     (p.detections||[]).forEach(d => {
-      allDets.push({...d, page_label: p.page_number===0?'메타':`${p.page_number}p`});
+      allDets.push({...d, page_label: p.page_number === -1 ? '마스터' : p.page_number === 0 ? '메타' : `${p.page_number}p`});
     });
   });
   const order = {'위반':0,'주의':1,'허용':2};

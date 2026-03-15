@@ -392,3 +392,117 @@ class PPTService:
             f"layout={sum(1 for r in results if r['source']=='layout')})"
         )
         return results
+
+    # ── Layout / Master 텍스트 추출 ──────────────────────────
+    def extract_layout_master_texts(self) -> list[dict]:
+        """
+        슬라이드 마스터(slideMaster)와 슬라이드 레이아웃(slideLayout)에서
+        텍스트를 추출합니다.
+
+        반환: [
+          {
+            "text":       str,   # 추출된 텍스트
+            "source":     str,   # "master" | "layout"
+            "source_idx": int,   # 마스터/레이아웃 0-based 인덱스
+            "layout_name": str,  # 레이아웃 이름 (source==layout일 때)
+            "affected_slides": list[int],  # 이 마스터/레이아웃이 적용된 슬라이드 번호 목록
+          },
+          ...
+        ]
+        - 동일 텍스트가 여러 마스터/레이아웃에 중복될 경우 한 번만 포함.
+        - 슬라이드 본문에 이미 존재하는 텍스트는 포함하지 않음 (중복 방지는
+          pipeline 단에서 처리).
+        """
+        results: list[dict] = []
+        seen_texts: set[str] = set()  # 마스터/레이아웃 내부 중복 제거
+
+        def _iter_shapes_text(shapes):
+            """shape 목록에서 텍스트 재귀 수집 (GROUP 포함)"""
+            from pptx.enum.shapes import MSO_SHAPE_TYPE
+            for shape in shapes:
+                try:
+                    if shape.has_text_frame:
+                        for para in shape.text_frame.paragraphs:
+                            t = para.text.strip()
+                            if t:
+                                yield t
+                    if shape.has_table:
+                        for row in shape.table.rows:
+                            for cell in row.cells:
+                                t = cell.text.strip()
+                                if t:
+                                    yield t
+                    if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                        yield from _iter_shapes_text(shape.shapes)
+                except Exception:
+                    pass
+
+        try:
+            prs = self._prs
+            master_list = list(prs.slide_masters)
+
+            # 마스터→적용 슬라이드 매핑 구축
+            master_to_slides: dict[int, list[int]] = {}
+            layout_to_slides: dict[tuple, list[int]] = {}  # (master_idx, layout_idx) → [slide_num]
+            slides_list = list(prs.slides)
+            for si, slide in enumerate(slides_list):
+                slide_num = si + 1
+                try:
+                    lo = slide.slide_layout
+                    for mi, m in enumerate(master_list):
+                        try:
+                            li = list(m.slide_layouts).index(lo)
+                            master_to_slides.setdefault(mi, []).append(slide_num)
+                            layout_to_slides.setdefault((mi, li), []).append(slide_num)
+                            break
+                        except ValueError:
+                            continue
+                except Exception:
+                    pass
+
+            # ── 슬라이드 마스터 텍스트 ──
+            for mi, master in enumerate(master_list):
+                affected = master_to_slides.get(mi, [])
+                try:
+                    for t in _iter_shapes_text(master.shapes):
+                        if t in seen_texts:
+                            continue
+                        seen_texts.add(t)
+                        results.append({
+                            "text":          t,
+                            "source":        "master",
+                            "source_idx":    mi,
+                            "layout_name":   "",
+                            "affected_slides": affected,
+                        })
+                except Exception as e:
+                    logger.debug(f"master[{mi}] 텍스트 추출 오류: {e}")
+
+            # ── 슬라이드 레이아웃 텍스트 ──
+            for mi, master in enumerate(master_list):
+                for li, layout in enumerate(master.slide_layouts):
+                    affected = layout_to_slides.get((mi, li), [])
+                    try:
+                        for t in _iter_shapes_text(layout.shapes):
+                            if t in seen_texts:
+                                continue
+                            seen_texts.add(t)
+                            results.append({
+                                "text":          t,
+                                "source":        "layout",
+                                "source_idx":    li,
+                                "layout_name":   getattr(layout, "name", ""),
+                                "affected_slides": affected,
+                            })
+                    except Exception as e:
+                        logger.debug(f"layout[{mi}/{li}] 텍스트 추출 오류: {e}")
+
+        except Exception as e:
+            logger.warning(f"layout/master 텍스트 추출 실패: {e}")
+
+        logger.info(
+            f"layout/master 텍스트 추출: {len(results)}개 "
+            f"(master={sum(1 for r in results if r['source']=='master')}, "
+            f"layout={sum(1 for r in results if r['source']=='layout')})"
+        )
+        return results
