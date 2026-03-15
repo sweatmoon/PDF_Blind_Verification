@@ -397,14 +397,56 @@ def verify_pil_against_logo(
         ref_bytes = base64.b64decode(logo_ref_b64)
         ref_img   = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
         ref_w, ref_h = ref_img.size
-        crop_img  = pil_img.convert("RGB")
+        try:
+            crop_img = pil_img.convert("RGB")
+        except Exception as _conv_e:
+            # WMF/EMF 등 변환 불가 포맷 — 허용으로 처리
+            logger.debug(f"[verify_logo] PIL 변환 실패(WMF?): {_conv_e}")
+            return result
 
         # 너무 작은 이미지는 건너뜀 (아이콘류 제외)
         if crop_img.width < 20 or crop_img.height < 20:
             return result
 
+        # ── tight crop 전처리 ────────────────────────────────────────
+        # PPTX 마스터/레이아웃 이미지는 투명 패딩이 크게 포함된 경우가 많아
+        # pHash/SSIM 비교 시 실제 로고 형태가 희석됨.
+        # 알파 채널 기반으로 비투명 영역만 잘라내 비교 정확도 향상.
+        def _tight_crop_rgb(pil_rgb):
+            try:
+                import numpy as _np
+                rgba = pil_rgb.convert("RGBA") if pil_rgb.mode != "RGBA" else pil_rgb
+                arr  = _np.array(rgba)
+                alpha = arr[:, :, 3]
+                opaque = _np.where(alpha > 30)
+                if len(opaque[0]) == 0:
+                    return pil_rgb
+                y1, y2 = int(opaque[0].min()), int(opaque[0].max()) + 1
+                x1, x2 = int(opaque[1].min()), int(opaque[1].max()) + 1
+                # 최소 크기 보장
+                if (x2 - x1) < 10 or (y2 - y1) < 10:
+                    return pil_rgb
+                return rgba.crop((x1, y1, x2, y2)).convert("RGB")
+            except Exception:
+                return pil_rgb
+
+        crop_img_tight = _tight_crop_rgb(pil_img)
+        # tight crop이 원본 대비 10% 이상 줄었으면 tight 버전 사용
+        orig_area  = crop_img.width * crop_img.height
+        tight_area = crop_img_tight.width * crop_img_tight.height
+        use_tight  = (tight_area < orig_area * 0.90) and (tight_area >= 400)
+        if use_tight:
+            logger.debug(
+                f"[verify_logo] tight crop 적용: {crop_img.size} → {crop_img_tight.size}"
+            )
+
         # ── 0단계: pHash ────────────────────────────────────────────
         phash_dist = _compare_phash(ref_img, crop_img)
+        # tight crop 버전도 시도
+        if use_tight and not (0.0 <= phash_dist <= _PHASH_MATCH_THRESHOLD):
+            phash_dist_t = _compare_phash(ref_img, crop_img_tight)
+            if 0.0 <= phash_dist_t <= _PHASH_MATCH_THRESHOLD:
+                phash_dist = phash_dist_t
         if 0.0 <= phash_dist <= _PHASH_MATCH_THRESHOLD:
             result.update(matched=True, case="A", method="phash",
                           score=float(phash_dist), verdict="위반")
@@ -416,11 +458,14 @@ def verify_pil_against_logo(
         cmp_h    = 80
         cmp_w    = max(80, int(cmp_h * aspect))
         cmp_size = (cmp_w, cmp_h)
-        crop_np  = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
-        ref_np   = np.array(ref_img.resize(cmp_size,  Image.LANCZOS))
+        crop_np       = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
+        crop_np_tight = np.array(crop_img_tight.resize(cmp_size, Image.LANCZOS)) if use_tight else crop_np
+        ref_np        = np.array(ref_img.resize(cmp_size,  Image.LANCZOS))
 
         # ── 1단계: SSIM ─────────────────────────────────────────────
         ssim_score = _compute_ssim(ref_np, crop_np)
+        if use_tight and ssim_score < _LOGO_SIM_THRESHOLD:
+            ssim_score = max(ssim_score, _compute_ssim(ref_np, crop_np_tight))
         if ssim_score >= _LOGO_SIM_THRESHOLD:
             result.update(matched=True, case="A", method="ssim",
                           score=round(ssim_score, 3), verdict="위반")
@@ -429,6 +474,8 @@ def verify_pil_against_logo(
 
         # ── 2단계: ORB ──────────────────────────────────────────────
         orb_score = _compute_orb(ref_np, crop_np)
+        if use_tight and orb_score < _LOGO_SIM_THRESHOLD:
+            orb_score = max(orb_score, _compute_orb(ref_np, crop_np_tight))
         if orb_score >= _LOGO_SIM_THRESHOLD:
             result.update(matched=True, case="A", method="orb",
                           score=round(orb_score, 3), verdict="위반")
@@ -436,9 +483,14 @@ def verify_pil_against_logo(
             return result
 
         # ── 3단계: red_mask SSIM ────────────────────────────────────
+        # tight crop 버전을 우선 시도 (투명 패딩이 많은 마스터 이미지에 효과적)
         red_score = _compute_red_mask_ssim(
-            np.array(ref_img), np.array(crop_img)
+            np.array(ref_img), np.array(crop_img_tight if use_tight else crop_img)
         )
+        if red_score < _LOGO_SIM_THRESHOLD:
+            red_score = max(red_score, _compute_red_mask_ssim(
+                np.array(ref_img), np.array(crop_img)
+            ))
         if red_score >= _LOGO_SIM_THRESHOLD:
             result.update(matched=True, case="A", method="red_mask",
                           score=round(red_score, 3), verdict="위반")
@@ -455,11 +507,15 @@ def verify_pil_against_logo(
             sym_cmp_w  = max(80, int(cmp_h * sym_aspect))
             sym_np     = np.array(sym_img.resize((sym_cmp_w, cmp_h), Image.LANCZOS))
             c_np       = np.array(crop_img.resize((sym_cmp_w, cmp_h), Image.LANCZOS))
+            c_np_tight = np.array(crop_img_tight.resize((sym_cmp_w, cmp_h), Image.LANCZOS)) if use_tight else c_np
 
-            sym_ssim = _compute_ssim(sym_np, c_np)
-            sym_orb  = _compute_orb(sym_np, c_np)
-            sym_red  = _compute_red_mask_ssim(
-                np.array(sym_img), np.array(crop_img)
+            sym_ssim = max(_compute_ssim(sym_np, c_np),
+                           _compute_ssim(sym_np, c_np_tight) if use_tight else 0)
+            sym_orb  = max(_compute_orb(sym_np, c_np),
+                           _compute_orb(sym_np, c_np_tight) if use_tight else 0)
+            sym_red  = max(
+                _compute_red_mask_ssim(np.array(sym_img), np.array(crop_img)),
+                _compute_red_mask_ssim(np.array(sym_img), np.array(crop_img_tight)) if use_tight else -1.0
             )
             best_sym = max(sym_ssim, sym_orb, sym_red)
             if best_sym >= _LOGO_SIM_THRESHOLD:
