@@ -142,13 +142,25 @@ class OCRService:
     def from_bytes(self, data: bytes, lang: str = "kor+eng") -> str:
         if not self.enabled or not data:
             return ""
+        # WMF/EMF 매직 바이트 사전 체크 → 건너뜀
+        if len(data) >= 4 and data[:4] in (b"\xd7\xcd\xc6\x9a", b"\x01\x00\x00\x00"):
+            logger.debug("[ocr_service] WMF/EMF 이미지 건너뜀 (loader 없음)")
+            return ""
         try:
             img = Image.open(io.BytesIO(data))
+            # format 레벨 WMF/EMF 체크
+            if img.format in ("WMF", "EMF"):
+                logger.debug(f"[ocr_service] WMF/EMF 포맷 건너뜀: {img.format}")
+                return ""
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
             return self.from_image(img, lang)
         except Exception as e:
-            logger.debug(f"OCR bytes 실패: {e}")
+            err_msg = str(e).lower()
+            if "cannot find loader" in err_msg or "wmf" in err_msg or "emf" in err_msg:
+                logger.debug(f"[ocr_service] WMF/EMF loader 없음 → 건너뜀: {e}")
+            else:
+                logger.debug(f"OCR bytes 실패: {e}")
             return ""
 
     # ── 헬퍼 ─────────────────────────────────────────────────

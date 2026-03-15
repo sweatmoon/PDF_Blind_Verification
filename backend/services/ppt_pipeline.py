@@ -29,12 +29,16 @@ _executor = ThreadPoolExecutor(max_workers=8)
 
 
 def _pil_to_b64_jpeg(pil_img, quality: int = 80) -> str:
-    """PIL Image → JPEG base64 문자열"""
-    buf = io.BytesIO()
-    if pil_img.mode not in ("RGB", "L"):
-        pil_img = pil_img.convert("RGB")
-    pil_img.save(buf, format="JPEG", quality=quality)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
+    """PIL Image → JPEG base64 문자열. WMF/EMF 등 변환 불가 포맷은 빈 문자열 반환."""
+    try:
+        buf = io.BytesIO()
+        if pil_img.mode not in ("RGB", "L"):
+            pil_img = pil_img.convert("RGB")
+        pil_img.save(buf, format="JPEG", quality=quality)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception as _e:
+        logger.debug(f"[pil_to_b64] 변환 실패 ({type(_e).__name__}): {_e}")
+        return ""
 
 
 def _load_logo_b64() -> Optional[str]:
@@ -538,7 +542,15 @@ class PPTServerPipeline:
                             _bbox = _ni.get("bbox")
                             if _bbox and pg_b64:
                                 _raw = _b64x.b64decode(pg_b64)
-                                _simg = _Imgx.open(_iox.BytesIO(_raw)).convert("RGB")
+                                # WMF/EMF 건너뜀
+                                if len(_raw) >= 4 and _raw[:4] in (b"\xd7\xcd\xc6\x9a", b"\x01\x00\x00\x00"):
+                                    logger.debug(f"[face_scan_p1] WMF/EMF 이미지 건너뜀 p{pg_no}")
+                                    continue
+                                _tmp = _Imgx.open(_iox.BytesIO(_raw))
+                                if _tmp.format in ("WMF", "EMF"):
+                                    logger.debug(f"[face_scan_p1] WMF/EMF 포맷 건너뜀 p{pg_no}")
+                                    continue
+                                _simg = _tmp.convert("RGB")
                                 _sw, _sh = _simg.size
                                 _bx1, _by1, _bx2, _by2 = [float(v) for v in _bbox]
                                 if max(_bx1, _by1, _bx2, _by2) <= 1.5:
@@ -1033,7 +1045,15 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                     import base64 as _b64, io as _io
                     from PIL import Image as _Image
                     raw = _b64.b64decode(slide_b64)
-                    slide_img = _Image.open(_io.BytesIO(raw)).convert("RGB")
+                    # WMF/EMF 매직 바이트 사전 체크
+                    if len(raw) >= 4 and raw[:4] in (b"\xd7\xcd\xc6\x9a", b"\x01\x00\x00\x00"):
+                        logger.debug(f"[crop_b64] p{p} WMF/EMF 이미지 건너뜀")
+                        continue
+                    _tmp_img = _Image.open(_io.BytesIO(raw))
+                    if _tmp_img.format in ("WMF", "EMF"):
+                        logger.debug(f"[crop_b64] p{p} WMF/EMF 포맷 건너뜀")
+                        continue
+                    slide_img = _tmp_img.convert("RGB")
                     sw, sh = slide_img.size
                     bx1, by1, bx2, by2 = [float(v) for v in bbox]
                     # 상대좌표(0~1) vs 절대좌표 자동 감지

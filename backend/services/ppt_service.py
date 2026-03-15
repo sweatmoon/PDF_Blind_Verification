@@ -17,6 +17,42 @@ from core.config import get_logger
 logger = get_logger("ppt_service")
 
 
+def _safe_pil_open(blob: bytes) -> Optional[Image.Image]:
+    """이미지 blob을 PIL로 안전하게 열기.
+
+    WMF/EMF처럼 Linux에서 픽셀 렌더러가 없는 포맷은 None 반환.
+    다른 포맷도 로딩 실패 시 None 반환 (예외를 상위로 전파하지 않음).
+    """
+    # WMF/EMF 매직 바이트 사전 체크 (Image.open 자체가 'cannot find loader' 예외를 던지는 경우 대비)
+    if blob and len(blob) >= 4:
+        # WMF: D7 CD C6 9A  /  EMF: 01 00 00 00
+        if blob[:4] in (b"\xd7\xcd\xc6\x9a", b"\x01\x00\x00\x00"):
+            logger.debug("[ppt_service] WMF/EMF 매직 바이트 감지 → 스킵")
+            return None
+    try:
+        img = Image.open(io.BytesIO(blob))
+        # WmfStubImageFile 등 stub 포맷은 .load() 시점에 에러 발생
+        # → format 체크로 미리 걸러냄
+        if img.format in ("WMF", "EMF"):
+            logger.debug(f"[ppt_service] WMF/EMF 이미지 스킵 (렌더러 없음, format={img.format})")
+            return None
+        # stub 포맷 여부 추가 확인 (format이 None인 경우도 대비)
+        from PIL import ImageFile as _PilImageFile
+        if isinstance(img, _PilImageFile.StubImageFile):
+            logger.debug(f"[ppt_service] StubImage 포맷 스킵: {type(img).__name__}")
+            return None
+        # 픽셀 데이터 강제 로드 — 여기서 에러나면 None 반환
+        img.load()
+        return img
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "cannot find loader" in err_msg or "wmf" in err_msg or "emf" in err_msg:
+            logger.debug(f"[ppt_service] WMF/EMF 로더 없음 → 스킵: {e}")
+        else:
+            logger.debug(f"[ppt_service] 이미지 로딩 실패 ({type(e).__name__}): {e}")
+        return None
+
+
 def _iter_group_shapes(group_shape):
     """그룹 도형을 재귀적으로 순회해 모든 하위 shape 반환 (중첩 그룹 지원)"""
     try:
@@ -169,7 +205,9 @@ class PPTService:
                 if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                     img_blob = shape.image.blob
                     img_ext  = shape.image.ext          # "jpeg", "png", …
-                    pil_img  = Image.open(io.BytesIO(img_blob))
+                    pil_img  = _safe_pil_open(img_blob)
+                    if pil_img is None:              # WMF/EMF 등 렌더 불가 포맷 스킵
+                        continue
                     w, h     = pil_img.size
 
                     # 크롭 정보 추출: python-pptx의 crop 속성 (0.0 ~ 1.0 비율)
@@ -227,7 +265,9 @@ class PPTService:
                             try:
                                 img_blob = child.image.blob
                                 img_ext  = child.image.ext
-                                pil_img  = Image.open(io.BytesIO(img_blob))
+                                pil_img  = _safe_pil_open(img_blob)
+                                if pil_img is None:   # WMF/EMF 스킵
+                                    continue
                                 w, h     = pil_img.size
                                 images.append({
                                     "data": img_blob,
@@ -311,7 +351,9 @@ class PPTService:
                     w    = int(shape.width  / 914400 * 96 * scale)
                     h    = int(shape.height / 914400 * 96 * scale)
 
-                    pil = Image.open(io.BytesIO(shape.image.blob))
+                    pil = _safe_pil_open(shape.image.blob)
+                    if pil is None:   # WMF/EMF 스킵
+                        continue
                     if pil.mode not in ("RGB", "RGBA"):
                         pil = pil.convert("RGB")
                     if w > 0 and h > 0:
@@ -364,7 +406,9 @@ class PPTService:
                         if blob in seen_blobs:
                             continue
                         seen_blobs.add(blob)
-                        pil = Image.open(io.BytesIO(blob))
+                        pil = _safe_pil_open(blob)
+                        if pil is None:  # WMF/EMF 스킵
+                            continue
                         results.append({
                             "data":       blob,
                             "ext":        shape.image.ext,
