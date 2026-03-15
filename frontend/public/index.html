@@ -1364,6 +1364,34 @@ function buildSourceBadge(src) {
   return badges.join(' ');
 }
 
+/**
+ * person_candidate 타입 라벨 변환
+ * ★ 핵심 원칙: person_candidate는 "후보 탐지"이며 확정이 아님.
+ *   - 위반 + CV 얼굴 검출 표시 있음 → "실제 얼굴 사진 확인" (MediaPipe 확정)
+ *   - 위반 + reverified 없음       → "인물 후보 탐지 (판정 유보)"
+ *   - 허용                          → "인물 후보 탐지 (오탐 제외)"
+ *   - 그 외 person_candidate        → "인물 후보 탐지"
+ */
+function getDetectionTypeLabel(dtype, verdict, reason) {
+  if (!dtype) return dtype;
+  const ldt = dtype.toLowerCase();
+  // person_candidate 타입 변환
+  if (ldt === 'person_candidate' || ldt.includes('person_candidate')) {
+    const r = (reason || '').toLowerCase();
+    if (verdict === '위반' && (r.includes('cv 얼굴 검출') || r.includes('face_reverified') || r.includes('mediapipe'))) {
+      return '인물 사진 확인 (얼굴 검증 완료)';
+    }
+    if (verdict === '위반') {
+      return '인물 후보 탐지 (판정 유보)';
+    }
+    if (verdict === '허용') {
+      return '인물 후보 탐지 (오탐 제외)';
+    }
+    return '인물 후보 탐지';
+  }
+  return dtype;
+}
+
 function mergeRuleAndVision(ruleHitsByPage, visionItems) {
   const JUDGMENT_WEIGHT = { '위반': 2, '주의': 1, '허용': 0 };
 
@@ -1851,12 +1879,15 @@ function renderPageList(pages, filter = 'all') {
     const groups = Object.entries(typeMap).map(([type, items]) => {
       items.sort((a, b) => (VERDICT_ORDER[a.verdict]||9) - (VERDICT_ORDER[b.verdict]||9));
       const worstVerdict = items[0]?.verdict || '주의';
-      return { type, items, worstVerdict };
+      // person_candidate 타입 헤더도 변환 (후보/확정 구분)
+      const worstItem = items[0] || {};
+      const typeLabel = getDetectionTypeLabel(type, worstVerdict, worstItem.reason || '');
+      return { type, typeLabel, items, worstVerdict };
     });
     groups.sort((a, b) => (VERDICT_ORDER[a.worstVerdict]||9) - (VERDICT_ORDER[b.worstVerdict]||9));
 
     // 유형별 섹션 HTML 생성 (위반/주의만)
-    const detHtml = groups.map(({ type, items, worstVerdict }) => {
+    const detHtml = groups.map(({ type, typeLabel, items, worstVerdict }) => {
       const hdrCls = worstVerdict === '위반' ? 'bg-red-100 text-red-700 border-red-200'
                    : 'bg-amber-100 text-amber-700 border-amber-200';
       const hdrIcon = worstVerdict === '위반' ? '🔴' : '🟡';
@@ -1886,7 +1917,7 @@ function renderPageList(pages, filter = 'all') {
 
       return `<div class="mb-2">
         <div class="flex items-center gap-1.5 px-2 py-1 rounded-t border ${hdrCls} text-xs font-semibold">
-          <span>${hdrIcon}</span><span>${type}</span>${countLabel}
+          <span>${hdrIcon}</span><span>${typeLabel}</span>${countLabel}
         </div>
         <div class="border border-t-0 rounded-b border-slate-200 px-2 py-1.5 bg-white">
           ${itemsHtml}
@@ -1918,7 +1949,7 @@ function renderPageList(pages, filter = 'all') {
           </div>`;
         }).join('');
         return `<div class="mb-2 last:mb-0">
-          <p class="text-xs font-semibold text-green-700 mb-1">${type} (${its.length}건)</p>
+          <p class="text-xs font-semibold text-green-700 mb-1">${getDetectionTypeLabel(type, '허용', '')} (${its.length}건)</p>
           ${rows}
         </div>`;
       }).join('');
@@ -1985,7 +2016,7 @@ function renderMetaContent(pages) {
     const vcls = `verdict-${d.verdict}`;
     return `<div class="p-3 rounded-lg border ${vcls} text-sm">
       <div class="flex items-center justify-between mb-1">
-        <span class="font-medium">${d.detection_type}</span>
+        <span class="font-medium">${getDetectionTypeLabel(d.detection_type, d.verdict, d.reason)}</span>
         <span class="text-xs px-2 py-0.5 rounded font-medium ${vcls}">${d.verdict}</span>
       </div>
       <code class="text-xs block mb-1">${(d.detected_text||'').slice(0,200)}</code>
@@ -2015,7 +2046,7 @@ function renderAllDetections(pages) {
     const srcBadge = buildSourceBadge(src);
     return `<tr>
       <td class="px-3 py-2 text-slate-500">${d.page_label}</td>
-      <td class="px-3 py-2">${d.detection_type||''}</td>
+      <td class="px-3 py-2">${getDetectionTypeLabel(d.detection_type, d.verdict, d.reason)||''}</td>
       <td class="px-3 py-2 max-w-xs"><span class="font-mono break-all">${(d.detected_text||d.image_description||'').slice(0,80)}</span></td>
       <td class="px-3 py-2"><span class="px-2 py-0.5 rounded text-xs font-medium ${vcls}">${d.verdict}</span></td>
       <td class="px-3 py-2">${srcBadge}</td>
@@ -2088,7 +2119,7 @@ function buildHTMLReport(r) {
       const v = d.verdict || '';
       const vc2 = {위반:'#ef4444',주의:'#f59e0b',허용:'#10b981'}[v] || '#6b7280';
       rows += `<tr>
-        <td>${label}</td><td>${d.detection_type||''}</td>
+        <td>${label}</td><td>${getDetectionTypeLabel(d.detection_type, d.verdict, d.reason)||''}</td>
         <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(d.detected_text||'').slice(0,80)}</td>
         <td><b style="color:${vc2}">${v}</b></td>
         <td>${d.reason||''}</td>

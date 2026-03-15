@@ -1165,6 +1165,214 @@ def test_tc_a_to_e_three_zone_policy():
     print("✅ TC-A~E 통과: 3구간 정책 전체 정상")
 
 
+# ════════════════════════════════════════════════════════════════════
+# TC-R1 ~ TC-R3: person_candidate vs page_has_real_face 분리 회귀 테스트
+# ════════════════════════════════════════════════════════════════════
+
+def test_tc_r1_icon_only_no_skip():
+    """
+    TC-R1: 아이콘만 있는 슬라이드 — Claude → person_candidate, MediaPipe → 재검증 허용
+    기대: apply_face_filters 에서 person_candidate가 '허용'으로 처리되어야 함.
+          로고 검증 등 다른 항목에 영향을 줘서는 안 됨.
+
+    금지 패턴:
+      - person_candidate 단독으로 page_has_real_face = True 처리 금지
+      - person_candidate 때문에 다른 항목(로고 등)이 skip/면제 되면 안 됨
+    """
+    from services.server_pipeline import apply_face_filters
+
+    print("\n  [TC-R1: 아이콘 전용 슬라이드 — person_candidate → 스킵 없음]")
+
+    # 아이콘 person_candidate — _face_reverified=True + judgment=허용 (MediaPipe가 icon으로 판정)
+    icon_item = {
+        "page": 1,
+        "type": "person_candidate",
+        "content": "사람 아이콘",
+        "judgment": "허용",
+        "_face_reverified": True,  # MediaPipe가 icon_or_silhouette로 판정 완료
+        "reason": "icon_or_silhouette 확인 → 허용",
+    }
+
+    # 로고 항목 — person_candidate와 무관하게 독립적으로 처리되어야 함
+    logo_item = {
+        "page": 1,
+        "type": "로고",
+        "content": "ACME Corp 로고",
+        "judgment": "위반",
+        "reason": "제안사 로고 탐지",
+    }
+
+    result = apply_face_filters([icon_item, logo_item])
+
+    # person_candidate(아이콘)는 허용
+    face_results = [r for r in result if "person_candidate" in r.get("type", "")]
+    assert face_results, "TC-R1: person_candidate 항목 누락"
+    assert face_results[0]["judgment"] == "허용", (
+        f"TC-R1 실패: 아이콘 person_candidate → 허용이어야 하는데 '{face_results[0]['judgment']}'"
+    )
+
+    # 로고 항목은 판정 변경 없이 유지
+    logo_results = [r for r in result if "로고" in r.get("type", "")]
+    assert logo_results, "TC-R1: 로고 항목 누락"
+    assert logo_results[0]["judgment"] == "위반", (
+        f"TC-R1 실패: 로고 항목이 person_candidate 처리로 영향받음 → '{logo_results[0]['judgment']}'"
+    )
+
+    print("  ✔ TC-R1: 아이콘 person_candidate → 허용, 로고 항목 독립 유지")
+    print("✅ TC-R1 통과: person_candidate(아이콘) → 페이지 스킵 없음, 로고 검증 계속")
+
+
+def test_tc_r2_real_photo_confirmed():
+    """
+    TC-R2: 실제 프로필 사진 — MediaPipe 확정(_face_reverified=True, judgment=위반)
+    기대: apply_face_filters가 판정을 그대로 위반으로 통과시켜야 함.
+          page_has_real_face = True 로 처리된 결과.
+    """
+    from services.server_pipeline import apply_face_filters
+
+    print("\n  [TC-R2: 실제 프로필 사진 — MediaPipe 확정 → 위반]")
+
+    real_face_item = {
+        "page": 3,
+        "type": "person_candidate",
+        "content": "프로필 사진 (실사)",
+        "judgment": "위반",
+        "_face_reverified": True,  # MediaPipe가 real_photo로 확정
+        "reason": "CV 얼굴 검출 → 위반",
+    }
+
+    result = apply_face_filters([real_face_item])
+
+    assert result, "TC-R2: 결과 없음"
+    assert result[0]["judgment"] == "위반", (
+        f"TC-R2 실패: real_photo 확정 → 위반이어야 하는데 '{result[0]['judgment']}'"
+    )
+    assert result[0].get("_face_reverified"), (
+        "TC-R2 실패: _face_reverified 플래그 유실"
+    )
+
+    print("  ✔ TC-R2: 실제 얼굴 확정(_face_reverified=True) → 위반 통과")
+    print("✅ TC-R2 통과: page_has_real_face=True 케이스 — 위반 판정 보존")
+
+
+def test_tc_r3_icon_was_skipping_now_doesnt():
+    """
+    TC-R3: 이전에 person_candidate가 스킵을 유발했던 케이스 — 현재는 스킵 없음.
+    시나리오:
+      - 슬라이드에 아이콘 person_candidate (허용) + 실명 텍스트 위반 항목 공존
+      - person_candidate 처리가 실명 텍스트 항목을 건드려서는 안 됨
+    기대: 실명 텍스트 위반은 유지, person_candidate 아이콘은 허용
+    """
+    from services.server_pipeline import apply_face_filters
+
+    print("\n  [TC-R3: 아이콘 person_candidate + 실명 텍스트 공존 — 스킵 없음]")
+
+    # 아이콘 person_candidate (_face_reverified=True → 허용)
+    icon_item = {
+        "page": 2,
+        "type": "person_candidate",
+        "content": "연구자 아이콘",
+        "judgment": "허용",
+        "_face_reverified": True,
+        "reason": "icon_or_silhouette → 허용",
+    }
+
+    # 실명 텍스트 위반 (인물 타입이 아님 → apply_face_filters 영향 없음)
+    name_item = {
+        "page": 2,
+        "type": "참여인력명",
+        "content": "홍길동",
+        "judgment": "위반",
+        "reason": "사전 등록 실명 탐지",
+    }
+
+    result = apply_face_filters([icon_item, name_item])
+
+    # person_candidate 아이콘 → 허용 유지
+    face_results = [r for r in result if "person_candidate" in r.get("type", "")]
+    assert face_results, "TC-R3: person_candidate 항목 누락"
+    assert face_results[0]["judgment"] == "허용", (
+        f"TC-R3 실패: 아이콘 허용이어야 하는데 '{face_results[0]['judgment']}'"
+    )
+
+    # 실명 위반 → 영향 없이 위반 유지
+    name_results = [r for r in result if "참여인력명" in r.get("type", "")]
+    assert name_results, "TC-R3: 참여인력명 항목 누락"
+    assert name_results[0]["judgment"] == "위반", (
+        f"TC-R3 실패: 실명 위반이 person_candidate 처리로 변경됨 → '{name_results[0]['judgment']}'"
+    )
+
+    print("  ✔ TC-R3: 아이콘 허용 + 실명 위반 → 독립 처리 (스킵 없음)")
+    print("✅ TC-R3 통과: person_candidate 아이콘이 다른 항목에 영향 주지 않음")
+
+
+def test_tc_r4_compute_face_page_flags():
+    """
+    TC-R4: compute_face_page_flags 함수 단위 테스트
+    - 아이콘 person_candidate (_face_reverified=True, judgment=허용) → has_person_candidate만 True
+    - 실제 얼굴 (_face_reverified=True, judgment=위반) → 양쪽 모두 True
+    - 재검증 없는 후보 (_face_reverified 없음) → has_person_candidate만 True
+    """
+    from services.server_pipeline import compute_face_page_flags
+
+    print("\n  [TC-R4: compute_face_page_flags 단위 테스트]")
+
+    items = [
+        # 페이지 1: 아이콘 허용 (MediaPipe → icon_or_silhouette)
+        {
+            "page": 1, "type": "person_candidate",
+            "judgment": "허용", "_face_reverified": True,
+        },
+        # 페이지 2: 실제 얼굴 위반 (MediaPipe → real_photo)
+        {
+            "page": 2, "type": "person_candidate",
+            "judgment": "위반", "_face_reverified": True,
+        },
+        # 페이지 3: 재검증 미수행 후보 (page_images 없어서)
+        {
+            "page": 3, "type": "person_candidate",
+            "judgment": "주의",
+        },
+        # 페이지 4: 로고 (얼굴 타입 아님 → 포함 안됨)
+        {
+            "page": 4, "type": "로고",
+            "judgment": "위반",
+        },
+    ]
+
+    has_pc, has_rf = compute_face_page_flags(items)
+
+    # 페이지 1: 후보만 있음 (허용 → page_has_real_face 아님)
+    assert has_pc.get(1), "TC-R4: p1 has_person_candidate 누락"
+    assert not has_rf.get(1), "TC-R4: p1 page_has_real_face 가 True면 안됨 (아이콘 허용)"
+
+    # 페이지 2: 후보 + 확정 (위반 + reverified)
+    assert has_pc.get(2), "TC-R4: p2 has_person_candidate 누락"
+    assert has_rf.get(2), "TC-R4: p2 page_has_real_face 누락 (실제 얼굴 위반)"
+
+    # 페이지 3: 후보만 있음 (재검증 없어서 확정 아님)
+    assert has_pc.get(3), "TC-R4: p3 has_person_candidate 누락"
+    assert not has_rf.get(3), "TC-R4: p3 page_has_real_face 가 True면 안됨 (재검증 미수행)"
+
+    # 페이지 4: 로고 → 얼굴 집계 포함 안됨 (person이 type에 없음)
+    # 단, "인물" 키워드도 없으므로 has_pc에 없어야 함
+    # 참고: 로고는 "로고" 타입이므로 얼굴 집계 안됨
+    assert not has_rf.get(4), "TC-R4: p4 page_has_real_face 가 True면 안됨 (로고)"
+
+    print("  ✔ TC-R4: has_person_candidate / page_has_real_face 분리 집계 정상")
+    print("✅ TC-R4 통과: compute_face_page_flags 정상 동작")
+
+
+def test_tc_r1_to_r3_person_candidate_isolation():
+    """TC-R1 ~ TC-R3 + R4: person_candidate 분리 정책 전체 회귀 테스트"""
+    print("\n  [TC-R1~R4: person_candidate 분리 정책 회귀 테스트]")
+    test_tc_r1_icon_only_no_skip()
+    test_tc_r2_real_photo_confirmed()
+    test_tc_r3_icon_was_skipping_now_doesnt()
+    test_tc_r4_compute_face_page_flags()
+    print("✅ TC-R1~R4 통과: person_candidate 분리 정책 전체 정상")
+
+
 # ────────────────────────────────────────────────────────────────────
 # 전체 실행
 # ────────────────────────────────────────────────────────────────────
@@ -1183,6 +1391,7 @@ if __name__ == "__main__":
         ("TC7 심볼 자동 추출",         test_tc7_symbol_auto_extraction),
         ("TC8~12 인물사진 재검증",     test_tc8_to_tc12_face_image_reverification),
         ("TC13 주의판정 인물 후처리",   test_tc13_caution_judgment_also_processed),
+        ("TC-R1~R4 person_candidate 분리", test_tc_r1_to_r3_person_candidate_isolation),
     ]
 
     passed = 0

@@ -712,36 +712,48 @@ def apply_face_filters(items: list) -> list:
     """
     인물사진/person_candidate 타입 항목에만 적용.
 
-    ★ 처리 흐름:
-      0. claude_judge._post_process_faces에서 이미 재검증된 항목(_face_reverified=True)
-         → 해당 판정을 그대로 신뢰하고 통과 (중복 처리 금지)
-      1. 이미 허용 → 통과
-      2. 그래픽/아이콘 키워드 존재 → 허용
-      3. 실제 사진 키워드 존재 → 위반 유지
-      4. 불명확 (어느 쪽도 아님) → 위반 유지 (안전 방향)
-         - bbox 없거나 page_images 없는 경우 키워드 폴백에서 키워드 미확인
-         - 실사 가능성 있으므로 위반으로 유지하고 리뷰 유도
+    ★ 핵심 원칙 — person_candidate ≠ 실제 사람 사진 확정
+    ──────────────────────────────────────────────────────
+    Claude Vision의 person_candidate 반환은 "후보 탐지"일 뿐이며,
+    실제 사람 사진 확정은 반드시 MediaPipe/이미지 후처리(_post_process_faces) 결과에
+    의해서만 판정된다.
 
-    ★ 정책 근거:
-      - _post_process_faces에서 이미 face not detected → 허용 처리 완료
-      - 이 함수는 _post_process_faces를 거치지 않은 항목에 대한 2차 텍스트 키워드 필터
-      - 이미지 재검증(_post_process_faces)에서 판정된 결과 우선
+    절대 금지:
+      - person_candidate 타입만 보고 위반/사람사진 페이지로 확정
+      - reason 문자열("실제 사람 사진", "카메라로 촬영" 등)만 보고 위반 확정
+      - _REAL_PHOTO_KW_SP 키워드 탐지 → 즉시 위반 확정
+
+    ★ 처리 흐름:
+      0. _post_process_faces(_face_reverified=True) 재검증 완료 항목
+         → MediaPipe 판정 결과를 그대로 신뢰, 중복 처리 금지
+      1. 이미 허용 → 통과
+      2. 그래픽/아이콘 키워드 존재 → 즉시 허용
+         (content+dtype 기준, reason은 오허용 방지를 위해 제외)
+      3. _face_reverified 없는 나머지 항목 → 원래 판정 유지
+         (문자열로 위반 확정 금지; 입력 judgment 그대로 보존)
+
+    ★ 변수 의미 분리:
+      has_person_candidate — Claude가 사람 관련 요소를 후보로 탐지했는가
+      page_has_real_face   — MediaPipe/후처리로 실제 얼굴이 확정됐는가
+      → 후속 정책은 반드시 page_has_real_face(_face_reverified+real_photo) 기준으로만.
     """
+    import logging as _lg
+    _face_log = _lg.getLogger(__name__)
+
     out = []
     for it in items:
         dtype    = it.get("type", "")
         content  = (it.get("content") or "")
-        reason   = (it.get("reason") or "")
         judgment = it.get("judgment", "주의")
 
-        # 얼굴/인물 타입 아니면 통과
+        # 얼굴/인물 타입 아니면 통과 (person_candidate 포함)
         is_face_type = any(kw in dtype for kw in _FACE_DTYPES_KW)
         if not is_face_type:
             out.append(it)
             continue
 
-        # ★ 0. _post_process_faces에서 이미 이미지 재검증된 항목 → 그대로 통과
-        #    (claude_judge에서 real_photo / icon_or_silhouette / unknown 판정 완료)
+        # ★ 0. _post_process_faces 재검증 완료 항목 → 판정 그대로 신뢰
+        #    real_photo → 위반, icon_or_silhouette/unknown → 허용 이미 처리됨
         if it.get("_face_reverified"):
             out.append(it)
             continue
@@ -751,30 +763,36 @@ def apply_face_filters(items: list) -> list:
             out.append(it)
             continue
 
-        combined = (dtype + " " + content + " " + reason).lower()
-
-        # ① 그래픽/아이콘 키워드 → 무조건 허용
-        if any(kw in combined for kw in _ICON_ALLOW_KW):
+        # ① 그래픽/아이콘 키워드 (content+dtype 기준만 — reason 제외)
+        #    reason에는 범용 표현이 섞여 오허용 발생 가능
+        content_only = (dtype + " " + content).lower()
+        if any(kw in content_only for kw in _ICON_ALLOW_KW):
             it = dict(it)
             it["judgment"]       = "허용"
-            it["reason"]         = "그래픽/아이콘/일러스트로 확인되어 허용 처리 (실제 사진 아님)"
+            it["reason"]         = "그래픽/아이콘/일러스트 키워드 확인 → 즉시 허용 (후보 탐지였으나 그래픽 확정)"
             it["recommendation"] = ""
             it["_fp_filtered"]   = "icon_silhouette"
+            _face_log.debug(
+                f"[face_filters] 아이콘 키워드 → 허용: "
+                f"dtype={dtype!r} content={content[:40]!r}"
+            )
             out.append(it)
             continue
 
-        # ② 실제 사진 키워드 → 위반 유지
-        if any(kw in combined for kw in _REAL_PHOTO_KW_SP):
-            out.append(it)
-            continue
-
-        # ③ 불명확 → 위반 유지 (안전 방향)
-        #    이미지 재검증(_post_process_faces)을 통과하지 못한 경우로,
-        #    실사 사진 가능성이 있으므로 위반을 유지하고 최종 판단을 리뷰어에게 넘김
-        import logging as _lg
-        _lg.getLogger(__name__).debug(
-            f"[apply_face_filters] 불명확 → 위반 유지 (안전): "
-            f"dtype={dtype!r} content={content[:30]!r}"
+        # ② _face_reverified 없는 나머지 → 원래 판정 유지
+        #    ★ 절대금지: 문자열 키워드(_REAL_PHOTO_KW_SP)만 보고 위반 확정하지 않음
+        #    page_images 없어 MediaPipe 재검증 불가였던 경우로,
+        #    입력 judgment(주의/위반)를 그대로 유지 (안전 방향이나 확정 아님)
+        it = dict(it)
+        if judgment not in ("위반", "주의"):
+            it["judgment"] = "위반"  # 알 수 없는 값은 안전 방향으로 위반
+        it["reason"] = (
+            (it.get("reason") or "")
+            + " [person_candidate 후보 — MediaPipe 재검증 미수행, 판정 유보]"
+        )
+        _face_log.debug(
+            f"[face_filters] 재검증 미수행 → 판정 유보({it['judgment']}): "
+            f"dtype={dtype!r} content={content[:40]!r}"
         )
         out.append(it)
 
@@ -783,15 +801,15 @@ def apply_face_filters(items: list) -> list:
         "output_count": len(out),
         "results": [
             {
-                "page":      it.get("page"),
-                "type":      it.get("type"),
-                "judgment":  it.get("judgment"),
+                "page":       it.get("page"),
+                "type":       it.get("type"),
+                "judgment":   it.get("judgment"),
                 "reverified": it.get("_face_reverified", False),
-                "content":   str(it.get("content",""))[:60],
+                "content":    str(it.get("content", ""))[:60],
             }
             for it in out
-            if any(kw in str(it.get("type","")).lower()
-                   for kw in ("인물","사진","얼굴","face","photo","person","candidate"))
+            if any(kw in str(it.get("type", "")).lower()
+                   for kw in ("인물", "사진", "얼굴", "face", "photo", "person", "candidate"))
         ],
     })
     return out
@@ -931,6 +949,46 @@ def merge_rule_and_vision(
 
 
 # ─────────────────────────────────────────────────────────────────
+# 보조: 후보/확정 분리 집계 (has_person_candidate / page_has_real_face)
+# ─────────────────────────────────────────────────────────────────
+def compute_face_page_flags(vision_items: list) -> tuple[dict, dict]:
+    """
+    Vision 항목 리스트에서 페이지별 person_candidate 여부와 실제 얼굴 확정 여부를 집계.
+
+    반환:
+      has_person_candidate : {page_int: True}  — Claude가 후보를 탐지한 페이지
+      page_has_real_face   : {page_int: True}  — MediaPipe 재검증으로 실제 얼굴이 확정된 페이지
+
+    ★ 중요:
+      - has_person_candidate 만으로 페이지 스킵/로고 면제 등 판단 금지
+      - page_has_real_face 기준으로만 후속 정책 결정
+    """
+    has_person_candidate: dict[int, bool] = {}
+    page_has_real_face:   dict[int, bool] = {}
+
+    for it in vision_items:
+        try:
+            pg = int(it.get("page", 0))
+        except (ValueError, TypeError):
+            pg = 0
+        if pg < 1:
+            continue
+
+        dtype = str(it.get("type") or "")
+        # 후보 탐지 여부
+        if "person_candidate" in dtype or any(
+            kw in dtype for kw in ("인물", "사진", "얼굴", "face", "photo", "person")
+        ):
+            has_person_candidate[pg] = True
+
+        # 실제 얼굴 확정: MediaPipe 재검증 완료 + 위반 판정
+        if it.get("_face_reverified") and it.get("judgment") == "위반":
+            page_has_real_face[pg] = True
+
+    return has_person_candidate, page_has_real_face
+
+
+# ─────────────────────────────────────────────────────────────────
 # 6단계: 내부 키 정리 후 최종 page_map 반환
 # ─────────────────────────────────────────────────────────────────
 def finalize_page_map(page_map: dict) -> dict:
@@ -954,6 +1012,9 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
     규칙 탐지(OCR 포함) + Vision 결과 페이지별 합산.
     내부적으로 6단계 함수로 분리 실행.
     """
+    import logging as _lg
+    _mrlog = _lg.getLogger(__name__)
+
     # 1. 정규화
     items = normalize_vision_items(vision_items)
     # 2. 텍스트 오탐 필터 (비로고 전용)
@@ -962,6 +1023,22 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_pages: int
     items = apply_logo_filters(items)
     # 4. 얼굴 필터
     items = apply_face_filters(items)
+
+    # ★ 후보/확정 분리 집계 (has_person_candidate vs page_has_real_face)
+    has_pc, has_rf = compute_face_page_flags(items)
+    for pg in sorted(set(has_pc) | set(has_rf)):
+        cand = has_pc.get(pg, False)
+        real = has_rf.get(pg, False)
+        if cand and not real:
+            _mrlog.info(
+                f"[merge_results] p{pg}: person_candidate 후보만 있음 "
+                f"(page_has_real_face=False) → 스킵/로고면제 절대 금지"
+            )
+        elif real:
+            _mrlog.info(
+                f"[merge_results] p{pg}: 실제 얼굴 확정 (page_has_real_face=True)"
+            )
+
     # 5. rule 병합
     page_map = merge_rule_and_vision(items, rule_hits_by_page)
     # 6. 내부 키 정리

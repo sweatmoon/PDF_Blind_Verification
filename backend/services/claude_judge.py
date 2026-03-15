@@ -1271,10 +1271,52 @@ class ClaudeVisionJudge:
                 client=self._client,
                 model=_cfg.CLAUDE_MODEL if self.enabled else "",
             )
+
+            # ── page_has_real_face 집계 (후보 vs 확정 분리) ────────────
+            # has_person_candidate : Claude가 person_candidate 후보를 탐지했는가
+            # page_has_real_face   : MediaPipe/_post_process_faces로 실제 얼굴이 확정됐는가
+            # 후속 정책은 반드시 page_has_real_face 기준으로만 동작해야 함
+            has_person_candidate: dict[int, bool] = {}
+            page_has_real_face:   dict[int, bool] = {}
+            for it in items:
+                pg = it.get("page")
+                if pg is None:
+                    continue
+                dtype = str(it.get("type") or "")
+                # person_candidate 존재 여부 (후보)
+                if "person_candidate" in dtype or any(
+                    kw in dtype for kw in ("인물", "사진", "얼굴", "face", "photo", "person")
+                ):
+                    has_person_candidate[pg] = True
+                # 실제 얼굴 확정 여부 (MediaPipe 재검증 통과 + 위반 판정)
+                if (
+                    it.get("_face_reverified")
+                    and it.get("judgment") == "위반"
+                ):
+                    page_has_real_face[pg] = True
+
+            # 페이지별 분리 상태 로그
+            for pg in sorted(set(has_person_candidate) | set(page_has_real_face)):
+                has_cand = has_person_candidate.get(pg, False)
+                has_real = page_has_real_face.get(pg, False)
+                logger.info(
+                    f"[face_postprocess] p{pg}: "
+                    f"has_person_candidate={has_cand} | "
+                    f"page_has_real_face={has_real}"
+                )
+                if has_cand and not has_real:
+                    logger.info(
+                        f"[face_postprocess] p{pg}: "
+                        f"person_candidate 있으나 실제 얼굴 미확정 → "
+                        f"페이지 스킵/사람사진 페이지 처리 금지"
+                    )
+
             alog.log("face_postprocess", "done", {
                 "pages":   valid_pages,
                 "before":  items_before_face,
                 "after":   len(items),
+                "page_has_real_face":   list(page_has_real_face.keys()),
+                "has_person_candidate": list(has_person_candidate.keys()),
                 "results": [
                     {
                         "page":     it.get("page"),
