@@ -473,6 +473,33 @@ class PPTServerPipeline:
                     model=_judge_model,
                 )
                 if new_items:
+                    # face_scan 결과에 crop_b64 즉시 생성 (pg_b64를 직접 가지고 있으므로)
+                    for _ni in new_items:
+                        try:
+                            import base64 as _b64x, io as _iox
+                            from PIL import Image as _Imgx
+                            _bbox = _ni.get("bbox")
+                            if _bbox and pg_b64:
+                                _raw = _b64x.b64decode(pg_b64)
+                                _simg = _Imgx.open(_iox.BytesIO(_raw)).convert("RGB")
+                                _sw, _sh = _simg.size
+                                _bx1, _by1, _bx2, _by2 = [float(v) for v in _bbox]
+                                if max(_bx1, _by1, _bx2, _by2) <= 1.5:
+                                    _x1, _y1 = int(_bx1*_sw), int(_by1*_sh)
+                                    _x2, _y2 = int(_bx2*_sw), int(_by2*_sh)
+                                else:
+                                    _x1, _y1, _x2, _y2 = int(_bx1), int(_by1), int(_bx2), int(_by2)
+                                _px = int((_x2-_x1)*0.15); _py = int((_y2-_y1)*0.15)
+                                _x1 = max(0,_x1-_px); _y1 = max(0,_y1-_py)
+                                _x2 = min(_sw,_x2+_px); _y2 = min(_sh,_y2+_py)
+                                if _x2 > _x1 and _y2 > _y1:
+                                    _crop = _simg.crop((_x1,_y1,_x2,_y2))
+                                    _crop.thumbnail((160,160), _Imgx.LANCZOS)
+                                    _buf = _iox.BytesIO()
+                                    _crop.save(_buf, format="JPEG", quality=75)
+                                    _ni["crop_b64"] = _b64x.b64encode(_buf.getvalue()).decode()
+                        except Exception as _ce:
+                            logger.debug(f"[face_scan] crop_b64 생성 실패 p{pg_no}: {_ce}")
                     logger.info(
                         f"[{job_id}] 직접 face scan p{pg_no}: "
                         f"{len(new_items)}건 추가"
