@@ -363,26 +363,27 @@
 
       <!-- 페이지별 탭 -->
       <div id="tab-content-pages" class="p-4">
-        <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
-          <div class="flex gap-2 flex-wrap">
-            <button onclick="filterPages('all')" id="filter-all"
-                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
-            <button onclick="filterPages('violation')" id="filter-violation"
-                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
-            <button onclick="filterPages('caution')" id="filter-caution"
-                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
-            <button onclick="filterPages('clean')" id="filter-clean"
-                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
-          </div>
-          <!-- 인물사진 토글 -->
-          <label id="toggle-person-wrap" class="flex items-center gap-2 cursor-pointer select-none shrink-0 bg-slate-50 border border-slate-200 rounded-full px-3 py-1.5" title="인물사진 탐지 결과 표시/숨김">
-            <span class="text-xs text-slate-500">👤 인물사진</span>
-            <div class="relative w-9 h-5">
+        <!-- 1행: 필터 버튼 + 인물사진 토글 (항상 같은 줄) -->
+        <div class="flex items-center gap-2 mb-3" style="flex-wrap:nowrap; overflow-x:auto;">
+          <button onclick="filterPages('all')" id="filter-all"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium whitespace-nowrap">전체</button>
+          <button onclick="filterPages('violation')" id="filter-violation"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 whitespace-nowrap">위반만</button>
+          <button onclick="filterPages('caution')" id="filter-caution"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 whitespace-nowrap">주의만</button>
+          <button onclick="filterPages('clean')" id="filter-clean"
+                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 whitespace-nowrap">이상없음</button>
+          <!-- 구분선 -->
+          <div class="w-px h-4 bg-slate-200 mx-1 shrink-0"></div>
+          <!-- 인물사진 토글 - 필터 버튼과 같은 행에 항상 표시 -->
+          <label id="toggle-person-wrap" class="flex items-center gap-1.5 cursor-pointer select-none shrink-0 bg-indigo-50 border border-indigo-200 rounded-full px-2.5 py-1 whitespace-nowrap" title="인물사진 탐지 결과 표시/숨김">
+            <span class="text-xs text-slate-500">👤</span>
+            <div class="relative w-8 h-4 shrink-0">
               <input type="checkbox" id="togglePersonDets" class="sr-only" checked onchange="togglePersonDetections(this.checked)">
-              <div class="toggle-track w-9 h-5 bg-indigo-500 rounded-full transition-colors duration-200"></div>
-              <div class="toggle-thumb absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 translate-x-4"></div>
+              <div class="toggle-track w-8 h-4 bg-indigo-500 rounded-full transition-colors duration-200"></div>
+              <div class="toggle-thumb absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform duration-200 translate-x-4"></div>
             </div>
-            <span id="togglePersonLabel" class="text-xs font-medium text-indigo-600">표시중</span>
+            <span id="togglePersonLabel" class="text-xs font-medium text-indigo-600">인물 ON</span>
           </label>
         </div>
         <div id="pageList" class="space-y-3"></div>
@@ -2204,12 +2205,12 @@ function togglePersonDetections(show) {
   const track = document.querySelector('.toggle-track');
   const thumb = document.querySelector('.toggle-thumb');
   if (show) {
-    label.textContent = '표시중';
+    label.textContent = '인물 ON';
     label.className = 'text-xs font-medium text-indigo-600';
     track.classList.replace('bg-slate-300', 'bg-indigo-500');
     thumb.classList.replace('translate-x-0', 'translate-x-4');
   } else {
-    label.textContent = '숨김';
+    label.textContent = '인물 OFF';
     label.className = 'text-xs font-medium text-slate-400';
     track.classList.replace('bg-indigo-500', 'bg-slate-300');
     thumb.classList.replace('translate-x-4', 'translate-x-0');
