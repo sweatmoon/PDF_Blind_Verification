@@ -2111,16 +2111,21 @@ function renderPageList(pages, filter = 'all') {
           affectedBadge = `<span class="text-xs px-1.5 py-0.5 rounded font-medium bg-orange-50 text-orange-600 border border-orange-200 flex-shrink-0" title="이 마스터/레이아웃이 적용된 슬라이드: ${aPages.join(', ')}">📄 ${pageStr} 공통 적용</span>`;
         }
         return `<div class="text-xs px-2.5 py-2 rounded border ${vcls} mb-1">
-          <div class="flex items-center justify-between gap-2 mb-0.5">
-            <span class="font-mono break-all">${d.detected_text ? `"${(d.detected_text).slice(0,150)}"` : (d.image_description ? `[이미지] ${d.image_description}` : '—')}</span>
-            <div class="flex items-center gap-1 flex-shrink-0">
-              ${croppedBadge}
-              ${srcBadge}
-              <span class="text-xs px-1.5 py-0.5 rounded font-medium ${vcls}">${d.verdict}</span>
+          <div class="flex items-start gap-2">
+            ${d.crop_b64 ? `<img src="data:image/jpeg;base64,${d.crop_b64}" class="w-16 h-16 object-cover rounded border border-slate-200 flex-shrink-0" title="인물사진 검출 영역">` : ''}
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-2 mb-0.5">
+                <span class="font-mono break-all">${d.detected_text ? `"${(d.detected_text).slice(0,150)}"` : (d.image_description ? `[이미지] ${d.image_description}` : '—')}</span>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                  ${croppedBadge}
+                  ${srcBadge}
+                  <span class="text-xs px-1.5 py-0.5 rounded font-medium ${vcls}">${d.verdict}</span>
+                </div>
+              </div>
+              ${affectedBadge ? `<div class="mt-1">${affectedBadge}</div>` : ''}
+              ${d.reason ? `<p class="opacity-70 mt-0.5">${d.reason}</p>` : ''}
             </div>
           </div>
-          ${affectedBadge ? `<div class="mt-1">${affectedBadge}</div>` : ''}
-          ${d.reason ? `<p class="opacity-70 mt-0.5">${d.reason}</p>` : ''}
         </div>`;
       }).join('');
 
@@ -3653,11 +3658,16 @@ function dbRenderPages(report, filter) {
         }
         return `
         <div class="ml-4 pl-3 border-l-2 border-slate-200 mb-2 last:mb-0">
-          <div class="flex items-start gap-1.5 flex-wrap">
-            <span class="text-xs font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 break-all">${esc(it.content||'')}</span>
-            <span class="text-xs px-1.5 py-0.5 rounded-full border ${(verdictBg[it.judgment]||'')}">${it.judgment}</span>
-            ${srcBadge}
-            ${affBadge}
+          <div class="flex items-start gap-2">
+            ${it.crop_b64 ? `<img src="data:image/jpeg;base64,${it.crop_b64}" class="w-16 h-16 object-cover rounded border border-slate-200 flex-shrink-0" title="인물사진 검출 영역">` : ''}
+            <div class="flex-1 min-w-0">
+              <div class="flex items-start gap-1.5 flex-wrap">
+                <span class="text-xs font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 break-all">${esc(it.content||'')}</span>
+                <span class="text-xs px-1.5 py-0.5 rounded-full border ${(verdictBg[it.judgment]||'')}">${it.judgment}</span>
+                ${srcBadge}
+                ${affBadge}
+              </div>
+            </div>
           </div>
         </div>`; }).join('');
       return `<div class="border rounded-lg ${typeBg} p-2.5 mb-2 last:mb-0">
