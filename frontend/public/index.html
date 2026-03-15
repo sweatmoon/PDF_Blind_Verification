@@ -32,6 +32,9 @@
     .verdict-위반 { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
     .verdict-주의 { background: #fef3c7; color: #d97706; border: 1px solid #fcd34d; }
     .verdict-허용 { background: #d1fae5; color: #059669; border: 1px solid #6ee7b7; }
+    /* 인물사진 토글 스위치 */
+    #togglePersonDets:not(:checked) ~ .toggle-track { background-color: #cbd5e1; }
+    #togglePersonDets:not(:checked) ~ .toggle-thumb { transform: translateX(0); }
     .status-processing { animation: pulse 1.5s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
     .step-done { color: #059669 !important; }
@@ -369,6 +372,16 @@
                   class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
           <button onclick="filterPages('clean')" id="filter-clean"
                   class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
+          <!-- 인물사진 토글 -->
+          <label id="toggle-person-wrap" class="ml-auto flex items-center gap-2 cursor-pointer select-none" title="인물사진 탐지 결과 표시/숨김">
+            <span class="text-xs text-slate-500">👤 인물사진</span>
+            <div class="relative">
+              <input type="checkbox" id="togglePersonDets" class="sr-only" checked onchange="togglePersonDetections(this.checked)">
+              <div class="toggle-track w-9 h-5 bg-indigo-500 rounded-full transition-colors duration-200"></div>
+              <div class="toggle-thumb absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 translate-x-4"></div>
+            </div>
+            <span id="togglePersonLabel" class="text-xs font-medium text-indigo-600">표시중</span>
+          </label>
         </div>
         <div id="pageList" class="space-y-3"></div>
         <!-- 슬라이드 마스터/레이아웃 구조 검증 결과 (페이지와 별도) -->
@@ -786,6 +799,7 @@ let state = {
   recentJobs:     JSON.parse(localStorage.getItem('recentJobs') || '[]'),
   activeTab:      'pages',
   activeFilter:   'all',
+  showPersonDets:  true,   // 인물사진 탐지 결과 표시 여부
   // 비용 추적
   totalInputTokens:  0,
   totalOutputTokens: 0,
@@ -2014,16 +2028,24 @@ function renderPageList(pages, filter = 'all') {
   }
 
   container.innerHTML = masterHtml + filtered.map(page => {
-    const v = page.violation_count || 0;
-    const c = page.caution_count   || 0;
+    // 인물사진 토글 반영한 실제 표시 카운트 계산
+    const visibleAllDets = state.showPersonDets
+      ? (page.detections || [])
+      : (page.detections || []).filter(d => !((d.detection_type||'').toLowerCase().includes('person_candidate')));
+    const v = visibleAllDets.filter(d => d.verdict === '위반').length;
+    const c = visibleAllDets.filter(d => d.verdict === '주의').length;
     const statusColor = v > 0 ? 'border-red-200 bg-red-50' : c > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50';
     const statusIcon  = v > 0 ? '🔴' : c > 0 ? '🟡' : '🟢';
 
     // ── 유형별로 묶기 ───────────────────────────────────────────
     const dets = page.detections || [];
+    // 인물사진 토글: showPersonDets=false 이면 person_candidate 항목 제외
+    const visibleDets = state.showPersonDets
+      ? dets
+      : dets.filter(d => !((d.detection_type||'').toLowerCase().includes('person_candidate')));
     // 위반/주의와 허용 분리
-    const issueDetList   = dets.filter(d => d.verdict === '위반' || d.verdict === '주의');
-    const allowedDetList = dets.filter(d => d.verdict === '허용');
+    const issueDetList   = visibleDets.filter(d => d.verdict === '위반' || d.verdict === '주의');
+    const allowedDetList = visibleDets.filter(d => d.verdict === '허용');
     const aDetCount = allowedDetList.length;
 
     // 판정 우선순위: 위반 > 주의
@@ -2172,6 +2194,25 @@ function filterPages(filter) {
   document.getElementById(`filter-${filter}`).className =
     'filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium';
   renderPageList(state.currentReport?.page_results || [], filter);
+}
+
+function togglePersonDetections(show) {
+  state.showPersonDets = show;
+  const label = document.getElementById('togglePersonLabel');
+  const track = document.querySelector('.toggle-track');
+  const thumb = document.querySelector('.toggle-thumb');
+  if (show) {
+    label.textContent = '표시중';
+    label.className = 'text-xs font-medium text-indigo-600';
+    track.classList.replace('bg-slate-300', 'bg-indigo-500');
+    thumb.classList.replace('translate-x-0', 'translate-x-4');
+  } else {
+    label.textContent = '숨김';
+    label.className = 'text-xs font-medium text-slate-400';
+    track.classList.replace('bg-indigo-500', 'bg-slate-300');
+    thumb.classList.replace('translate-x-4', 'translate-x-0');
+  }
+  renderPageList(state.currentReport?.page_results || [], state.activeFilter);
 }
 
 function renderMetaContent(pages) {
