@@ -431,14 +431,27 @@ class PPTServerPipeline:
         logo_b64        = _load_logo_b64()
         logo_symbol_b64 = _load_logo_symbol_b64()
 
+        # 6-C 실행 상태 항상 로그 (디버그용)
+        slide_img_count = sum(
+            1 for imgs in slide_images.values()
+            for img_d in imgs if img_d.get("pil") is not None
+        )
+        logger.info(
+            f"[{job_id}] 6-C 시작: logo_ref={'있음' if logo_b64 else '없음'} "
+            f"symbol_ref={'있음' if logo_symbol_b64 else '없음'} "
+            f"slide_img_count={slide_img_count}"
+        )
+
         if logo_b64:
             # ── (a) Slide 본문 이미지 직접 비교 ────────────────────
+            slide_checked = 0
             for slide_idx in range(total):
                 imgs = slide_images.get(slide_idx, [])
                 for img_d in imgs:
                     pil = img_d.get("pil")
                     if pil is None:
                         continue
+                    slide_checked += 1
                     match = verify_pil_against_logo(pil, logo_b64, logo_symbol_b64)
                     if match["matched"]:
                         slide_num   = slide_idx + 1
@@ -478,6 +491,7 @@ class PPTServerPipeline:
                         })
 
             # ── (b) Layout / Master 이미지 직접 비교 ───────────────
+            logger.info(f"[{job_id}] 6-C(a) 슬라이드 직접 비교 완료: {slide_checked}개 이미지 검사")
             try:
                 lm_images = svc.extract_layout_master_images()
                 logger.info(f"[{job_id}] layout/master 이미지 {len(lm_images)}개 추출")
