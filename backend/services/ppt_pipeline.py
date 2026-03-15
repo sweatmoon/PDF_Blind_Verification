@@ -645,7 +645,10 @@ class PPTServerPipeline:
                     page_has_cropped[i + 1] = True
                     break
 
-        merged = _merge_results(rule_hits_by_page, all_vision_items, total, page_has_cropped)
+        merged_result = _merge_results(rule_hits_by_page, all_vision_items, total, page_has_cropped)
+        merged        = merged_result["page_map"]
+        master_items  = merged_result["master_items"]
+        layout_items  = merged_result["layout_items"]
 
         # ── 8. 원본 파일 삭제 ──────────────────────────────────
         svc.close()
@@ -659,7 +662,8 @@ class PPTServerPipeline:
         elapsed = round(time.time() - t0, 2)
         report  = _build_report(
             job_id, filename, total, merged, elapsed,
-            claude_on=claude_on, ocr_on=ocr_on)
+            claude_on=claude_on, ocr_on=ocr_on,
+            master_items=master_items, layout_items=layout_items)
 
         prog(100, "검증 완료")
         logger.info(
@@ -707,8 +711,11 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
     _cropped_pages = page_has_cropped or {}
     _WEIGHT = {"위반": 2, "주의": 1, "허용": 0}
 
+    # ── master / layout 구조 항목 먼저 분리 (page_map에 포함하지 않음) ──
+    non_struct_items = [it for it in vision_items if not it.get("_struct_logo")]
+
     # ── 1~4단계: 공유 필터 파이프라인 ────────────────────────────
-    items = normalize_vision_items(vision_items)
+    items = normalize_vision_items(non_struct_items)
     items = apply_text_fp_filters(items)
     items = apply_logo_filters(items)
     items = apply_face_filters(items)
@@ -816,11 +823,73 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
     for p, dets in page_map.items():
         final[p] = [{k: v for k, v in d.items() if k not in _internal} for d in dets]
 
-    return final
+    # ── master / layout 구조 항목 분리 ───────────────────────────────────────
+    # page_results 와 별도 섹션으로 반환하기 위해 _final_struct 에 담음.
+    # vision_items 원본에서 _struct_logo=True && source in (master, layout) 추출.
+    _struct_master: list[dict] = []
+    _struct_layout: list[dict] = []
+    for it in vision_items:
+        if not it.get("_struct_logo"):
+            continue
+        src = it.get("struct_source") or it.get("source", "")
+        entry = {
+            "type":           it.get("type", "로고 (마스터/레이아웃)"),
+            "content":        it.get("content", ""),
+            "judgment":       it.get("judgment", "위반"),
+            "reason":         it.get("reason", ""),
+            "recommendation": it.get("recommendation", ""),
+            "confidence":     it.get("confidence", 0.9),
+            "affected_pages": it.get("affected_pages", []),
+            "shape_name":     it.get("_shape_name", ""),
+            "logo_case":      it.get("_logo_case", "A"),
+        }
+        if src == "master":
+            _struct_master.append(entry)
+        elif src == "layout":
+            _struct_layout.append(entry)
+
+    return {
+        "page_map":      final,
+        "master_items":  _struct_master,
+        "layout_items":  _struct_layout,
+    }
 
 
 def _build_report(job_id, filename, total_slides, page_map, elapsed,
-                  claude_on=False, ocr_on=True) -> dict:
+                  claude_on=False, ocr_on=True,
+                  master_items: list = None, layout_items: list = None) -> dict:
+    master_items = master_items or []
+    layout_items = layout_items or []
+
+    # ── 마스터 / 레이아웃 결과 섹션 구성 ────────────────────────────
+    def _struct_section(items: list, source_label: str) -> dict:
+        """master_items / layout_items → 리포트 섹션"""
+        detections = []
+        for it in items:
+            detections.append({
+                "detection_type":  it.get("type", "로고"),
+                "detected_text":   it.get("content", ""),
+                "verdict":         it.get("judgment", "위반"),
+                "reason":          it.get("reason", ""),
+                "recommendation":  it.get("recommendation", ""),
+                "confidence":      it.get("confidence", 0.9),
+                "affected_pages":  it.get("affected_pages", []),
+                "shape_name":      it.get("shape_name", ""),
+                "logo_case":       it.get("logo_case", "A"),
+                "source":          source_label,
+            })
+        vc = sum(1 for d in detections if d["verdict"] == "위반")
+        cc = sum(1 for d in detections if d["verdict"] == "주의")
+        return {
+            "source":          source_label,
+            "detections":      detections,
+            "violation_count": vc,
+            "caution_count":   cc,
+        }
+
+    master_section = _struct_section(master_items, "master")
+    layout_section = _struct_section(layout_items, "layout")
+
     page_results = []
     for p in range(1, total_slides + 1):
         dets = page_map.get(p, [])
@@ -840,19 +909,31 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
     cc_total = sum(p["caution_count"]   for p in page_results)
     ac_total = sum(p["allowed_count"]   for p in page_results)
 
+    # 마스터/레이아웃 위반도 전체 카운트에 포함
+    vc_total += master_section["violation_count"] + layout_section["violation_count"]
+    cc_total += master_section["caution_count"]   + layout_section["caution_count"]
+
     if vc_total >= 5:                    risk = "HIGH"
     elif vc_total >= 1 or cc_total >= 5: risk = "MEDIUM"
     else:                                risk = "LOW"
 
     all_dets = [d for pr in page_results for d in pr["detections"]]
+    # 마스터/레이아웃 detections도 notes 판단에 포함
+    all_dets_full = all_dets + master_section["detections"] + layout_section["detections"]
 
     def has_type(t):
-        return any(t in d["detection_type"] and d["verdict"] == "위반" for d in all_dets)
+        return any(t in d["detection_type"] and d["verdict"] == "위반" for d in all_dets_full)
 
     notes = []
     notes.append("업체명 직접 노출 있음"  if has_type("업체") or has_type("회사") else "명확한 업체명 노출 없음")
     notes.append("참여인력 실명 노출 있음" if has_type("인력") or has_type("대표") else "참여인력 실명 없음")
     notes.append("이메일/URL 노출 있음"   if has_type("이메일") or has_type("URL") else "이메일/URL 없음")
+    # 마스터에 로고 탐지 시 별도 노트
+    if master_section["violation_count"] > 0:
+        affected_cnt = sum(len(d.get("affected_pages", [])) for d in master_section["detections"] if d["verdict"] == "위반")
+        notes.append(f"슬라이드 마스터에 로고 포함 — 전체 {affected_cnt}개 슬라이드 영향")
+    if layout_section["violation_count"] > 0:
+        notes.append("슬라이드 레이아웃에 로고 포함")
     if cc_total > 0:
         notes.append(f"간접 식별 가능 표현 {cc_total}건 발견")
 
@@ -895,13 +976,16 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
         "items":                   flat_items,
         "summary_notes":           notes,
         "page_results":            page_results,
+        "master_results":          master_section,   # 슬라이드 마스터 검증 결과 (페이지와 별도)
+        "layout_results":          layout_section,   # 슬라이드 레이아웃 검증 결과
         "summary": {
             "no_company_name": not (has_type("업체") or has_type("회사")),
             "no_personnel":    not (has_type("인력") or has_type("대표")),
             "no_email_url":    not (has_type("이메일") or has_type("URL")),
             "indirect_count":  cc_total,
             "logo_detected":   any("로고" in d["detection_type"] and d["verdict"] != "허용"
-                                   for d in all_dets),
+                                   for d in all_dets_full),
+            "master_logo_detected": master_section["violation_count"] > 0,
             "metadata_clean":  True,
             "notes":           notes,
         },
