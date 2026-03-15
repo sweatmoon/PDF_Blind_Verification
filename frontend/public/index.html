@@ -7,17 +7,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <script>
-    // 빌드 버전 체크 - 구버전 캐시 강제 갱신
-    const _BUILD = '20260315-v9';
-    const _STORED = sessionStorage.getItem('__build');
-    if (_STORED && _STORED !== _BUILD) {
-      sessionStorage.setItem('__build', _BUILD);
-      location.reload(true);
-    } else {
-      sessionStorage.setItem('__build', _BUILD);
-    }
-  </script>
+
   <title>입찰 제안서 블라인드 검증 서비스</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
@@ -46,6 +36,8 @@
     /* 인물사진 토글 스위치 */
     #togglePersonDets:not(:checked) ~ .toggle-track { background-color: #cbd5e1; }
     #togglePersonDets:not(:checked) ~ .toggle-thumb { transform: translateX(0); }
+    #dbTogglePersonDets:not(:checked) ~ .db-toggle-track { background-color: #cbd5e1; }
+    #dbTogglePersonDets:not(:checked) ~ .db-toggle-thumb { transform: translateX(0); }
     .status-processing { animation: pulse 1.5s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
     .step-done { color: #059669 !important; }
@@ -596,11 +588,23 @@
             </div>
             <!-- 페이지별 탭 -->
             <div id="db-tab-pages" class="p-4">
-              <div class="flex gap-2 mb-4 flex-wrap">
-                <button onclick="dbFilterPages('all',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
-                <button onclick="dbFilterPages('violation',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
-                <button onclick="dbFilterPages('caution',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
-                <button onclick="dbFilterPages('clean',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
+              <div class="flex items-center gap-2 mb-4" style="flex-wrap:nowrap; overflow-x:auto;">
+                <button onclick="dbFilterPages('all',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium whitespace-nowrap">전체</button>
+                <button onclick="dbFilterPages('violation',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 whitespace-nowrap">위반만</button>
+                <button onclick="dbFilterPages('caution',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 whitespace-nowrap">주의만</button>
+                <button onclick="dbFilterPages('clean',this)" class="db-filter text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 whitespace-nowrap">이상없음</button>
+                <!-- 구분선 -->
+                <div class="w-px h-4 bg-slate-200 mx-1 shrink-0"></div>
+                <!-- 인물사진 토글 -->
+                <label id="db-toggle-person-wrap" class="flex items-center gap-1.5 cursor-pointer select-none shrink-0 bg-indigo-50 border border-indigo-200 rounded-full px-2.5 py-1 whitespace-nowrap" title="인물사진 탐지 결과 표시/숨김">
+                  <span class="text-xs text-slate-500">👤</span>
+                  <div class="relative w-8 h-4 shrink-0">
+                    <input type="checkbox" id="dbTogglePersonDets" class="sr-only" checked onchange="dbTogglePersonDetections(this.checked)">
+                    <div class="db-toggle-track w-8 h-4 bg-indigo-500 rounded-full transition-colors duration-200"></div>
+                    <div class="db-toggle-thumb absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform duration-200 translate-x-4"></div>
+                  </div>
+                  <span id="dbTogglePersonLabel" class="text-xs font-medium text-indigo-600">인물 ON</span>
+                </label>
               </div>
               <div id="db-pageList" class="space-y-3"></div>
             </div>
@@ -3560,6 +3564,18 @@ function dbFilterPages(f, btn) {
   if (_dbCurrentReport) dbRenderPages(_dbCurrentReport, f);
 }
 
+function dbTogglePersonDetections(show) {
+  state.showPersonDets = show;
+  const label = document.getElementById('dbTogglePersonLabel');
+  const track = document.querySelector('.db-toggle-track');
+  const thumb = document.querySelector('.db-toggle-thumb');
+  if (label) label.textContent = show ? '인물 ON' : '인물 OFF';
+  if (label) label.className = show ? 'text-xs font-medium text-indigo-600' : 'text-xs font-medium text-slate-400';
+  if (track) { track.classList.toggle('bg-indigo-500', show); track.classList.toggle('bg-slate-300', !show); }
+  if (thumb) { thumb.classList.toggle('translate-x-4', show); thumb.classList.toggle('translate-x-0', !show); }
+  if (_dbCurrentReport) dbRenderPages(_dbCurrentReport, _dbFilter);
+}
+
 function dbRenderPages(report, filter) {
   const pageList = document.getElementById('db-pageList');
   pageList.innerHTML = '';
@@ -3610,9 +3626,10 @@ function dbRenderPages(report, filter) {
     const statusColor = vCount > 0 ? '#dc2626' : cCount > 0 ? '#d97706' : '#059669';
     const statusIcon  = vCount > 0 ? 'fa-circle-xmark' : cCount > 0 ? 'fa-circle-exclamation' : 'fa-circle-check';
 
-    // 위반/주의 vs 허용 항목 분리
-    const issueItems   = items.filter(i => i.judgment === '위반' || i.judgment === '주의');
-    const allowedItems = items.filter(i => i.judgment === '허용');
+    // 위반/주의 vs 허용 항목 분리 (인물사진 토글 적용)
+    const visFilter = it => state.showPersonDets || !(it.type||'').toLowerCase().includes('person_candidate');
+    const issueItems   = items.filter(i => (i.judgment === '위반' || i.judgment === '주의') && visFilter(i));
+    const allowedItems = items.filter(i => i.judgment === '허용' && visFilter(i));
     const aCount = allowedItems.length;
 
     // 위반/주의 유형별 그룹화
