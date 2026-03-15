@@ -1832,6 +1832,7 @@ def _verify_face_candidate(
     bbox: Optional[list],
     client=None,
     model: str = "",
+    min_crop_px: int = 48,
 ) -> str:
     """
     인물 사진 후보 bbox 영역을 crop 후 재분류 — 3구간 정책.
@@ -1873,7 +1874,7 @@ def _verify_face_candidate(
 
     # 크기 필터
     _FACE_MIN_PX     = 36     # 얼굴 bbox 최소 크기 (px) ← 40→36 완화
-    _CROP_MIN_PX     = 48     # crop 최소 크기 (px); 미만 → icon_or_silhouette ← 50→48
+    _CROP_MIN_PX     = min_crop_px  # crop 최소 크기 (px); 기본 48, 패스2용 32
 
     # 아이콘/실루엣 필터
     _DOMINANT_RATIO  = 0.72   # 지배색 비율 ≥ 72% → 단색 그래픽 ← 70→72 강화
@@ -1903,7 +1904,7 @@ def _verify_face_candidate(
         if crop_w < _CROP_MIN_PX or crop_h < _CROP_MIN_PX:
             # 원본이 충분히 작은 이미지인지 확인 (작은 증명사진 등)
             # 최대 120px까지 허용 — 80px 제한은 너무 엄격함
-            _is_tiny_source = (crop_w >= 20 and crop_h >= 20 and
+            _is_tiny_source = (crop_w >= 16 and crop_h >= 16 and
                                crop_w <= 120 and crop_h <= 120)
             if _is_tiny_source:
                 # 업스케일해서 계속 진행 (2× 또는 3×)
@@ -2496,6 +2497,8 @@ def scan_slide_for_faces(
     existing_bboxes: Optional[List[list]] = None,
     client=None,
     model: str = "",
+    min_face_size: int = 40,
+    min_crop_px: int = 48,
 ) -> List[dict]:
     """
     슬라이드 전체 이미지에서 얼굴을 직접 탐지해 person_candidate 항목을 생성.
@@ -2509,6 +2512,10 @@ def scan_slide_for_faces(
           unknown            → 스킵 (face not detected = 허용)
       4. existing_bboxes와 IoU > 0.3 겹치는 경우 중복 제거
          (Claude가 이미 잡은 영역은 추가하지 않음)
+
+    파라미터:
+      min_face_size: Haar cascade minSize (기본 40, 패스2용 소형 검출 시 20 권장)
+      min_crop_px:   _verify_face_candidate 최소 crop 크기 (기본 48, 패스2용 32 권장)
 
     반환:
       새로 탐지된 위반 아이템 리스트
@@ -2576,7 +2583,7 @@ def scan_slide_for_faces(
                     gray,
                     scaleFactor=1.05,
                     minNeighbors=5,   # 3→5: 아이콘 오탐 감소
-                    minSize=(40, 40), # 30→40: 너무 작은 영역 제외
+                    minSize=(min_face_size, min_face_size),  # 기본 40, 패스2용 20
                     flags=cv2.CASCADE_SCALE_IMAGE,
                 )
                 if len(faces_haar) > 0:
@@ -2643,7 +2650,7 @@ def scan_slide_for_faces(
             # (x,y,w,h) → (x1,y1,x2,y2) 변환 후 전달
             abs_bbox_x1y1x2y2 = [fx, fy, fx + fw, fy + fh]
 
-            verdict = _verify_face_candidate(page_b64, abs_bbox_x1y1x2y2, client=client, model=model)
+            verdict = _verify_face_candidate(page_b64, abs_bbox_x1y1x2y2, client=client, model=model, min_crop_px=min_crop_px)
             logger.info(
                 f"[face_scan] p{page_no} bbox={fx},{fy},{fw},{fh} "
                 f"→ face_verify={verdict}"

@@ -494,23 +494,28 @@ class PPTServerPipeline:
             logger.info(f"[{job_id}] Claude Vision 완료: {len(all_vision_items)}건")
 
         # ── 6-B. 독립 Face Scan 패스 ───────────────────────────────────
-        # Claude가 person_candidate를 빠뜨린 경우를 보완:
-        # 슬라이드 전체 이미지에서 MediaPipe + Haar로 직접 얼굴을 탐지.
-        # 이미 Claude가 잡은 bbox와 IoU > 0.3 겹치는 경우는 자동 중복 제거.
+        # [패스 1] 슬라이드 합성 이미지 스캔 (기존 방식, 일반 크기 얼굴)
+        # [패스 2] ★NEW: PPT shape 원본 이미지 개별 스캔 (빽빽한 증명사진 대응)
+        #   - slide_images[i] 의 각 PIL shape를 원본 해상도로 직접 face_scan
+        #   - 슬라이드 합성 시 27~34px로 축소되는 증명사진도 원본에서 검출 가능
+        #   - 로고 감별과 동일한 slide_images 데이터 재활용 → 추가 렌더링 비용 없음
+        #   - Claude API 호출 없음 (MediaPipe + Haar 로컬 처리)
+
+        _judge_client = getattr(self.judge, "client", None)
+        _judge_model  = getattr(self.judge, "model", "")
+        direct_scan_items: list[dict] = []
+
+        # 기존 person_candidate bbox 수집 (중복 방지용)
+        existing_pc_bboxes: dict[int, list] = {}
+        for vi in all_vision_items:
+            if vi.get("type") == "person_candidate":
+                pg = int(vi.get("page", 0))
+                bb = vi.get("bbox")
+                if bb:
+                    existing_pc_bboxes.setdefault(pg, []).append(bb)
+
+        # ── 패스 1: 슬라이드 합성 이미지 스캔 (기존) ──────────────────
         if page_images:
-            # 기존 person_candidate bbox 수집 (중복 방지용)
-            existing_pc_bboxes: dict[int, list] = {}
-            for vi in all_vision_items:
-                if vi.get("type") == "person_candidate":
-                    pg = int(vi.get("page", 0))
-                    bb = vi.get("bbox")
-                    if bb:
-                        existing_pc_bboxes.setdefault(pg, []).append(bb)
-
-            direct_scan_items: list[dict] = []
-            _judge_client = getattr(self.judge, "client", None)
-            _judge_model  = getattr(self.judge, "model", "")
-
             for pg_info in page_images:
                 pg_no  = pg_info["page"]
                 pg_b64 = pg_info.get("b64", "")
@@ -526,7 +531,6 @@ class PPTServerPipeline:
                     model=_judge_model,
                 )
                 if new_items:
-                    # face_scan 결과에 crop_b64 즉시 생성 (pg_b64를 직접 가지고 있으므로)
                     for _ni in new_items:
                         try:
                             import base64 as _b64x, io as _iox
@@ -552,20 +556,118 @@ class PPTServerPipeline:
                                     _crop.save(_buf, format="JPEG", quality=75)
                                     _ni["crop_b64"] = _b64x.b64encode(_buf.getvalue()).decode()
                         except Exception as _ce:
-                            logger.warning(f"[face_scan] crop_b64 생성 실패 p{pg_no}: {_ce}")
-                    logger.info(
-                        f"[{job_id}] 직접 face scan p{pg_no}: "
-                        f"{len(new_items)}건 추가"
-                    )
+                            logger.warning(f"[face_scan_p1] crop_b64 실패 p{pg_no}: {_ce}")
+                    logger.info(f"[{job_id}] face_scan 패스1 p{pg_no}: {len(new_items)}건")
                     direct_scan_items.extend(new_items)
+                    # 패스1 결과를 중복 방지 목록에 추가
+                    for _ni in new_items:
+                        _bb = _ni.get("bbox")
+                        if _bb:
+                            existing_pc_bboxes.setdefault(pg_no, []).append(_bb)
 
-            if direct_scan_items:
-                logger.info(
-                    f"[{job_id}] 직접 face scan 합계: {len(direct_scan_items)}건 추가"
+        # ── 패스 2: ★ PPT shape 원본 이미지 개별 스캔 ────────────────
+        # slide_images[slide_idx] 의 각 PIL 이미지를 원본 해상도로 직접 스캔.
+        # 얼굴이 슬라이드 합성 후 27~34px로 축소되어도 원본에서 검출 가능.
+        import base64 as _b64s, io as _ios
+        from PIL import Image as _ImgS
+        _shape_scan_total = 0
+        _shape_scan_found = 0
+        for slide_idx in range(total):
+            pg_no = slide_idx + first_slide_num
+            imgs  = slide_images.get(slide_idx, [])
+            if not imgs:
+                continue
+
+            for img_d in imgs:
+                pil_orig = img_d.get("pil")
+                if pil_orig is None:
+                    continue
+                iw, ih = pil_orig.size
+                # 아이콘/로고 수준(30px 미만)은 스킵
+                if iw < 30 or ih < 30:
+                    continue
+
+                _shape_scan_total += 1
+
+                # 패스2용 이미지 준비
+                # 대형 이미지(슬라이드 전체 합성 이미지 등)는 800px로 축소 처리
+                # → 메모리 절약 + 패스1과 중복 방지
+                pil_for_scan = pil_orig
+                if iw > 800 or ih > 800:
+                    _scale2 = 800 / max(iw, ih)
+                    _nw, _nh = int(iw * _scale2), int(ih * _scale2)
+                    pil_for_scan = pil_orig.resize((_nw, _nh), _ImgS.LANCZOS)
+
+                # PIL → base64
+                try:
+                    _buf_s = _ios.BytesIO()
+                    pil_for_scan.convert("RGB").save(_buf_s, format="JPEG", quality=82)
+                    shape_b64 = _b64s.b64encode(_buf_s.getvalue()).decode()
+                except Exception as _e:
+                    logger.debug(f"[face_scan_p2] p{pg_no} b64변환 실패: {_e}")
+                    continue
+
+                # shape별 스캔 — existing_bboxes는 shape 좌표계가 달라 빈 리스트 전달
+                # min_face_size=20: 개별 shape 원본 해상도에서 작은 얼굴도 검출
+                # min_crop_px=32:   증명사진 격자(27~63px 얼굴)도 통과
+                shape_items = scan_slide_for_faces(
+                    shape_b64,
+                    pg_no,
+                    existing_bboxes=[],
+                    client=_judge_client,
+                    model=_judge_model,
+                    min_face_size=20,
+                    min_crop_px=32,
                 )
-                all_vision_items.extend(direct_scan_items)
-            else:
-                logger.debug(f"[{job_id}] 직접 face scan: 추가 탐지 없음")
+                if not shape_items:
+                    continue
+
+                for _si in shape_items:
+                    # crop_b64: shape 이미지에서 얼굴 영역 crop
+                    try:
+                        _sbbox = _si.get("bbox")
+                        _pil_rgb = pil_orig.convert("RGB")
+                        _sw2, _sh2 = _pil_rgb.size
+                        if _sbbox and len(_sbbox) == 4:
+                            _bx1, _by1, _bx2, _by2 = [float(v) for v in _sbbox]
+                            if max(_bx1, _by1, _bx2, _by2) <= 1.5:
+                                _cx1 = int(_bx1*_sw2); _cy1 = int(_by1*_sh2)
+                                _cx2 = int(_bx2*_sw2); _cy2 = int(_by2*_sh2)
+                            else:
+                                _cx1, _cy1, _cx2, _cy2 = int(_bx1), int(_by1), int(_bx2), int(_by2)
+                            _cpx = int((_cx2-_cx1)*0.15); _cpy = int((_cy2-_cy1)*0.15)
+                            _cx1 = max(0,_cx1-_cpx); _cy1 = max(0,_cy1-_cpy)
+                            _cx2 = min(_sw2,_cx2+_cpx); _cy2 = min(_sh2,_cy2+_cpy)
+                            _crop_s = _pil_rgb.crop((_cx1,_cy1,_cx2,_cy2)) if _cx2>_cx1 and _cy2>_cy1 else _pil_rgb
+                        else:
+                            _crop_s = _pil_rgb
+                        _crop_s.thumbnail((160,160), _ImgS.LANCZOS)
+                        _cbuf = _ios.BytesIO()
+                        _crop_s.save(_cbuf, format="JPEG", quality=75)
+                        _si["crop_b64"] = _b64s.b64encode(_cbuf.getvalue()).decode()
+                    except Exception as _ce2:
+                        logger.debug(f"[face_scan_p2] crop_b64 실패 p{pg_no}: {_ce2}")
+
+                    _si["_shape_direct_scan"] = True
+                    direct_scan_items.append(_si)
+                    _shape_scan_found += 1
+                    existing_pc_bboxes.setdefault(pg_no, [])
+
+                logger.info(
+                    f"[{job_id}] face_scan 패스2 p{pg_no} "
+                    f"shape({iw}×{ih}px): {len(shape_items)}건"
+                )
+
+        logger.info(
+            f"[{job_id}] face_scan 패스2 완료: "
+            f"검사={_shape_scan_total}개 shape, 검출={_shape_scan_found}건"
+        )
+
+        if direct_scan_items:
+            logger.info(f"[{job_id}] face_scan 합계: {len(direct_scan_items)}건 추가")
+            all_vision_items.extend(direct_scan_items)
+        else:
+            logger.debug(f"[{job_id}] face_scan: 추가 탐지 없음")
 
         # ── 6-C. Layout / Master 구조적 로고 탐지 ──────────────────────
         # 렌더링된 슬라이드 이미지가 아닌 PPT 내부 이미지 객체를 직접 추출해 비교.
