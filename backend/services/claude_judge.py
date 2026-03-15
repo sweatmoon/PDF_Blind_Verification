@@ -1771,17 +1771,44 @@ def _verify_face_candidate(
 
         crop_w, crop_h = crop_img.width, crop_img.height
 
-        # ── crop 크기 최소 필터: 48px 미만은 아이콘 압도적 ──────────
+        # ── crop 크기 최소 필터 ───────────────────────────────────────
+        # 규칙: crop이 _CROP_MIN_PX(48px) 미만이면 원칙적으로 아이콘으로 분류.
+        # ★ 예외: 원본 이미지 자체가 작은 경우(≤120px) 는 아이콘이 아닌 작은 실사 사진일 수 있음.
+        #   → 업스케일(최소 2×) 후 계속 검증 진행. bbox 기준도 비례 완화.
+        #   54×69px 증명사진처럼 원본이 작은 경우도 포함.
+        _upscaled = False
         if crop_w < _CROP_MIN_PX or crop_h < _CROP_MIN_PX:
-            logger.info(
-                f"[face_verify] crop 너무 작음 → icon_or_silhouette "
-                f"(crop={crop_w}×{crop_h} < {_CROP_MIN_PX}px)"
-            )
-            alog.log("face_verify", "tiny_crop_icon", {
-                "bbox": bbox, "crop_size": [crop_w, crop_h],
-                "result": "icon_or_silhouette",
-            })
-            return "icon_or_silhouette"
+            # 원본이 충분히 작은 이미지인지 확인 (작은 증명사진 등)
+            # 최대 120px까지 허용 — 80px 제한은 너무 엄격함
+            _is_tiny_source = (crop_w >= 20 and crop_h >= 20 and
+                               crop_w <= 120 and crop_h <= 120)
+            if _is_tiny_source:
+                # 업스케일해서 계속 진행 (2× 또는 3×)
+                _scale = max(2, _CROP_MIN_PX // min(crop_w, crop_h) + 1)
+                _new_w = crop_w * _scale
+                _new_h = crop_h * _scale
+                from PIL import Image as _PILI
+                crop_img = crop_img.resize((_new_w, _new_h), _PILI.LANCZOS)
+                crop_w, crop_h = crop_img.width, crop_img.height
+                _upscaled = True
+                logger.info(
+                    f"[face_verify] 작은 이미지 업스케일 {crop_w}×{crop_h}px "
+                    f"(×{_scale}) → 계속 검증"
+                )
+                alog.log("face_verify", "tiny_upscale", {
+                    "bbox": bbox, "scale": _scale,
+                    "new_size": [crop_w, crop_h],
+                })
+            else:
+                logger.info(
+                    f"[face_verify] crop 너무 작음 → icon_or_silhouette "
+                    f"(crop={crop_w}×{crop_h} < {_CROP_MIN_PX}px)"
+                )
+                alog.log("face_verify", "tiny_crop_icon", {
+                    "bbox": bbox, "crop_size": [crop_w, crop_h],
+                    "result": "icon_or_silhouette",
+                })
+                return "icon_or_silhouette"
 
         # ══ STEP-1: 색상 휴리스틱 사전 필터 ══════════════════════════
         # 단색/실루엣 → 즉시 icon_or_silhouette (MediaPipe 호출 전)
@@ -1953,7 +1980,38 @@ def _verify_face_candidate(
 
         if is_strong:
             # 필터 1: bbox 크기 >= 36px
+            # ★ 업스케일된 작은 이미지의 경우: crop 크기 대비 bbox 비율로 완화 판정
+            #   작은 증명사진(54×69px → 업스케일)에서 bbox가 36px 미달이어도
+            #   crop 대비 50% 이상 차지하면 유효한 얼굴로 인정
             if not bbox_ok:
+                # ★ 완화 조건 (원본 crop이 작은 이미지 — 작은 증명사진 등):
+                #   원본 crop이 ≤ 120px인 경우 bbox가 _FACE_MIN_PX 미달이어도
+                #   아래 조건 중 하나 충족 시 real_photo로 인정:
+                #   - bbox 비율: w 또는 h 중 하나라도 crop의 40% 이상
+                #     (54×69px 원본 → bbox=29×29 → w/crop=0.54, h/crop=0.42 → w_ratio 충족)
+                #   - 업스케일 후 절대크기: 36px 이상 (이미 bbox_ok이면 여기 안 옴)
+                #   ★ _upscaled 조건 제거: 업스케일 없어도 원본 자체가 작으면 적용
+                _is_small_crop = (crop_w <= 120 and crop_h <= 120)
+                _ratio_w = (face_w / crop_w) if crop_w > 0 else 0
+                _ratio_h = (face_h / crop_h) if crop_h > 0 else 0
+                _ratio_ok = (face_w > 0 and face_h > 0 and (_upscaled or _is_small_crop) and (
+                    (_ratio_w >= 0.40 or _ratio_h >= 0.40)
+                ))
+                if _ratio_ok:
+                    logger.info(
+                        f"[face_verify] Case-3: strong conf={mp_conf:.3f} "
+                        f"bbox small({face_w}×{face_h}) but ratio OK "
+                        f"(w={_ratio_w:.2f}, h={_ratio_h:.2f}, small_crop={_is_small_crop}) → real_photo"
+                    )
+                    alog.log("face_verify", "case3_small_ratio_ok", {
+                        "bbox": bbox, "mp_conf": round(mp_conf, 3),
+                        "face_w": face_w, "face_h": face_h,
+                        "crop_w": crop_w, "crop_h": crop_h,
+                        "w_ratio": round(_ratio_w, 3),
+                        "h_ratio": round(_ratio_h, 3),
+                        "result": "real_photo",
+                    })
+                    return "real_photo"
                 logger.info(
                     f"[face_verify] Case-3: strong conf={mp_conf:.3f} "
                     f"but bbox too small ({face_w}×{face_h} < {_FACE_MIN_PX}px) → icon_or_silhouette"
