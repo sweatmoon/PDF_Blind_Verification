@@ -849,8 +849,9 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         p = it.get("_page_int", 1)
 
         # person_candidate 타입이면 bbox crop → crop_b64 생성
-        crop_b64 = None
-        if "person_candidate" in it.get("type", ""):
+        # 이미 face_scan 단계에서 crop_b64가 생성되어 있으면 재사용
+        crop_b64 = it.get("crop_b64")   # face_scan 즉시 생성분 우선 사용
+        if not crop_b64 and "person_candidate" in it.get("type", ""):
             bbox = it.get("bbox")
             slide_b64 = _page_b64_map.get(p)
             logger.info(f"[crop_b64] p{p} bbox={bbox} slide_b64={'있음' if slide_b64 else '없음'} map_keys={list(_page_b64_map.keys())[:8]}")
