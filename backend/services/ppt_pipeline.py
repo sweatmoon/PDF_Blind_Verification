@@ -587,18 +587,17 @@ class PPTServerPipeline:
                         f"(모든 슬라이드에 공통 적용됨)"
                     )
 
-                # 이미 슬라이드 직접 탐지에서 잡힌 경우는 페이지 대표로만 추가 (중복 최소화)
-                for slide_num in affected:
-                    # 같은 슬라이드에 같은 source로 이미 추가된 경우 스킵
-                    dup = any(
-                        it["page"] == slide_num and it.get("struct_source") == source
-                        for it in struct_logo_items
-                    )
-                    if dup:
-                        continue
-
+                # 마스터/레이아웃 로고는 대표 1건만 추가 (모든 슬라이드에 중복 추가 금지)
+                # affected_pages 필드에 영향받는 슬라이드 목록 기록
+                repr_page = affected[0] if affected else 1
+                dup = any(
+                    it.get("struct_source") == source
+                    and it.get("_shape_name") == s_name
+                    for it in struct_logo_items
+                )
+                if not dup:
                     struct_logo_items.append({
-                        "page":           slide_num,
+                        "page":           repr_page,   # 대표 페이지 1개만
                         "type":           det_type,
                         "content":        f"{source.upper()} 이미지 로고 ({match['method']})",
                         "judgment":       verdict,
@@ -607,8 +606,10 @@ class PPTServerPipeline:
                         "confidence":     min(0.95, 0.80 + match["score"] * 0.15),
                         "source":         source,        # "layout" | "master"
                         "struct_source":  source,
+                        "affected_pages": affected,      # 영향받는 슬라이드 전체 목록
                         "_struct_logo":   True,
                         "_logo_case":     match_case,
+                        "_shape_name":    s_name,
                     })
         else:
             logger.info(f"[{job_id}] 로고 레퍼런스 없음 → 구조적 로고 탐지 스킵")
@@ -743,6 +744,7 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
             "confidence":      it.get("confidence",      0.9),
             "source":          it.get("source", "vision"),   # layout/master/slide 보존
             "struct_source":   it.get("struct_source",   ""),
+            "affected_pages":  it.get("affected_pages",  []),  # 마스터/레이아웃 영향 슬라이드
             "cropped":         it.get("_ppt_cropped",    False),
             "_fp_filtered":    it.get("_fp_filtered",    ""),
             "_is_logo":        (
@@ -807,9 +809,9 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                     "_is_logo":        False,
                 })
 
-    # 내부 키 제거 (+ PPT 전용 _ppt_cropped, _struct_logo, _logo_case)
-    # struct_source는 리포트에 포함 (slide/layout/master 출처 표시용)
-    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int", "_struct_logo", "_logo_case")
+    # 내부 키 제거 (+ PPT 전용 _ppt_cropped, _struct_logo, _logo_case, _shape_name)
+    # struct_source, affected_pages는 리포트에 포함 (출처/영향 슬라이드 표시용)
+    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int", "_struct_logo", "_logo_case", "_shape_name")
     final: dict[int, list] = {}
     for p, dets in page_map.items():
         final[p] = [{k: v for k, v in d.items() if k not in _internal} for d in dets]
@@ -872,6 +874,7 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
                 "recommendation": d.get("recommendation", ""),
                 "source":         d.get("source", "rule"),
                 "struct_source":  d.get("struct_source", ""),   # slide|layout|master
+                "affected_pages": d.get("affected_pages", []),  # 마스터/레이아웃 영향 슬라이드
                 "cropped":        d.get("cropped", False),
             })
 
