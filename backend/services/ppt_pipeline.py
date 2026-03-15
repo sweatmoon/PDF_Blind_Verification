@@ -81,7 +81,8 @@ class PPTServerPipeline:
         if not svc.open():
             raise RuntimeError("PPTX 파일을 열 수 없습니다.")
 
-        total     = svc.total_slides
+        total          = svc.total_slides
+        first_slide_num = svc.first_slide_num   # PPT 파일에 설정된 시작 페이지 번호 (기본 1, 0도 가능)
         claude_on = self.judge.enabled and getattr(self.judge, '_client', None) is not None
         ocr_on    = self.ocr.enabled
         gv_on     = self.ocr.use_google_vision
@@ -91,7 +92,7 @@ class PPTServerPipeline:
         if ocr_on:    mode_desc.append("Google Vision OCR" if gv_on else "Tesseract OCR")
         mode_desc.append("규칙 탐지")
 
-        logger.info(f"[{job_id}] {total}슬라이드 | 모드: {' + '.join(mode_desc)}")
+        logger.info(f"[{job_id}] {total}슬라이드 | firstSlideNum={first_slide_num} | 모드: {' + '.join(mode_desc)}")
         prog(8, f"총 {total}슬라이드 · 텍스트 직접 추출 시작…")
 
         # ── 2. 전체 슬라이드 텍스트 직접 추출 ─────────────────
@@ -185,7 +186,7 @@ class PPTServerPipeline:
         rule_hits_by_page: dict[str, list] = {}
 
         for i in range(total):
-            slide_num = i + 1
+            slide_num = i + first_slide_num
             combined_text = slide_texts.get(i, "")
 
             # OCR 텍스트 병합 (크롭 여부도 추적)
@@ -352,7 +353,7 @@ class PPTServerPipeline:
                         return None
                     return _pil_to_b64_jpeg(pil, quality=80)
                 except Exception as e:
-                    logger.warning(f"슬라이드 {idx+1} 렌더링 실패: {e}")
+                    logger.warning(f"슬라이드 {idx+first_slide_num} 렌더링 실패: {e}")
                     return None
 
             RENDER_BATCH = 4
@@ -366,7 +367,7 @@ class PPTServerPipeline:
                 for i, b64 in zip(range(batch_start, batch_end), results):
                     if b64:
                         page_images.append({
-                            "page":       i + 1,
+                            "page":       i + first_slide_num,
                             "b64":        b64,
                             "media_type": "image/jpeg",
                         })
@@ -519,7 +520,7 @@ class PPTServerPipeline:
                     slide_checked += 1
                     match = verify_pil_against_logo(pil, logo_b64, logo_symbol_b64)
                     if match["matched"]:
-                        slide_num   = slide_idx + 1
+                        slide_num   = slide_idx + first_slide_num
                         is_symbol   = match.get("symbol_matched", False)
                         match_case  = match.get("case", "A")  # "A" | "C"
                         verdict     = match.get("verdict", "위반")  # Case C → "주의"
@@ -578,7 +579,7 @@ class PPTServerPipeline:
                         layout_master_map[id(layout)] = mi
 
                 for si, slide in enumerate(svc._slides_list):
-                    slide_num = si + 1
+                    slide_num = si + first_slide_num
                     try:
                         lo = slide.slide_layout
                         li = None
@@ -709,7 +710,7 @@ class PPTServerPipeline:
         for i in range(total):
             for j, img_d in enumerate(slide_images.get(i, [])):
                 if img_d.get("is_cropped", False):
-                    page_has_cropped[i + 1] = True
+                    page_has_cropped[i + first_slide_num] = True
                     break
 
         merged_result = _merge_results(rule_hits_by_page, all_vision_items, total, page_has_cropped)
@@ -734,7 +735,8 @@ class PPTServerPipeline:
         report  = _build_report(
             job_id, filename, total, merged, elapsed,
             claude_on=claude_on, ocr_on=ocr_on,
-            master_items=master_items, layout_items=layout_items)
+            master_items=master_items, layout_items=layout_items,
+            first_slide_num=first_slide_num)
 
         prog(100, "검증 완료")
         logger.info(
@@ -928,7 +930,8 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
 
 def _build_report(job_id, filename, total_slides, page_map, elapsed,
                   claude_on=False, ocr_on=True,
-                  master_items: list = None, layout_items: list = None) -> dict:
+                  master_items: list = None, layout_items: list = None,
+                  first_slide_num: int = 1) -> dict:
     master_items = master_items or []
     layout_items = layout_items or []
 
@@ -998,7 +1001,7 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
         "allowed_count":   s_ac,
     })
 
-    for p in range(1, total_slides + 1):
+    for p in range(first_slide_num, first_slide_num + total_slides):
         dets = page_map.get(p, [])
         vc = sum(1 for d in dets if d["verdict"] == "위반")
         cc = sum(1 for d in dets if d["verdict"] == "주의")
@@ -1069,6 +1072,7 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
         "filename":                filename,
         "total_pages":             total_slides,
         "page_count":              total_slides,
+        "first_slide_num":         first_slide_num,   # PPT 파일에 설정된 시작 슬라이드 번호
         "processing_time_seconds": elapsed,
         "elapsed_sec":             elapsed,
         "created_at":              now_kst_iso(),

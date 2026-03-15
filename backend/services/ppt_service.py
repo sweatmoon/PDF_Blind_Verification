@@ -58,11 +58,28 @@ class PPTService:
             # → 슬라이드를 미리 list로 캐싱해 안전하게 접근
             self._slides_list = list(self._prs.slides)
             self.metadata     = self._extract_metadata()
-            logger.info(f"PPTX 열기: {self.total_slides}슬라이드")
+            # presentation.xml 의 firstSlideNum 읽기
+            # PowerPoint [디자인 → 슬라이드 크기 → 시작 슬라이드 번호] 에서 사용자가 설정한 값
+            # 없으면 기본값 1 (MS PowerPoint 표준)
+            self.first_slide_num = self._read_first_slide_num()
+            logger.info(f"PPTX 열기: {self.total_slides}슬라이드, firstSlideNum={self.first_slide_num}")
             return True
         except Exception as e:
             logger.error(f"PPTX 열기 실패: {e}")
             return False
+
+    def _read_first_slide_num(self) -> int:
+        """presentation.xml 에서 firstSlideNum 속성을 읽어 반환한다.
+        없으면 1 (PowerPoint 기본값) 반환.
+        """
+        try:
+            import zipfile, re
+            with zipfile.ZipFile(str(self.path), 'r') as z:
+                xml = z.read('ppt/presentation.xml').decode('utf-8', errors='replace')
+            m = re.search(r'firstSlideNum="(\d+)"', xml)
+            return int(m.group(1)) if m else 1
+        except Exception:
+            return 1
 
     def close(self):
         self._prs = None
