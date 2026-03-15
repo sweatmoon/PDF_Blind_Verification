@@ -2156,9 +2156,12 @@ function renderPageList(pages, filter = 'all') {
             ? `<span class="text-xs px-1 py-0.5 rounded bg-slate-100 text-slate-400 border border-slate-200">크롭숨김</span>`
             : '';
           return `<div class="ml-4 pl-3 border-l-2 border-green-200 mb-1.5 last:mb-0">
-            <div class="flex items-start gap-1.5 flex-wrap text-xs">
-              <span class="font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 break-all">${d.detected_text ? `"${d.detected_text.slice(0,120)}"` : '—'}</span>
-              ${croppedBadge}${srcBadge}
+            <div class="flex items-start gap-2 text-xs">
+              ${d.crop_b64 ? `<img src="data:image/jpeg;base64,${d.crop_b64}" class="w-14 h-14 object-cover rounded border border-green-200 flex-shrink-0" title="인물사진 검출 영역">` : ''}
+              <div class="flex items-start gap-1.5 flex-wrap">
+                <span class="font-mono bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 break-all">${d.detected_text ? `"${d.detected_text.slice(0,120)}"` : '—'}</span>
+                ${croppedBadge}${srcBadge}
+              </div>
             </div>
           </div>`;
         }).join('');

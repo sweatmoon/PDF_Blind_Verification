@@ -2328,6 +2328,31 @@ def _post_process_faces(
                 it["reason"]          = "그래픽/아이콘 키워드 확인 → MediaPipe 생략 후 즉시 허용"
                 it["recommendation"]  = ""
                 it["_face_reverified"] = True
+                # crop_b64 생성 (허용이어도 썸네일은 표시)
+                try:
+                    import base64 as _b64c, io as _ioc
+                    from PIL import Image as _Imgc
+                    if page_b64 and bbox:
+                        _raw = _b64c.b64decode(page_b64)
+                        _simg = _Imgc.open(_ioc.BytesIO(_raw)).convert("RGB")
+                        _sw, _sh = _simg.size
+                        _bx1, _by1, _bx2, _by2 = [float(v) for v in bbox]
+                        if max(_bx1, _by1, _bx2, _by2) <= 1.5:
+                            _x1, _y1 = int(_bx1*_sw), int(_by1*_sh)
+                            _x2, _y2 = int(_bx2*_sw), int(_by2*_sh)
+                        else:
+                            _x1, _y1, _x2, _y2 = int(_bx1), int(_by1), int(_bx2), int(_by2)
+                        _px = int((_x2-_x1)*0.15); _py = int((_y2-_y1)*0.15)
+                        _x1 = max(0,_x1-_px); _y1 = max(0,_y1-_py)
+                        _x2 = min(_sw,_x2+_px); _y2 = min(_sh,_y2+_py)
+                        if _x2 > _x1 and _y2 > _y1:
+                            _crop = _simg.crop((_x1,_y1,_x2,_y2))
+                            _crop.thumbnail((160,160), _Imgc.LANCZOS)
+                            _buf = _ioc.BytesIO()
+                            _crop.save(_buf, format="JPEG", quality=75)
+                            it["crop_b64"] = _b64c.b64encode(_buf.getvalue()).decode()
+                except Exception:
+                    pass
                 logger.info(
                     f"[face_post] 그래픽 키워드 선체크 → 허용: "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
@@ -2362,6 +2387,31 @@ def _post_process_faces(
                 it["reason"]         = "얼굴 미검출(아이콘/실루엣/그래픽) — MediaPipe 재검증 결과 허용"
                 it["recommendation"] = ""
                 it["_face_reverified"] = True
+                # crop_b64 생성 (허용이어도 썸네일은 표시)
+                try:
+                    import base64 as _b64c, io as _ioc
+                    from PIL import Image as _Imgc
+                    if page_b64 and bbox:
+                        _raw = _b64c.b64decode(page_b64)
+                        _simg = _Imgc.open(_ioc.BytesIO(_raw)).convert("RGB")
+                        _sw, _sh = _simg.size
+                        _bx1, _by1, _bx2, _by2 = [float(v) for v in bbox]
+                        if max(_bx1, _by1, _bx2, _by2) <= 1.5:
+                            _x1, _y1 = int(_bx1*_sw), int(_by1*_sh)
+                            _x2, _y2 = int(_bx2*_sw), int(_by2*_sh)
+                        else:
+                            _x1, _y1, _x2, _y2 = int(_bx1), int(_by1), int(_bx2), int(_by2)
+                        _px = int((_x2-_x1)*0.15); _py = int((_y2-_y1)*0.15)
+                        _x1 = max(0,_x1-_px); _y1 = max(0,_y1-_py)
+                        _x2 = min(_sw,_x2+_px); _y2 = min(_sh,_y2+_py)
+                        if _x2 > _x1 and _y2 > _y1:
+                            _crop = _simg.crop((_x1,_y1,_x2,_y2))
+                            _crop.thumbnail((160,160), _Imgc.LANCZOS)
+                            _buf = _ioc.BytesIO()
+                            _crop.save(_buf, format="JPEG", quality=75)
+                            it["crop_b64"] = _b64c.b64encode(_buf.getvalue()).decode()
+                except Exception:
+                    pass
                 logger.info(
                     f"[face_post] 얼굴 없음 → 허용(아이콘/그래픽): "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
@@ -2377,6 +2427,31 @@ def _post_process_faces(
                 it["reason"]         = "얼굴 미검출(판정 불충분) — MediaPipe 재검증에서 얼굴 확인 불가, 허용 처리"
                 it["recommendation"] = ""
                 it["_face_reverified"] = True
+                # crop_b64 생성 (허용이어도 썸네일은 표시)
+                try:
+                    import base64 as _b64c, io as _ioc
+                    from PIL import Image as _Imgc
+                    if page_b64 and bbox:
+                        _raw = _b64c.b64decode(page_b64)
+                        _simg = _Imgc.open(_ioc.BytesIO(_raw)).convert("RGB")
+                        _sw, _sh = _simg.size
+                        _bx1, _by1, _bx2, _by2 = [float(v) for v in bbox]
+                        if max(_bx1, _by1, _bx2, _by2) <= 1.5:
+                            _x1, _y1 = int(_bx1*_sw), int(_by1*_sh)
+                            _x2, _y2 = int(_bx2*_sw), int(_by2*_sh)
+                        else:
+                            _x1, _y1, _x2, _y2 = int(_bx1), int(_by1), int(_bx2), int(_by2)
+                        _px = int((_x2-_x1)*0.15); _py = int((_y2-_y1)*0.15)
+                        _x1 = max(0,_x1-_px); _y1 = max(0,_y1-_py)
+                        _x2 = min(_sw,_x2+_px); _y2 = min(_sh,_y2+_py)
+                        if _x2 > _x1 and _y2 > _y1:
+                            _crop = _simg.crop((_x1,_y1,_x2,_y2))
+                            _crop.thumbnail((160,160), _Imgc.LANCZOS)
+                            _buf = _ioc.BytesIO()
+                            _crop.save(_buf, format="JPEG", quality=75)
+                            it["crop_b64"] = _b64c.b64encode(_buf.getvalue()).decode()
+                except Exception:
+                    pass
                 logger.info(
                     f"[face_post] unknown → 허용(얼굴 미확인): "
                     f"p{page_num} '{it.get('content', '')[:40]}'"
