@@ -869,7 +869,25 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
     _WEIGHT = {"위반": 2, "주의": 1, "허용": 0}
 
     # ── master / layout 구조 항목 먼저 분리 (page_map에 포함하지 않음) ──
-    non_struct_items = [it for it in vision_items if not it.get("_struct_logo")]
+    # ★ struct_source="slide" 인 직접 비교 로고는 page_map에 포함해야 하므로 분리하지 않음
+    non_struct_items = [
+        it for it in vision_items
+        if not it.get("_struct_logo") or it.get("struct_source") == "slide"
+    ]
+    # slide 직접 비교 로고 항목은 content 중복 가능성 있음 (같은 method로 여러 이미지 매칭)
+    # → content에 이미지 인덱스를 추가해 (page, type, content) 키가 달라지도록 처리
+    _slide_logo_seen: dict[tuple, int] = {}  # (page, type) → count
+    _patched = []
+    for it in non_struct_items:
+        if it.get("_struct_logo") and it.get("struct_source") == "slide":
+            key = (it.get("page", 0), it.get("type", ""))
+            cnt = _slide_logo_seen.get(key, 0)
+            if cnt > 0:
+                it = dict(it)
+                it["content"] = f"{it.get('content', '')} #{cnt+1}"
+            _slide_logo_seen[key] = cnt + 1
+        _patched.append(it)
+    non_struct_items = _patched
 
     # ── 1~4단계: 공유 필터 파이프라인 ────────────────────────────
     items = normalize_vision_items(non_struct_items)
