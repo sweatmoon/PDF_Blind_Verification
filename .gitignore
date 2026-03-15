@@ -11,7 +11,7 @@ dist/
 *.zip
 .DS_Store
 data/reports/
-data/logo_reference.png
 data/vision_api_key.txt
 data/claude_api_key.txt
+# logo_reference.png 는 git 포함 (Railway 배포용)
 logs/
