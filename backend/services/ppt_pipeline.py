@@ -24,7 +24,7 @@ logger = get_logger("ppt_pipeline")
 
 PAGES_PER_BATCH = 1    # Claude Vision 배치당 슬라이드 수 (1=오탐 방지)
 GV_BATCH_SIZE   = 16   # Google Vision 배치당 최대 이미지 수
-MAX_IMG_OCR     = 10   # 슬라이드당 이미지 OCR 최대 개수
+MAX_IMG_OCR     = 50   # 슬라이드당 이미지 OCR 최대 개수 (이전: 10 → 50으로 상향, 실제 슬라이드당 최대 23개 확인)
 _executor = ThreadPoolExecutor(max_workers=8)
 
 
