@@ -2141,7 +2141,7 @@ function renderPageList(pages, filter = 'all') {
       <div class="flex items-center gap-3 p-3">
         <span class="text-lg">${statusIcon}</span>
         <div class="flex-1">
-          <span class="font-semibold text-slate-700 text-sm">${page.page_number}페이지</span>
+          <span class="font-semibold text-slate-700 text-sm">${page.page_number === -1 ? '마스터/레이아웃' : page.page_number === 0 ? '메타데이터' : `${page.page_number}페이지`}</span>
           ${v > 0 ? `<span class="ml-2 text-xs text-red-600">${v}건 위반</span>` : ''}
           ${c > 0 ? `<span class="ml-1 text-xs text-amber-600">${c}건 주의</span>` : ''}
           ${aDetCount > 0 && v === 0 && c === 0 ? `<span class="ml-1 text-xs text-green-600">오탐제외 ${aDetCount}</span>` : ''}
@@ -2283,7 +2283,7 @@ function buildHTMLReport(r) {
   let rows = '';
   for (const pg of r.page_results || []) {
     const pn = pg.page_number || 0;
-    const label = pn === 0 ? '메타데이터' : `${pn}페이지`;
+    const label = pn === -1 ? '마스터/레이아웃' : pn === 0 ? '메타데이터' : `${pn}페이지`;
     for (const d of pg.detections || []) {
       const v = d.verdict || '';
       const vc2 = {위반:'#ef4444',주의:'#f59e0b',허용:'#10b981'}[v] || '#6b7280';
@@ -3655,7 +3655,7 @@ function dbRenderPages(report, filter) {
            onclick="this.nextElementSibling.classList.toggle('hidden')">
         <div class="flex items-center gap-2">
           <i class="fas ${statusIcon} text-sm" style="color:${statusColor}"></i>
-          <span class="text-sm font-semibold text-slate-700">${p}페이지</span>
+          <span class="text-sm font-semibold text-slate-700">${p === -1 ? '마스터/레이아웃' : p === 0 ? '메타데이터' : `${p}페이지`}</span>
           ${vCount > 0 ? `<span class="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded-full">위반 ${vCount}</span>` : ''}
           ${cCount > 0 ? `<span class="text-xs text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">주의 ${cCount}</span>` : ''}
           ${aCount > 0 && vCount === 0 && cCount === 0 ? `<span class="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">오탐제외 ${aCount}</span>` : ''}
