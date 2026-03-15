@@ -120,44 +120,32 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - bbox를 특정할 수 없어도 최대한 추정값을 포함하라 (null 사용 지양)
 - bbox가 없으면 후처리 MediaPipe 검증을 수행할 수 없어 오탐 방지가 불가능해짐
 
-━━━ 우선순위 4-B — 회사 로고 판정 (매우 보수적으로) ━━━
+━━━ 우선순위 4-B — 회사 로고 판정 (1차 후보 탐지 전용) ━━━
 
-【로고 위반 판정 조건 — 아래 4가지 모두 충족해야만 위반】
-1. 레퍼런스 로고의 심볼 형태가 명확히 동일
-2. 워드마크 텍스트가 동일
-3. 색상 패턴이 동일
-4. 레이아웃 구조가 동일
-→ 위 조건 중 하나라도 불명확하면 반드시 【허용】으로 판정
+★★★ 로고 판정의 핵심 원칙 ★★★
+- Claude는 로고에 대해 절대로 최종 위반/허용 판정을 내리지 않는다.
+- 로고가 의심되면 반드시 type="logo_candidate", judgment="주의"로만 반환한다.
+- 최종 판정(위반/허용)은 서버에서 pHash/SSIM/ORB/심볼 비교로 결정된다.
+- reason 필드에 "위반 확정", "레퍼런스 일치" 등 최종 판정 언어를 사용하지 마라.
 
-【로고 절대 위반 불가 대상】
-다음 기관의 로고는 제안사 로고로 절대 판정하지 마라:
-- 국가철도공단(KR), 행정안전부, LH, 한국토지주택공사, 한국전력(KEPCO)
-- 한국도로공사, 한국수자원공사, 한국철도공사(코레일), 국민건강보험공단
-- 기타 모든 공공기관·정부기관·발주기관 로고 → 항상 【허용】
+【로고 후보 탐지 조건 — 아래 중 하나라도 의심되면 logo_candidate 반환】
+1. 회사 심볼/워드마크처럼 보이는 시각 요소가 있음
+2. 색상+도형 조합이 기업 로고 형태를 띔
+3. 하단/구석에 CI/BI 형태의 이미지가 보임
 
-【로고가 아닌 것 — 절대 로고로 판정 금지】
-다음 요소는 회사 로고가 아니다:
-- 강조 표시용 빨간 원 (발표 강조, 마킹 표시)
-- 다이어그램 배지 (번호 표시, 단계 아이콘)
-- UI 강조 도형 (버튼, 뱃지, 태그)
-- 인포그래픽 아이콘 (화살표, 체크마크, 도형)
-- 단순 원형·사각형·다각형 그래픽
-- 슬라이드 장식 요소
+【로고 후보 제외 — 절대 logo_candidate로 반환 금지】
+- 공공기관·정부기관·발주기관 로고 (항상 허용, 반환 자체 금지)
+- 강조 표시용 빨간 원, 다이어그램 배지, UI 도형, 인포그래픽 아이콘
+- 단순 원형·사각형·다각형 그래픽, 슬라이드 장식 요소
 
-【우측하단 영역】
-우측하단은 참고적으로만 확인하라.
-실제 회사명 또는 레퍼런스 로고가 명확히 보이지 않으면 로고 위반으로 절대 판정하지 마라.
-단순 도형, 배경 요소, 저작권 표시 등은 위반 아님.
+【로고 후보 필수 bbox 포함】
+- 로고 후보 탐지 시 반드시 bbox=[x1,y1,x2,y2]를 포함하라.
+- bbox 없으면 서버 재비교 불가 → 탐지 의미 없음.
 
-【로고 레퍼런스가 있는 경우】
-- 이 분석은 1차 후보 탐지이다. 로고가 의심되면 type="로고후보"로 표시하라.
-- 최종 위반 판정은 후보 영역 crop 후 재비교로 결정된다.
-- 레퍼런스와 형태·워드마크·색상·레이아웃이 모두 명확히 일치해야만 type="로고" 위반으로 표시 가능
-- 발주기관·공공기관 로고는 절대 위반 아님
-
-【로고 레퍼런스가 없는 경우】
-- 사전에 등록된 회사명이 로고 형태로 명확히 보이면 → 【주의】 (위반 아님)
-- 레퍼런스 없이 로고라고 단정 짓는 것 금지
+【출력 규칙】
+- 모든 로고 의심 요소: type="logo_candidate", judgment="주의"
+- 공공기관 로고: 반환 자체 금지 (items에 포함하지 마라)
+- 로고 관련 최종 위반/허용 판정 문구 reason에 절대 포함 금지
 
 ━━━ 우선순위 5 — 간접 식별 정보 (주의) ━━━
 - 사전 등록 솔루션명·슬로건·색상명·조직명이 보이면 → 【주의】
@@ -216,8 +204,10 @@ SYSTEM_PROMPT = """너는 공공입찰 제안서 블라인드 검증 전문 심�
 - 인물 후보는 반드시 type="person_candidate", judgment="주의"로만 반환 (위반/허용 판정 금지)
 - 최종 위반/허용 판정은 서버 후처리에서 MediaPipe Face Detection으로 결정됨
 - 한 페이지에 위반 요소 N개면 items 배열에 N개 항목
-- 로고 후보(1차 탐지)는 type="로고후보"로 표시하고 judgment="주의"로 설정
-- 최종 위반 확정은 코드에서 bbox crop 후 SSIM/ORB 재비교로 결정
+- 로고 후보(1차 탐지)는 type="logo_candidate"로 표시하고 judgment="주의"로 설정
+- 로고 최종 판정(위반/허용)은 서버에서 bbox crop 후 pHash/SSIM/ORB/심볼 재비교로 결정
+- Claude는 로고에 대해 위반/허용 판정을 내리지 않는다 (항상 "주의"만 허용)
+- 공공기관 로고는 반환 자체 금지 (items에 포함하지 마라)
 - 인물 후보는 type="person_candidate", judgment="주의"로만 반환 (위반/허용 판정 금지)
 - 인물 최종 위반/허용 확정은 서버에서 bbox crop 후 MediaPipe Face Detection으로 결정
 - 문제 없는 페이지는 포함하지 않아도 된다
@@ -384,16 +374,25 @@ def verify_pil_against_logo(
 
     반환:
       {
-        "matched":   bool,   # True = 로고 일치 (위반)
-        "method":    str,    # "phash" | "ssim" | "orb" | "red_mask" | "symbol" | "none"
-        "score":     float,  # 매칭 스코어 (0~1 또는 pHash distance)
-        "symbol_matched": bool,  # 심볼 레퍼런스 매칭 여부 (추가)
+        "matched":        bool,   # True = 로고 일치
+        "case":           str,    # "A"=전체일치(위반), "C"=심볼만일치(주의), "none"=불일치(허용)
+        "method":         str,    # "phash" | "ssim" | "orb" | "red_mask" | "symbol" | "none"
+        "score":          float,  # 매칭 스코어 (0~1 또는 pHash distance)
+        "symbol_matched": bool,   # 심볼 레퍼런스 매칭 여부
+        "verdict":        str,    # "위반" | "주의" | "허용" — 권고 판정
       }
+
+    Case A (전체 로고 일치):  matched=True, case="A", verdict="위반"
+    Case C (심볼만 일치):     matched=True, case="C", verdict="주의"  ← symbol_matched=True
+    불일치:                   matched=False, case="none", verdict="허용"
     """
     import numpy as np
     from PIL import Image
 
-    result = {"matched": False, "method": "none", "score": 0.0, "symbol_matched": False}
+    result = {
+        "matched": False, "case": "none", "method": "none",
+        "score": 0.0, "symbol_matched": False, "verdict": "허용",
+    }
     try:
         ref_bytes = base64.b64decode(logo_ref_b64)
         ref_img   = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
@@ -407,8 +406,9 @@ def verify_pil_against_logo(
         # ── 0단계: pHash ────────────────────────────────────────────
         phash_dist = _compare_phash(ref_img, crop_img)
         if 0.0 <= phash_dist <= _PHASH_MATCH_THRESHOLD:
-            result.update(matched=True, method="phash", score=float(phash_dist))
-            logger.info(f"[직접비교] pHash={phash_dist:.0f} → 로고 일치")
+            result.update(matched=True, case="A", method="phash",
+                          score=float(phash_dist), verdict="위반")
+            logger.info(f"[직접비교] pHash={phash_dist:.0f} → Case A 전체 로고 일치")
             return result
 
         # ── 공통 resize ─────────────────────────────────────────────
@@ -422,15 +422,17 @@ def verify_pil_against_logo(
         # ── 1단계: SSIM ─────────────────────────────────────────────
         ssim_score = _compute_ssim(ref_np, crop_np)
         if ssim_score >= _LOGO_SIM_THRESHOLD:
-            result.update(matched=True, method="ssim", score=round(ssim_score, 3))
-            logger.info(f"[직접비교] SSIM={ssim_score:.3f} → 로고 일치")
+            result.update(matched=True, case="A", method="ssim",
+                          score=round(ssim_score, 3), verdict="위반")
+            logger.info(f"[직접비교] SSIM={ssim_score:.3f} → Case A 전체 로고 일치")
             return result
 
         # ── 2단계: ORB ──────────────────────────────────────────────
         orb_score = _compute_orb(ref_np, crop_np)
         if orb_score >= _LOGO_SIM_THRESHOLD:
-            result.update(matched=True, method="orb", score=round(orb_score, 3))
-            logger.info(f"[직접비교] ORB={orb_score:.3f} → 로고 일치")
+            result.update(matched=True, case="A", method="orb",
+                          score=round(orb_score, 3), verdict="위반")
+            logger.info(f"[직접비교] ORB={orb_score:.3f} → Case A 전체 로고 일치")
             return result
 
         # ── 3단계: red_mask SSIM ────────────────────────────────────
@@ -438,11 +440,13 @@ def verify_pil_against_logo(
             np.array(ref_img), np.array(crop_img)
         )
         if red_score >= _LOGO_SIM_THRESHOLD:
-            result.update(matched=True, method="red_mask", score=round(red_score, 3))
-            logger.info(f"[직접비교] red_mask={red_score:.3f} → 로고 일치")
+            result.update(matched=True, case="A", method="red_mask",
+                          score=round(red_score, 3), verdict="위반")
+            logger.info(f"[직접비교] red_mask={red_score:.3f} → Case A 전체 로고 일치")
             return result
 
         # ── 4단계: 심볼 레퍼런스 비교 (있을 때만) ───────────────────
+        # 전체 로고 불일치이므로 심볼 일치 = Case C (주의)
         if logo_sym_b64:
             sym_bytes = base64.b64decode(logo_sym_b64)
             sym_img   = Image.open(io.BytesIO(sym_bytes)).convert("RGB")
@@ -459,9 +463,14 @@ def verify_pil_against_logo(
             )
             best_sym = max(sym_ssim, sym_orb, sym_red)
             if best_sym >= _LOGO_SIM_THRESHOLD:
+                # Case C: 심볼만 일치 → 주의 (위반 아님)
                 result["symbol_matched"] = True
-                result.update(matched=True, method="symbol", score=round(best_sym, 3))
-                logger.info(f"[직접비교] symbol best={best_sym:.3f} → 심볼 로고 일치")
+                result.update(matched=True, case="C", method="symbol",
+                              score=round(best_sym, 3), verdict="주의")
+                logger.info(
+                    f"[직접비교] symbol best={best_sym:.3f} "
+                    f"→ Case C 심볼만 일치 (주의, 워드마크 미확인)"
+                )
                 return result
 
         logger.debug(
@@ -1726,6 +1735,17 @@ class ClaudeVisionJudge:
                 if it["judgment"] not in valid_judgments:
                     it["judgment"] = "주의"
 
+                # 검증 2-B: logo_candidate / 로고후보 타입은 항상 "주의"
+                # (Claude가 실수로 위반/허용을 반환해도 서버에서 교정 → 후처리 파이프라인 담당)
+                dtype_lower = str(it.get("type", "")).lower()
+                if "logo_candidate" in dtype_lower or "로고후보" in dtype_lower:
+                    if it["judgment"] != "주의":
+                        logger.debug(
+                            f"[파서] logo_candidate judgment 교정: "
+                            f"'{it['judgment']}' → '주의' (type='{it.get('type')}')"
+                        )
+                        it["judgment"] = "주의"
+
                 # 검증 3: content가 비어있는 항목 제거
                 if not str(it["content"]).strip():
                     continue
@@ -1744,7 +1764,10 @@ def _is_logo_type(text: str) -> bool:
     if not text:
         return False
     t = text.lower()
-    return any(kw in t for kw in ("로고", "logo", "ci", "bi", "브랜드", "brand", "심볼", "symbol", "로고후보"))
+    return any(kw in t for kw in (
+        "로고", "logo", "ci", "bi", "브랜드", "brand",
+        "심볼", "symbol", "로고후보", "logo_candidate",
+    ))
 
 
 # ── 얼굴/인물사진 후처리 필터 ────────────────────────────────────

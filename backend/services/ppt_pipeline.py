@@ -441,24 +441,40 @@ class PPTServerPipeline:
                         continue
                     match = verify_pil_against_logo(pil, logo_b64, logo_symbol_b64)
                     if match["matched"]:
-                        slide_num = slide_idx + 1
-                        is_symbol = match.get("symbol_matched", False)
-                        det_type  = "심볼기반 로고" if is_symbol else "로고 (직접)"
+                        slide_num   = slide_idx + 1
+                        is_symbol   = match.get("symbol_matched", False)
+                        match_case  = match.get("case", "A")  # "A" | "C"
+                        verdict     = match.get("verdict", "위반")  # Case C → "주의"
+                        det_type    = "심볼기반 로고" if is_symbol else "로고 (직접)"
                         logger.info(
                             f"[{job_id}] 구조 로고 탐지 slide p{slide_num} "
-                            f"method={match['method']} score={match['score']}"
+                            f"case={match_case} method={match['method']} "
+                            f"score={match['score']} → {verdict}"
                         )
+                        if match_case == "C":
+                            reason = (
+                                f"[Case C] 슬라이드 본문 이미지: 심볼 유사 (유사도 {match['score']:.2f}) "
+                                f"but 전체 로고 불일치 — 수동 확인 필요"
+                            )
+                            recommendation = "워드마크 포함 여부를 직접 확인하세요. 워드마크 있으면 위반."
+                        else:
+                            reason = (
+                                f"[Case A] 슬라이드 본문 이미지: 레퍼런스 로고 검출 "
+                                f"(유사도 {match['score']:.2f})"
+                            )
+                            recommendation = "해당 이미지를 슬라이드에서 제거하거나 교체하세요."
                         struct_logo_items.append({
                             "page":           slide_num,
                             "type":           det_type,
                             "content":        f"슬라이드 내장 이미지 로고 ({match['method']})",
-                            "judgment":       "위반",
-                            "reason":         f"슬라이드 본문 이미지에서 레퍼런스 로고 검출 (유사도 {match['score']:.2f})",
-                            "recommendation": "해당 이미지를 슬라이드에서 제거하거나 교체하세요.",
+                            "judgment":       verdict,
+                            "reason":         reason,
+                            "recommendation": recommendation,
                             "confidence":     min(0.95, 0.75 + match["score"] * 0.2),
                             "source":         "slide",
                             "struct_source":  "slide",
                             "_struct_logo":   True,
+                            "_logo_case":     match_case,
                         })
 
             # ── (b) Layout / Master 이미지 직접 비교 ───────────────
@@ -525,14 +541,37 @@ class PPTServerPipeline:
                     # 매핑 실패 시 전체 슬라이드에 경고 (1번 페이지로 대표)
                     affected = [1]
 
-                is_symbol = match.get("symbol_matched", False)
-                det_type  = "심볼기반 로고" if is_symbol else "로고 (마스터/레이아웃)"
+                is_symbol  = match.get("symbol_matched", False)
+                match_case = match.get("case", "A")    # "A" | "C"
+                verdict    = match.get("verdict", "위반")  # Case C → "주의"
+                det_type   = "심볼기반 로고" if is_symbol else "로고 (마스터/레이아웃)"
+                src_label  = '마스터' if source == 'master' else '레이아웃'
 
                 logger.info(
                     f"[{job_id}] 구조 로고 탐지 {source}[{s_idx}] '{s_name}' "
-                    f"method={match['method']} score={match['score']:.3f} "
-                    f"→ {len(affected)}개 슬라이드 영향"
+                    f"case={match_case} method={match['method']} "
+                    f"score={match['score']:.3f} → {verdict} "
+                    f"({len(affected)}개 슬라이드 영향)"
                 )
+
+                if match_case == "C":
+                    reason = (
+                        f"[Case C] {src_label} 이미지: 심볼 유사 (유사도 {match['score']:.2f}, "
+                        f"shape: {s_name or '이름없음'}) but 전체 로고 불일치 — 수동 확인 필요"
+                    )
+                    recommendation = (
+                        f"{src_label} 슬라이드에서 워드마크 포함 여부를 확인하세요. "
+                        f"워드마크 있으면 위반. (모든 슬라이드에 공통 적용됨)"
+                    )
+                else:
+                    reason = (
+                        f"[Case A] {src_label}에 레퍼런스 로고 이미지 검출 "
+                        f"(유사도 {match['score']:.2f}, shape: {s_name or '이름없음'})"
+                    )
+                    recommendation = (
+                        f"{src_label} 슬라이드에서 로고 이미지를 제거하거나 교체하세요. "
+                        f"(모든 슬라이드에 공통 적용됨)"
+                    )
 
                 # 이미 슬라이드 직접 탐지에서 잡힌 경우는 페이지 대표로만 추가 (중복 최소화)
                 for slide_num in affected:
@@ -548,31 +587,35 @@ class PPTServerPipeline:
                         "page":           slide_num,
                         "type":           det_type,
                         "content":        f"{source.upper()} 이미지 로고 ({match['method']})",
-                        "judgment":       "위반",
-                        "reason": (
-                            f"슬라이드 {'마스터' if source=='master' else '레이아웃'}에 "
-                            f"레퍼런스 로고 이미지 검출 (유사도 {match['score']:.2f}, "
-                            f"shape: {s_name or '이름없음'})"
-                        ),
-                        "recommendation": (
-                            f"{'마스터' if source=='master' else '레이아웃'} 슬라이드에서 "
-                            f"로고 이미지를 제거하거나 교체하세요. "
-                            f"(모든 슬라이드에 공통 적용됨)"
-                        ),
+                        "judgment":       verdict,
+                        "reason":         reason,
+                        "recommendation": recommendation,
                         "confidence":     min(0.95, 0.80 + match["score"] * 0.15),
                         "source":         source,        # "layout" | "master"
                         "struct_source":  source,
                         "_struct_logo":   True,
+                        "_logo_case":     match_case,
                     })
         else:
             logger.info(f"[{job_id}] 로고 레퍼런스 없음 → 구조적 로고 탐지 스킵")
 
         if struct_logo_items:
+            # ── 상태 변수 집계 (has_logo_candidate / has_activo_logo / logo_source) ──
+            has_logo_candidate = len(struct_logo_items) > 0
+            has_activo_logo    = any(
+                it.get("judgment") == "위반"
+                for it in struct_logo_items
+            )
+            logo_sources = sorted({it.get("struct_source", "slide") for it in struct_logo_items})
+
             logger.info(
                 f"[{job_id}] 구조적 로고 탐지: {len(struct_logo_items)}건 "
                 f"(slide={sum(1 for x in struct_logo_items if x.get('struct_source')=='slide')}, "
                 f"layout={sum(1 for x in struct_logo_items if x.get('struct_source')=='layout')}, "
-                f"master={sum(1 for x in struct_logo_items if x.get('struct_source')=='master')})"
+                f"master={sum(1 for x in struct_logo_items if x.get('struct_source')=='master')}) | "
+                f"has_logo_candidate={has_logo_candidate} "
+                f"has_activo_logo={has_activo_logo} "
+                f"logo_source={logo_sources}"
             )
             all_vision_items.extend(struct_logo_items)
 
@@ -750,9 +793,9 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                     "_is_logo":        False,
                 })
 
-    # 내부 키 제거 (+ PPT 전용 _ppt_cropped, _struct_logo)
+    # 내부 키 제거 (+ PPT 전용 _ppt_cropped, _struct_logo, _logo_case)
     # struct_source는 리포트에 포함 (slide/layout/master 출처 표시용)
-    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int", "_struct_logo")
+    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int", "_struct_logo", "_logo_case")
     final: dict[int, list] = {}
     for p, dets in page_map.items():
         final[p] = [{k: v for k, v in d.items() if k not in _internal} for d in dets]
