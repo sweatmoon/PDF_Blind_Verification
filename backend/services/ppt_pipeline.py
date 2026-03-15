@@ -652,12 +652,13 @@ class PPTServerPipeline:
                         f"(모든 슬라이드에 공통 적용됨)"
                     )
 
-                # 마스터/레이아웃 로고는 대표 1건만 추가 (모든 슬라이드에 중복 추가 금지)
-                # affected_pages 필드에 영향받는 슬라이드 목록 기록
+                # 마스터/레이아웃 로고는 동일 마스터 인덱스+동일 shape 이름 조합만 중복 제거
+                # (master[0]과 master[1]에 같은 이름의 shape이 있어도 별도 항목으로 추가)
                 repr_page = affected[0] if affected else 1
                 dup = any(
                     it.get("struct_source") == source
                     and it.get("_shape_name") == s_name
+                    and it.get("_source_idx", -999) == s_idx
                     for it in struct_logo_items
                 )
                 if not dup:
@@ -675,6 +676,7 @@ class PPTServerPipeline:
                         "_struct_logo":   True,
                         "_logo_case":     match_case,
                         "_shape_name":    s_name,
+                        "_source_idx":    s_idx,        # 마스터/레이아웃 인덱스 (중복 체크용)
                     })
         else:
             logger.info(f"[{job_id}] 로고 레퍼런스 없음 → 구조적 로고 탐지 스킵")
