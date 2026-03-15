@@ -344,7 +344,25 @@ class PPTServerPipeline:
         page_images = []   # [{"page": int, "b64": str, "media_type": str}]
 
         if claude_on:
-            prog(50, f"슬라이드 이미지 렌더링 중 (0/{total})…")
+            # ── 개선 1: Claude Vision 스킵 조건 ────────────────────────
+            # rule_hits도 없고 이미지도 없는 슬라이드는 Claude 호출 불필요
+            # → 렌더링 자체를 생략해 비용·시간 절감
+            def _needs_claude(idx: int) -> bool:
+                slide_num = idx + first_slide_num
+                has_rule_hit = str(slide_num) in rule_hits_by_page
+                has_image    = len(slide_images.get(idx, [])) > 0
+                return has_rule_hit or has_image
+
+            skip_indices = [i for i in range(total) if not _needs_claude(i)]
+            render_indices = [i for i in range(total) if _needs_claude(i)]
+            logger.info(
+                f"[{job_id}] Claude Vision 필터: "
+                f"렌더링 대상 {len(render_indices)}/{total}슬라이드 "
+                f"(rule_hit 또는 이미지 있음), "
+                f"스킵 {len(skip_indices)}슬라이드 (rule_hit 없음 + 이미지 없음)"
+            )
+
+            prog(50, f"슬라이드 이미지 렌더링 중 (0/{len(render_indices)})…")
 
             def _render_slide(idx: int) -> Optional[str]:
                 try:
@@ -357,22 +375,23 @@ class PPTServerPipeline:
                     return None
 
             RENDER_BATCH = 4
-            for batch_start in range(0, total, RENDER_BATCH):
-                batch_end = min(batch_start + RENDER_BATCH, total)
+            for batch_start in range(0, len(render_indices), RENDER_BATCH):
+                batch_end = min(batch_start + RENDER_BATCH, len(render_indices))
+                batch_idxs = render_indices[batch_start:batch_end]
                 tasks = [
                     loop.run_in_executor(_executor, _render_slide, i)
-                    for i in range(batch_start, batch_end)
+                    for i in batch_idxs
                 ]
                 results = await asyncio.gather(*tasks)
-                for i, b64 in zip(range(batch_start, batch_end), results):
+                for i, b64 in zip(batch_idxs, results):
                     if b64:
                         page_images.append({
                             "page":       i + first_slide_num,
                             "b64":        b64,
                             "media_type": "image/jpeg",
                         })
-                pct = 50 + int((batch_end / total) * 15)
-                prog(pct, f"슬라이드 렌더링 중 ({batch_end}/{total})…")
+                pct = 50 + int((batch_end / max(len(render_indices), 1)) * 15)
+                prog(pct, f"슬라이드 렌더링 중 ({batch_end}/{len(render_indices)})…")
                 await asyncio.sleep(0)
 
             prog(65, f"{len(page_images)}/{total}슬라이드 변환 완료 · Claude Vision 분석 시작…")

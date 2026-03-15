@@ -43,7 +43,7 @@ MAX_FILE_SIZE_MB   = int(os.getenv("MAX_FILE_SIZE_MB", "300"))
 AUTO_DELETE_MIN    = int(os.getenv("AUTO_DELETE_MIN", "30"))
 OCR_ENABLED        = os.getenv("OCR_ENABLED", "true").lower() == "true"
 CLAUDE_ENABLED     = bool(ANTHROPIC_API_KEY)
-CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL       = os.getenv("CLAUDE_MODEL", "claude-haiku-4-20250514")
 
 # ── Google Vision API (런타임 설정 가능 + DB 영구 저장) ─────────
 GOOGLE_VISION_API_KEY: str = os.getenv("GOOGLE_VISION_API_KEY", "") or _load_key_file(_VISION_KEY_FILE)
