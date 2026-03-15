@@ -377,7 +377,41 @@ class PPTServerPipeline:
 
             prog(65, f"{len(page_images)}/{total}슬라이드 변환 완료 · Claude Vision 분석 시작…")
         else:
-            prog(65, "Claude Vision 비활성 — 규칙+OCR 결과로 리포트 생성…")
+            # Claude Vision이 꺼져 있어도 face_scan(인물사진 검출)을 위해
+            # 슬라이드를 렌더링한다. 품질을 낮춰(q=60) 빠르게 처리.
+            prog(51, f"인물사진 검출 위해 슬라이드 렌더링 중 (0/{total})…")
+
+            def _render_slide_fs(idx: int) -> Optional[str]:
+                try:
+                    pil = svc.render_for_vision(idx)
+                    if pil is None:
+                        return None
+                    return _pil_to_b64_jpeg(pil, quality=60)
+                except Exception as e:
+                    logger.warning(f"[face_scan 렌더링] 슬라이드 {idx+first_slide_num} 실패: {e}")
+                    return None
+
+            RENDER_BATCH_FS = 4
+            for batch_start in range(0, total, RENDER_BATCH_FS):
+                batch_end = min(batch_start + RENDER_BATCH_FS, total)
+                tasks_fs = [
+                    loop.run_in_executor(_executor, _render_slide_fs, i)
+                    for i in range(batch_start, batch_end)
+                ]
+                results_fs = await asyncio.gather(*tasks_fs)
+                for i, b64 in zip(range(batch_start, batch_end), results_fs):
+                    if b64:
+                        page_images.append({
+                            "page":       i + first_slide_num,
+                            "b64":        b64,
+                            "media_type": "image/jpeg",
+                        })
+                await asyncio.sleep(0)
+
+            logger.info(
+                f"[{job_id}] face_scan 전용 렌더링 완료: {len(page_images)}/{total}슬라이드"
+            )
+            prog(65, "Claude Vision 비활성 — 규칙+OCR+인물사진 결과로 리포트 생성…")
 
         # ── 6. Claude Vision 배치 분석 ─────────────────────────
         all_vision_items: list[dict] = []
@@ -499,7 +533,7 @@ class PPTServerPipeline:
                                     _crop.save(_buf, format="JPEG", quality=75)
                                     _ni["crop_b64"] = _b64x.b64encode(_buf.getvalue()).decode()
                         except Exception as _ce:
-                            logger.debug(f"[face_scan] crop_b64 생성 실패 p{pg_no}: {_ce}")
+                            logger.warning(f"[face_scan] crop_b64 생성 실패 p{pg_no}: {_ce}")
                     logger.info(
                         f"[{job_id}] 직접 face scan p{pg_no}: "
                         f"{len(new_items)}건 추가"
