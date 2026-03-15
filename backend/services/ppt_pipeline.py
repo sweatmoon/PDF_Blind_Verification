@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from services.rule_detector import get_rule_detector, _is_org_context
-from services.claude_judge  import get_claude_judge, ClaudeVisionJudge, scan_slide_for_faces
+from services.claude_judge  import get_claude_judge, ClaudeVisionJudge, scan_slide_for_faces, verify_pil_against_logo
 from services.ocr_service   import get_ocr
 from services.ppt_service   import PPTService
 from services.file_manager  import _wipe_file
@@ -421,7 +421,162 @@ class PPTServerPipeline:
             else:
                 logger.debug(f"[{job_id}] 직접 face scan: 추가 탐지 없음")
 
-        prog(90, "결과 합산 중…")
+        # ── 6-C. Layout / Master 구조적 로고 탐지 ──────────────────────
+        # 렌더링된 슬라이드 이미지가 아닌 PPT 내부 이미지 객체를 직접 추출해 비교.
+        # 슬라이드 본문(source=slide), 레이아웃(source=layout), 마스터(source=master)
+        # 각각에서 이미지를 추출하고 레퍼런스 로고와 pHash/SSIM/ORB/red_mask 비교.
+        prog(90, "Layout/Master 구조적 로고 탐지 중…")
+        struct_logo_items: list[dict] = []
+
+        logo_b64        = _load_logo_b64()
+        logo_symbol_b64 = _load_logo_symbol_b64()
+
+        if logo_b64:
+            # ── (a) Slide 본문 이미지 직접 비교 ────────────────────
+            for slide_idx in range(total):
+                imgs = slide_images.get(slide_idx, [])
+                for img_d in imgs:
+                    pil = img_d.get("pil")
+                    if pil is None:
+                        continue
+                    match = verify_pil_against_logo(pil, logo_b64, logo_symbol_b64)
+                    if match["matched"]:
+                        slide_num = slide_idx + 1
+                        is_symbol = match.get("symbol_matched", False)
+                        det_type  = "심볼기반 로고" if is_symbol else "로고 (직접)"
+                        logger.info(
+                            f"[{job_id}] 구조 로고 탐지 slide p{slide_num} "
+                            f"method={match['method']} score={match['score']}"
+                        )
+                        struct_logo_items.append({
+                            "page":           slide_num,
+                            "type":           det_type,
+                            "content":        f"슬라이드 내장 이미지 로고 ({match['method']})",
+                            "judgment":       "위반",
+                            "reason":         f"슬라이드 본문 이미지에서 레퍼런스 로고 검출 (유사도 {match['score']:.2f})",
+                            "recommendation": "해당 이미지를 슬라이드에서 제거하거나 교체하세요.",
+                            "confidence":     min(0.95, 0.75 + match["score"] * 0.2),
+                            "source":         "slide",
+                            "struct_source":  "slide",
+                            "_struct_logo":   True,
+                        })
+
+            # ── (b) Layout / Master 이미지 직접 비교 ───────────────
+            try:
+                lm_images = svc.extract_layout_master_images()
+                logger.info(f"[{job_id}] layout/master 이미지 {len(lm_images)}개 추출")
+            except Exception as e:
+                logger.warning(f"[{job_id}] layout/master 추출 실패: {e}")
+                lm_images = []
+
+            # 슬라이드별로 적용되는 layout 인덱스 수집 (마스터 로고가 어느 슬라이드에 나타나는지)
+            layout_to_slides: dict[int, list[int]] = {}  # layout_idx → [slide_num, ...]
+            master_to_slides: dict[int, list[int]] = {}  # master_idx → [slide_num, ...]
+            try:
+                from pptx.enum.shapes import MSO_SHAPE_TYPE as _MSO
+                prs = svc._prs
+                # 마스터 인덱스 맵: layout → master_idx
+                master_list  = list(prs.slide_masters)
+                layout_master_map: dict[int, int] = {}  # layout obj id → master_idx
+                for mi, master in enumerate(master_list):
+                    for layout in master.slide_layouts:
+                        layout_master_map[id(layout)] = mi
+
+                for si, slide in enumerate(svc._slides_list):
+                    slide_num = si + 1
+                    try:
+                        lo = slide.slide_layout
+                        li = None
+                        for mi2, m2 in enumerate(master_list):
+                            try:
+                                li = list(m2.slide_layouts).index(lo)
+                                master_to_slides.setdefault(mi2, []).append(slide_num)
+                                layout_to_slides.setdefault(li, []).append(slide_num)
+                                break
+                            except ValueError:
+                                continue
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"[{job_id}] layout/master 슬라이드 매핑 실패: {e}")
+
+            # 이미 슬라이드 직접 탐지에서 잡힌 슬라이드 집합 (마스터 중복 제거용)
+            already_detected_slides = {it["page"] for it in struct_logo_items}
+
+            for img_d in lm_images:
+                pil    = img_d.get("pil")
+                source = img_d.get("source", "layout")  # "layout" | "master"
+                s_idx  = img_d.get("source_idx", 0)
+                s_name = img_d.get("shape_name", "")
+                if pil is None:
+                    continue
+
+                match = verify_pil_against_logo(pil, logo_b64, logo_symbol_b64)
+                if not match["matched"]:
+                    continue
+
+                # 영향받는 슬라이드 번호 목록
+                if source == "master":
+                    affected = master_to_slides.get(s_idx, list(range(1, total + 1)))
+                else:  # layout
+                    affected = layout_to_slides.get(s_idx, [])
+
+                if not affected:
+                    # 매핑 실패 시 전체 슬라이드에 경고 (1번 페이지로 대표)
+                    affected = [1]
+
+                is_symbol = match.get("symbol_matched", False)
+                det_type  = "심볼기반 로고" if is_symbol else "로고 (마스터/레이아웃)"
+
+                logger.info(
+                    f"[{job_id}] 구조 로고 탐지 {source}[{s_idx}] '{s_name}' "
+                    f"method={match['method']} score={match['score']:.3f} "
+                    f"→ {len(affected)}개 슬라이드 영향"
+                )
+
+                # 이미 슬라이드 직접 탐지에서 잡힌 경우는 페이지 대표로만 추가 (중복 최소화)
+                for slide_num in affected:
+                    # 같은 슬라이드에 같은 source로 이미 추가된 경우 스킵
+                    dup = any(
+                        it["page"] == slide_num and it.get("struct_source") == source
+                        for it in struct_logo_items
+                    )
+                    if dup:
+                        continue
+
+                    struct_logo_items.append({
+                        "page":           slide_num,
+                        "type":           det_type,
+                        "content":        f"{source.upper()} 이미지 로고 ({match['method']})",
+                        "judgment":       "위반",
+                        "reason": (
+                            f"슬라이드 {'마스터' if source=='master' else '레이아웃'}에 "
+                            f"레퍼런스 로고 이미지 검출 (유사도 {match['score']:.2f}, "
+                            f"shape: {s_name or '이름없음'})"
+                        ),
+                        "recommendation": (
+                            f"{'마스터' if source=='master' else '레이아웃'} 슬라이드에서 "
+                            f"로고 이미지를 제거하거나 교체하세요. "
+                            f"(모든 슬라이드에 공통 적용됨)"
+                        ),
+                        "confidence":     min(0.95, 0.80 + match["score"] * 0.15),
+                        "source":         source,        # "layout" | "master"
+                        "struct_source":  source,
+                        "_struct_logo":   True,
+                    })
+        else:
+            logger.info(f"[{job_id}] 로고 레퍼런스 없음 → 구조적 로고 탐지 스킵")
+
+        if struct_logo_items:
+            logger.info(
+                f"[{job_id}] 구조적 로고 탐지: {len(struct_logo_items)}건 "
+                f"(slide={sum(1 for x in struct_logo_items if x.get('struct_source')=='slide')}, "
+                f"layout={sum(1 for x in struct_logo_items if x.get('struct_source')=='layout')}, "
+                f"master={sum(1 for x in struct_logo_items if x.get('struct_source')=='master')})"
+            )
+            all_vision_items.extend(struct_logo_items)
+
+        prog(92, "결과 합산 중…")
 
         # ── 7. 규칙 + Vision 합산 ──────────────────────────────
         # 페이지별 크롭 이미지 여부 맵 생성 (Vision 단독 탐지 결과 강등용)
@@ -529,7 +684,8 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
             "reason":          it.get("reason",          ""),
             "recommendation":  it.get("recommendation",  ""),
             "confidence":      it.get("confidence",      0.9),
-            "source":          "vision",
+            "source":          it.get("source", "vision"),   # layout/master/slide 보존
+            "struct_source":   it.get("struct_source",   ""),
             "cropped":         it.get("_ppt_cropped",    False),
             "_fp_filtered":    it.get("_fp_filtered",    ""),
             "_is_logo":        (
@@ -594,8 +750,9 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
                     "_is_logo":        False,
                 })
 
-    # 내부 키 제거 (+ PPT 전용 _ppt_cropped)
-    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int")
+    # 내부 키 제거 (+ PPT 전용 _ppt_cropped, _struct_logo)
+    # struct_source는 리포트에 포함 (slide/layout/master 출처 표시용)
+    _internal = ("_fp_filtered", "_is_logo", "_ppt_cropped", "_page_int", "_struct_logo")
     final: dict[int, list] = {}
     for p, dets in page_map.items():
         final[p] = [{k: v for k, v in d.items() if k not in _internal} for d in dets]
@@ -657,6 +814,7 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
                 "reason":         d.get("reason", ""),
                 "recommendation": d.get("recommendation", ""),
                 "source":         d.get("source", "rule"),
+                "struct_source":  d.get("struct_source", ""),   # slide|layout|master
                 "cropped":        d.get("cropped", False),
             })
 

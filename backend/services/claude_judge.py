@@ -373,6 +373,106 @@ def _verify_logo_candidate(
         return False
 
 
+def verify_pil_against_logo(
+    pil_img,            # PIL.Image — 비교할 이미지 (layout/master/slide 추출)
+    logo_ref_b64: str,  # 레퍼런스 로고 base64
+    logo_sym_b64: Optional[str] = None,  # 심볼 레퍼런스 (있으면 추가 비교)
+) -> dict:
+    """
+    PIL Image를 레퍼런스 로고와 직접 비교합니다.
+    pHash → SSIM → ORB → red_mask 순으로 진행.
+
+    반환:
+      {
+        "matched":   bool,   # True = 로고 일치 (위반)
+        "method":    str,    # "phash" | "ssim" | "orb" | "red_mask" | "symbol" | "none"
+        "score":     float,  # 매칭 스코어 (0~1 또는 pHash distance)
+        "symbol_matched": bool,  # 심볼 레퍼런스 매칭 여부 (추가)
+      }
+    """
+    import numpy as np
+    from PIL import Image
+
+    result = {"matched": False, "method": "none", "score": 0.0, "symbol_matched": False}
+    try:
+        ref_bytes = base64.b64decode(logo_ref_b64)
+        ref_img   = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
+        ref_w, ref_h = ref_img.size
+        crop_img  = pil_img.convert("RGB")
+
+        # 너무 작은 이미지는 건너뜀 (아이콘류 제외)
+        if crop_img.width < 20 or crop_img.height < 20:
+            return result
+
+        # ── 0단계: pHash ────────────────────────────────────────────
+        phash_dist = _compare_phash(ref_img, crop_img)
+        if 0.0 <= phash_dist <= _PHASH_MATCH_THRESHOLD:
+            result.update(matched=True, method="phash", score=float(phash_dist))
+            logger.info(f"[직접비교] pHash={phash_dist:.0f} → 로고 일치")
+            return result
+
+        # ── 공통 resize ─────────────────────────────────────────────
+        aspect   = ref_w / max(ref_h, 1)
+        cmp_h    = 80
+        cmp_w    = max(80, int(cmp_h * aspect))
+        cmp_size = (cmp_w, cmp_h)
+        crop_np  = np.array(crop_img.resize(cmp_size, Image.LANCZOS))
+        ref_np   = np.array(ref_img.resize(cmp_size,  Image.LANCZOS))
+
+        # ── 1단계: SSIM ─────────────────────────────────────────────
+        ssim_score = _compute_ssim(ref_np, crop_np)
+        if ssim_score >= _LOGO_SIM_THRESHOLD:
+            result.update(matched=True, method="ssim", score=round(ssim_score, 3))
+            logger.info(f"[직접비교] SSIM={ssim_score:.3f} → 로고 일치")
+            return result
+
+        # ── 2단계: ORB ──────────────────────────────────────────────
+        orb_score = _compute_orb(ref_np, crop_np)
+        if orb_score >= _LOGO_SIM_THRESHOLD:
+            result.update(matched=True, method="orb", score=round(orb_score, 3))
+            logger.info(f"[직접비교] ORB={orb_score:.3f} → 로고 일치")
+            return result
+
+        # ── 3단계: red_mask SSIM ────────────────────────────────────
+        red_score = _compute_red_mask_ssim(
+            np.array(ref_img), np.array(crop_img)
+        )
+        if red_score >= _LOGO_SIM_THRESHOLD:
+            result.update(matched=True, method="red_mask", score=round(red_score, 3))
+            logger.info(f"[직접비교] red_mask={red_score:.3f} → 로고 일치")
+            return result
+
+        # ── 4단계: 심볼 레퍼런스 비교 (있을 때만) ───────────────────
+        if logo_sym_b64:
+            sym_bytes = base64.b64decode(logo_sym_b64)
+            sym_img   = Image.open(io.BytesIO(sym_bytes)).convert("RGB")
+            sym_w, sym_h = sym_img.size
+            sym_aspect = sym_w / max(sym_h, 1)
+            sym_cmp_w  = max(80, int(cmp_h * sym_aspect))
+            sym_np     = np.array(sym_img.resize((sym_cmp_w, cmp_h), Image.LANCZOS))
+            c_np       = np.array(crop_img.resize((sym_cmp_w, cmp_h), Image.LANCZOS))
+
+            sym_ssim = _compute_ssim(sym_np, c_np)
+            sym_orb  = _compute_orb(sym_np, c_np)
+            sym_red  = _compute_red_mask_ssim(
+                np.array(sym_img), np.array(crop_img)
+            )
+            best_sym = max(sym_ssim, sym_orb, sym_red)
+            if best_sym >= _LOGO_SIM_THRESHOLD:
+                result["symbol_matched"] = True
+                result.update(matched=True, method="symbol", score=round(best_sym, 3))
+                logger.info(f"[직접비교] symbol best={best_sym:.3f} → 심볼 로고 일치")
+                return result
+
+        logger.debug(
+            f"[직접비교] 불일치 phash={phash_dist:.0f} ssim={ssim_score:.3f} "
+            f"orb={orb_score:.3f} red={red_score:.3f}"
+        )
+    except Exception as e:
+        logger.debug(f"[직접비교] 오류: {e}")
+    return result
+
+
 # ── 전체 로고 이미지에서 심볼 영역 자동 추출 ─────────────────────
 def _extract_symbol_from_logo(logo_b64: str) -> Optional[str]:
     """

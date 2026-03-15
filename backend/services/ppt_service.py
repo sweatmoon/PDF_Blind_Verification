@@ -312,3 +312,83 @@ class PPTService:
     def render_for_vision(self, idx: int) -> Optional[Image.Image]:
         """Claude Vision AI 입력용 슬라이드 이미지"""
         return self.slide_thumbnail(idx, max_w=1200)
+
+    # ── Layout / Master 이미지 직접 추출 ─────────────────────
+    def extract_layout_master_images(self) -> list[dict]:
+        """
+        슬라이드 레이아웃(slideLayout)과 슬라이드 마스터(slideMaster)에서
+        이미지를 직접 추출합니다.
+
+        반환: [
+          {
+            "data":   bytes,        # 원본 바이너리
+            "ext":    str,          # 확장자 ("jpeg", "png", …)
+            "w":      int,          # 픽셀 너비
+            "h":      int,          # 픽셀 높이
+            "pil":    Image,        # PIL 이미지
+            "source": str,          # "layout" | "master"
+            "source_idx": int,      # 레이아웃/마스터 0-based 인덱스
+            "shape_name": str,      # shape.name (디버그용)
+          },
+          …
+        ]
+        중복 이미지(동일 blob)는 제거합니다.
+        """
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+        results: list[dict] = []
+        seen_blobs: set[bytes] = set()
+
+        def _extract_from_shapes(shapes, source: str, source_idx: int):
+            for shape in shapes:
+                try:
+                    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                        blob = shape.image.blob
+                        if blob in seen_blobs:
+                            continue
+                        seen_blobs.add(blob)
+                        pil = Image.open(io.BytesIO(blob))
+                        results.append({
+                            "data":       blob,
+                            "ext":        shape.image.ext,
+                            "w":          pil.size[0],
+                            "h":          pil.size[1],
+                            "pil":        pil,
+                            "source":     source,
+                            "source_idx": source_idx,
+                            "shape_name": getattr(shape, "name", ""),
+                        })
+                    elif shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                        # 그룹 내부 재귀
+                        _extract_from_shapes(
+                            list(_iter_group_shapes(shape)), source, source_idx
+                        )
+                except Exception:
+                    pass
+
+        try:
+            prs = self._prs
+            # ── 슬라이드 마스터 ──
+            for mi, master in enumerate(prs.slide_masters):
+                try:
+                    _extract_from_shapes(master.shapes, "master", mi)
+                except Exception as e:
+                    logger.debug(f"master[{mi}] 추출 오류: {e}")
+
+            # ── 슬라이드 레이아웃 ──
+            for mi, master in enumerate(prs.slide_masters):
+                for li, layout in enumerate(master.slide_layouts):
+                    try:
+                        _extract_from_shapes(layout.shapes, "layout", li)
+                    except Exception as e:
+                        logger.debug(f"layout[{mi}/{li}] 추출 오류: {e}")
+
+        except Exception as e:
+            logger.warning(f"layout/master 이미지 추출 실패: {e}")
+
+        logger.info(
+            f"layout/master 이미지 추출: {len(results)}개 "
+            f"(master={sum(1 for r in results if r['source']=='master')}, "
+            f"layout={sum(1 for r in results if r['source']=='layout')})"
+        )
+        return results
