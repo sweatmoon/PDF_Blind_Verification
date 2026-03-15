@@ -984,19 +984,19 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
     )
 
     page_results = []
-    # 마스터/레이아웃 탐지 항목이 있으면 page_number=-1 카드를 맨 앞에 삽입
-    if struct_dets:
-        s_vc = sum(1 for d in struct_dets if d["verdict"] == "위반")
-        s_cc = sum(1 for d in struct_dets if d["verdict"] == "주의")
-        s_ac = sum(1 for d in struct_dets if d["verdict"] == "허용")
-        page_results.append({
-            "page_number":     -1,         # -1 = 슬라이드 마스터/레이아웃 가상 페이지
-            "thumbnail_b64":   None,
-            "detections":      struct_dets,
-            "violation_count": s_vc,
-            "caution_count":   s_cc,
-            "allowed_count":   s_ac,
-        })
+    # 마스터/레이아웃 카드는 탐지 결과 유무와 관계없이 항상 맨 앞에 삽입
+    # (탐지 없으면 초록 "이상없음" 카드, 다른 페이지와 동일한 UX)
+    s_vc = sum(1 for d in struct_dets if d["verdict"] == "위반")
+    s_cc = sum(1 for d in struct_dets if d["verdict"] == "주의")
+    s_ac = sum(1 for d in struct_dets if d["verdict"] == "허용")
+    page_results.append({
+        "page_number":     -1,         # -1 = 슬라이드 마스터/레이아웃 가상 페이지
+        "thumbnail_b64":   None,
+        "detections":      struct_dets,
+        "violation_count": s_vc,
+        "caution_count":   s_cc,
+        "allowed_count":   s_ac,
+    })
 
     for p in range(1, total_slides + 1):
         dets = page_map.get(p, [])
