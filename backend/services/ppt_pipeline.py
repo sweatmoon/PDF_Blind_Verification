@@ -826,6 +826,7 @@ def _merge_results(rule_hits_by_page: dict, vision_items: list, total_slides: in
         if "person_candidate" in it.get("type", ""):
             bbox = it.get("bbox")
             slide_b64 = _page_b64_map.get(p)
+            logger.info(f"[crop_b64] p{p} bbox={bbox} slide_b64={'있음' if slide_b64 else '없음'} map_keys={list(_page_b64_map.keys())[:8]}")
             if bbox and slide_b64:
                 try:
                     import base64 as _b64, io as _io
@@ -1112,6 +1113,7 @@ def _build_report(job_id, filename, total_slides, page_map, elapsed,
                 "struct_source":  d.get("struct_source", ""),   # slide|layout|master
                 "affected_pages": d.get("affected_pages", []),  # 마스터/레이아웃 영향 슬라이드
                 "cropped":        d.get("cropped", False),
+                "crop_b64":       d.get("crop_b64"),            # 인물사진 썸네일 (person_candidate만)
             })
 
     return {
