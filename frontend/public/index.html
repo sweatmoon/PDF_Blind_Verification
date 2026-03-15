@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260314-v3 -->
+<!-- BUILD: 20260315-v9-person-toggle -->
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
@@ -7,6 +7,17 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
+  <script>
+    // 빌드 버전 체크 - 구버전 캐시 강제 갱신
+    const _BUILD = '20260315-v9';
+    const _STORED = sessionStorage.getItem('__build');
+    if (_STORED && _STORED !== _BUILD) {
+      sessionStorage.setItem('__build', _BUILD);
+      location.reload(true);
+    } else {
+      sessionStorage.setItem('__build', _BUILD);
+    }
+  </script>
   <title>입찰 제안서 블라인드 검증 서비스</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
