@@ -27,7 +27,9 @@ COPY start.sh ./start.sh
 # 단, logo_reference.png는 이미지에 포함 (로고 탐지 필수)
 RUN mkdir -p /app/tmp /app/logs /app/data/reports \
     && chmod +x /app/start.sh
+# logo_reference.png: 메인 경로 + 백업 경로 (Volume 마운트로 덮일 경우 start.sh에서 복원)
 COPY data/logo_reference.png /app/data/logo_reference.png
+COPY data/logo_reference.png /app/logo_reference.png.bak
 
 ENV PORT=8080
 ENV TZ=Asia/Seoul
