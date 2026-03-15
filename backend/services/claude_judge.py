@@ -1614,8 +1614,9 @@ _FACE_DTYPE_KW: tuple = (
     "person_candidate",   # 새 아키텍처: Claude가 반환하는 후보 타입
 )
 
-# ★ 실제 사진 확정 키워드 (이것이 있을 때만 위반 유지)
-# 반드시 카메라 촬영된 실사 사진임을 나타내는 표현
+# ★★ 실제 사진 확정 키워드 — 키워드 탐지시에도 문자열만으로 위반 확정 금지!
+# Claude Vision reason에 이 키워드가 있어도 반드시 MediaPipe 재검증 후에 판정을 내려야 함.
+# 즉: 이 목록은 타입 필터링 트리거지, 위반 확정 트리거가 아님.
 _REAL_PHOTO_KW: tuple = (
     "피부색", "피부 질감", "skin",
     "이목구비",
@@ -1628,8 +1629,9 @@ _REAL_PHOTO_KW: tuple = (
     "인물 사진",
 )
 
-# ★ 그래픽/아이콘 확정 키워드 (content에만 적용 — reason 제외)
-# 주의: "그래픽", "캐릭터" 등 범용 단어는 제외 (실제사진 reason에도 등장)
+# ★★ 그래픽/아이콘 확정 키워드 — 이 키워드가 content에 있으면 MediaPipe 생략 후 즉시 허용
+# (다만 _REAL_PHOTO_KW가 함께 없을 때만 적용)
+# 관리 원칙: 키워드는 판정 개시 트리거, 즉 판정 근거가 아님.
 _GRAPHIC_KW: tuple = (
     "실루엣", "silhouette",
     "아이콘", "icon",
@@ -1644,6 +1646,7 @@ _GRAPHIC_KW: tuple = (
     "연구자 아이콘", "직원 아이콘", "사용자 아이콘",
     "얼굴 없음", "얼굴 디테일 없음",
     "눈코입 없음",
+    "캐릭터", "캐릭터 이미지",   # 실사 놀라울 알은 아이콘 전용어
 )
 
 
@@ -1697,17 +1700,24 @@ def _verify_face_candidate(
     # ────────────────────────────────────────────────────────────────
     # 파라미터 상수 (조정 포인트)
     # ────────────────────────────────────────────────────────────────
-    _CONF_NONE       = 0.50   # 미만: 얼굴 후보 아님 → False
-    _CONF_WEAK_MAX   = 0.70   # [0.50, 0.70): 약한 후보 — 추가 필터 3개 모두 통과 시 True
-    # >= 0.70: 강한 후보 — 크기+단색 필터만 통과 시 True
-    _FACE_MIN_PX     = 40     # 얼굴 bbox 최소 크기 (px)
-    _CROP_MIN_PX     = 50     # crop 최소 크기 (px); 미만 → icon_or_silhouette
-    _DOMINANT_RATIO  = 0.70   # 지배 색상 비율 ≥ 70% → 단색 아이콘 가능
-    _UNIQUE_FG_MAX   = 10     # 전경 고유색 ≤ 10 → 단색 실루엣 가능
-    _SAT_STD_MIN     = 30     # 채도 표준편차 < 30 → 단색/실루엣
-    _SKIN_MIN_STRONG = 0.05   # 강한 후보 → 피부색 필터 생략 (크기+단색만)
-    _SKIN_MIN_WEAK   = 0.05   # 약한 후보 → 피부색 비율 최소 기준
-    _SAT_STD_WEAK    = 20     # 약한 후보 → 채도 표준편차 최소 기준
+    # ── 최종 파라미터 세트 (2025-03 튜닝 기준) ─────────────────────────
+    # MediaPipe confidence 3구간
+    _CONF_NONE       = 0.50   # 미만 → 얼굴 후보 아님 → icon_or_silhouette
+    _CONF_WEAK_MAX   = 0.70   # [0.50, 0.70) 약한 후보 — 추가 필터 전부 통과 시만 True
+    # >= 0.70 강한 후보 — 크기+단색 필터 통과 시 True
+
+    # 크기 필터
+    _FACE_MIN_PX     = 36     # 얼굴 bbox 최소 크기 (px) ← 40→36 완화
+    _CROP_MIN_PX     = 48     # crop 최소 크기 (px); 미만 → icon_or_silhouette ← 50→48
+
+    # 아이콘/실루엣 필터
+    _DOMINANT_RATIO  = 0.72   # 지배색 비율 ≥ 72% → 단색 그래픽 ← 70→72 강화
+    _UNIQUE_FG_MAX   = 12     # 전경 고유색 ≤ 12 → 단색 실루엣 ← 10→12 완화
+
+    # 색상/피부 보조 필터
+    _SAT_STD_MIN     = 24     # 채도 표준편차 < 24 → 단색/실루엣 ← 30→24 완화
+    _SKIN_MIN_WEAK   = 0.035  # 약한 후보 → 피부색 비율 최소 기준 ← 0.05→0.035 완화
+    _SAT_STD_WEAK    = 18     # 약한 후보 → 채도 표준편차 최소 기준 ← 20→18 완화
 
     try:
         # ══ STEP-0: crop 추출 ═══════════════════════════════════════
@@ -1719,7 +1729,7 @@ def _verify_face_candidate(
 
         crop_w, crop_h = crop_img.width, crop_img.height
 
-        # ── crop 크기 최소 필터: 50px 미만은 아이콘 압도적 ──────────
+        # ── crop 크기 최소 필터: 48px 미만은 아이콘 압도적 ──────────
         if crop_w < _CROP_MIN_PX or crop_h < _CROP_MIN_PX:
             logger.info(
                 f"[face_verify] crop 너무 작음 → icon_or_silhouette "
@@ -1737,6 +1747,8 @@ def _verify_face_candidate(
         fg_sat_std    = 0.0
         is_solid      = False   # 단색/실루엣 여부
         heuristic_ok  = False
+        dom_ratio     = 0.0     # 지배색 비율 (기본 0 → 단색 필터 미적용)
+        unique_fg     = 999     # 고유색 수 (기본 999 → 단색 필터 미적용)
 
         try:
             import numpy as np
@@ -1820,14 +1832,17 @@ def _verify_face_candidate(
             f"face_bbox={face_w}×{face_h}px bbox_ok={bbox_ok}"
         )
 
-        # ── Case-1: conf 미만 0.50 AND Haar 미검출 → icon_or_silhouette ──
-        if mp_conf < _CONF_NONE and not haar_detected:
+        # ── Case-1: conf < 0.50 → 얼굴 후보 아님 (Haar 여부 무관) ──────
+        # ★ 절대금지: conf 단독 threshold로 즉시 True 처리 금지
+        #   conf < 0.50 이면 Haar 검출 여부와 무관하게 icon_or_silhouette
+        if mp_conf < _CONF_NONE:
             logger.info(
                 f"[face_verify] Case-1: conf={mp_conf:.3f} < {_CONF_NONE} "
-                f"and haar=False → icon_or_silhouette"
+                f"→ 얼굴 후보 아님(icon_or_silhouette) [Haar={haar_detected} 무시]"
             )
             alog.log("face_verify", "case1_no_face", {
                 "bbox": bbox, "mp_conf": round(mp_conf, 3),
+                "haar": haar_detected,
                 "result": "icon_or_silhouette",
             })
             return "icon_or_silhouette"
@@ -1835,7 +1850,9 @@ def _verify_face_candidate(
         # ══ STEP-3: 3구간 정책 판정 ══════════════════════════════════
         # ── Case-2: 약한 후보 [0.50, 0.70) — 추가 필터 3개 모두 통과 시 True ──
         is_weak   = (mp_conf >= _CONF_NONE and mp_conf < _CONF_WEAK_MAX)
-        is_strong = (mp_conf >= _CONF_WEAK_MAX) or haar_detected
+        # ★ 강한 후보: conf >= 0.70 만 해당 — Haar 단독으로는 강한 후보 불가
+        #   (Haar는 보조 탐지기이며 단독으로 위반을 확정하지 않음)
+        is_strong = (mp_conf >= _CONF_WEAK_MAX)
 
         if is_weak:
             # 필터 1: bbox 크기
@@ -1893,40 +1910,44 @@ def _verify_face_candidate(
             return "real_photo"
 
         if is_strong:
-            # 필터 1: bbox 크기
+            # 필터 1: bbox 크기 >= 36px
             if not bbox_ok:
                 logger.info(
-                    f"[face_verify] Case-5: strong conf={mp_conf:.3f}/haar={haar_detected} "
-                    f"but bbox too small ({face_w}×{face_h}) → icon_or_silhouette"
+                    f"[face_verify] Case-3: strong conf={mp_conf:.3f} "
+                    f"but bbox too small ({face_w}×{face_h} < {_FACE_MIN_PX}px) → icon_or_silhouette"
                 )
-                alog.log("face_verify", "case5_strong_small_bbox", {
+                alog.log("face_verify", "case3_strong_small_bbox", {
                     "bbox": bbox, "mp_conf": round(mp_conf, 3),
                     "face_w": face_w, "face_h": face_h,
                     "result": "icon_or_silhouette",
                 })
                 return "icon_or_silhouette"
 
-            # 필터 2: 아이콘/실루엣 패턴 (단색 필터 — 강한 후보도 아이콘이면 False)
+            # 필터 2: 아이콘/실루엣 패턴 — dominant_ratio>=0.72 OR unique_fg<=12 → 안들어즌
+            # ★ 강한 후보라도 아이콘/실루엣 패턴에 해당하면 위반 확정 불가
             if is_solid:
                 logger.info(
-                    f"[face_verify] Case-5: strong conf={mp_conf:.3f} "
-                    f"but solid/silhouette pattern → icon_or_silhouette"
+                    f"[face_verify] Case-3: strong conf={mp_conf:.3f} "
+                    f"but solid/silhouette pattern (dom={dom_ratio:.2f} ≥ {_DOMINANT_RATIO} "
+                    f"or unique_fg={unique_fg} ≤ {_UNIQUE_FG_MAX}) → icon_or_silhouette"
                 )
-                alog.log("face_verify", "case5_strong_solid", {
+                alog.log("face_verify", "case3_strong_solid", {
                     "bbox": bbox, "mp_conf": round(mp_conf, 3),
+                    "dom_ratio": round(dom_ratio, 3),
+                    "unique_fg": unique_fg,
                     "result": "icon_or_silhouette",
                 })
                 return "icon_or_silhouette"
 
-            # 강한 후보 — 크기+단색 필터 통과 → real_photo
+            # 강한 후보 — 크기+단색 필터 통과 → real_photo (Case-3)
             logger.info(
-                f"[face_verify] Case-4: strong conf={mp_conf:.3f}/haar={haar_detected} "
-                f"bbox={face_w}×{face_h} → real_photo"
+                f"[face_verify] Case-3: strong conf={mp_conf:.3f} "
+                f"bbox={face_w}×{face_h} dom={dom_ratio:.2f} → real_photo"
             )
-            alog.log("face_verify", "case4_real_photo", {
+            alog.log("face_verify", "case3_real_photo", {
                 "bbox": bbox, "mp_conf": round(mp_conf, 3),
-                "haar": haar_detected,
                 "face_w": face_w, "face_h": face_h,
+                "dom_ratio": round(dom_ratio, 3),
                 "result": "real_photo",
             })
             return "real_photo"
@@ -2142,36 +2163,30 @@ def _post_process_faces(
 
         # ── 2단계: 키워드 폴백 (page_images 없거나 page 불일치) ──────────────
         # content에만 키워드 적용 (reason 제외 — 오허용 방지)
+        # ★ 절대금지: _REAL_PHOTO_KW 탐지만으로 위반 즉시 확정 금지
+        #   reason 문자열("실제 사람 사진", "카메라로 촬영" 등)은 판정 트리거일 뿐임
         combined_content = dtype + " " + content
 
-        # ① 그래픽/아이콘 키워드 → 허용 (실사 키워드 없을 때만)
+        # ① 그래픽/아이콘 키워드 → 즉시 허용 (실사 키워드 없을 때만)
         has_real = any(kw in combined_content for kw in _REAL_PHOTO_KW)
         if any(kw in combined_content for kw in _GRAPHIC_KW) and not has_real:
             it = dict(it)
             it["judgment"]       = "허용"
-            it["reason"]         = "그래픽/아이콘/일러스트 확인 → 허용 (page_images 없어 키워드 폴백)"
+            it["reason"]         = "그래픽/아이콘/일러스트 키워드 확인 → 즉시 허용 (page_images 없어 키워드 폴백)"
             it["recommendation"] = ""
             logger.debug(f"[face_post] 그래픽 키워드 → 허용: '{it.get('content', '')[:40]}'")
             out.append(it)
             continue
 
-        # ② 실제 사진 키워드 → 위반 유지
-        if any(kw in combined_content for kw in _REAL_PHOTO_KW):
-            it = dict(it)
-            it["judgment"]   = "위반"
-            # ★ 타입은 Claude가 반환한 원래 타입(person_candidate 등) 유지
-            logger.debug(f"[face_post] 실사 키워드 → 위반 유지: '{it.get('content', '')[:40]}'")
-            out.append(it)
-            continue
-
-        # ③ 불명확 — page_images 없는 폴백, 원래 판정 유지 (안전 방향)
-        # 입력 judgment가 "위반"이면 위반 유지, "주의"면 주의 유지
+        # ② 실제 사진 키워드 탐지 시 → 위반 즉시 확정 금지, 원래 판정 유지
+        # ★ 문자열만으로 위반 확정하지 않음: page_images 없어 MediaPipe 재검증 불가이므로
+        #   입력 judgment를 그대로 보존하되, "위반"·"주의" 외 값은 안전 방향으로 위반
         it = dict(it)
         if judgment not in ("위반", "주의"):
             it["judgment"] = "위반"   # 알 수 없는 값은 안전 방향으로 위반
         # 타입은 Claude가 반환한 원래 타입 유지 (person_candidate 등)
-        it["reason"]     = (it.get("reason") or "") + " (page_images 없음, 원래 판정 유지)"
-        logger.debug(f"[face_post] 불명확(키워드없음) → 판정 유지({it['judgment']}): '{it.get('content', '')[:40]}'")
+        it["reason"] = (it.get("reason") or "") + " (page_images 없음 — MediaPipe 재검증 불가, 원래 판정 유지)"
+        logger.debug(f"[face_post] 폴백 판정 유지({it['judgment']}): '{it.get('content', '')[:40]}'")
         out.append(it)
     return out
 

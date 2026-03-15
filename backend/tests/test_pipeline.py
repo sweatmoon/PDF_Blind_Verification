@@ -735,17 +735,21 @@ def _make_face_page_b64(mode: str = "solid_blue", size: tuple = (120, 120)) -> s
             # 단색 회색 → 실루엣
             img = _PIL.new("RGB", (w, h), (120, 120, 120))
         elif mode == "skin_photo":
-            # 살색 기반 + 다양한 색상 분포 → 실제 사진 시뮬레이션
-            arr = np.zeros((h, w, 3), dtype=np.uint8)
-            # 살색 배경
-            arr[:, :] = [210, 170, 140]
-            # 눈 영역 (어두운 색)
-            arr[h//3:h//3+10, w//3:w//3+10] = [30, 20, 20]
-            arr[h//3:h//3+10, 2*w//3:2*w//3+10] = [30, 20, 20]
-            # 입 영역 (붉은 색)
-            arr[2*h//3:2*h//3+8, w//3:2*w//3] = [180, 60, 60]
-            # 다양한 잡음 추가 (실사 사진 특성)
-            noise = np.random.randint(-30, 30, arr.shape, dtype=np.int16)
+            # 흰색 배경 + 살색 얼굴 영역 + 노이즈 → 실제 사진 시뮬레이션
+            # 코너가 흰색이므로 fg_mask 가 내부 얼굴 영역을 잡음
+            arr = np.full((h, w, 3), 240, dtype=np.uint8)   # 흰색 배경
+            # 살색 얼굴 영역 (중앙 60%)
+            y0, y1 = h//5, 4*h//5
+            x0, x1 = w//5, 4*w//5
+            arr[y0:y1, x0:x1] = [210, 150, 110]             # 살색
+            # 눈 (어두운 색)
+            arr[y0+h//8:y0+h//8+max(4,h//12), x0+w//8:x0+w//8+max(4,w//12)] = [30, 20, 20]
+            arr[y0+h//8:y0+h//8+max(4,h//12), x1-w//8-max(4,w//12):x1-w//8] = [30, 20, 20]
+            # 입 (붉은 색)
+            arr[y1-h//6:y1-h//6+max(4,h//14), x0+w//4:x1-w//4] = [190, 70, 70]
+            # 다양한 노이즈 (실사 사진 특성)
+            rng = np.random.default_rng(42)
+            noise = rng.integers(-25, 25, arr.shape, dtype=np.int16)
             arr = np.clip(arr.astype(np.int16) + noise, 0, 255).astype(np.uint8)
             img = _PIL.fromarray(arr, "RGB")
         elif mode == "tiny":
@@ -1047,7 +1051,7 @@ def _mock_detect(conf: float, bbox_size=(80, 80)):
 def test_tc_a_icon_weak_conf_small_bbox():
     """
     TC-A: 사람 아이콘 — MediaPipe conf 0.58, bbox 작음(30×30) → False
-    Case-2: 약한 후보지만 bbox < 40px → icon_or_silhouette
+    Case-2: 약한 후보지만 bbox < 36px → icon_or_silhouette
     """
     import services.claude_judge as _cj
     from services.claude_judge import _verify_face_candidate
@@ -1059,7 +1063,7 @@ def test_tc_a_icon_weak_conf_small_bbox():
         result = _verify_face_candidate(page_b64, None)
 
     assert result == "icon_or_silhouette", (
-        f"TC-A 실패: 사람 아이콘(conf=0.58, bbox=30×30) → icon_or_silhouette 기대, 실제={result}"
+        f"TC-A 실패: 사람 아이콘(conf=0.58, bbox=30×30 < 36px) → icon_or_silhouette 기대, 실제={result}"
     )
     print("✅ TC-A 통과: 사람 아이콘 conf=0.58 bbox=30×30 → icon_or_silhouette")
 
@@ -1133,7 +1137,7 @@ def test_tc_d_real_photo_strong_conf():
 def test_tc_e_small_blurry_thumbnail():
     """
     TC-E: 흐릿한 작은 얼굴 썸네일 — MediaPipe conf 0.64, bbox 작음(35×35) → False
-    Case-2: 약한 후보 + bbox < 40px → icon_or_silhouette
+    Case-2: 약한 후보 + bbox < 36px → icon_or_silhouette
     """
     import services.claude_judge as _cj
     from services.claude_judge import _verify_face_candidate
@@ -1145,7 +1149,7 @@ def test_tc_e_small_blurry_thumbnail():
         result = _verify_face_candidate(page_b64, None)
 
     assert result == "icon_or_silhouette", (
-        f"TC-E 실패: 작은 썸네일(conf=0.64, bbox=35×35) → icon_or_silhouette 기대, 실제={result}"
+        f"TC-E 실패: 작은 썸네일(conf=0.64, bbox=35×35 < 36px) → icon_or_silhouette 기대, 실제={result}"
     )
     print("✅ TC-E 통과: 흐릿한 작은 썸네일 conf=0.64 bbox=35×35 → icon_or_silhouette")
 
