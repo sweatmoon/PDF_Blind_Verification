@@ -363,19 +363,21 @@
 
       <!-- 페이지별 탭 -->
       <div id="tab-content-pages" class="p-4">
-        <div class="flex gap-2 mb-4 flex-wrap">
-          <button onclick="filterPages('all')" id="filter-all"
-                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
-          <button onclick="filterPages('violation')" id="filter-violation"
-                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
-          <button onclick="filterPages('caution')" id="filter-caution"
-                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
-          <button onclick="filterPages('clean')" id="filter-clean"
-                  class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
+        <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+          <div class="flex gap-2 flex-wrap">
+            <button onclick="filterPages('all')" id="filter-all"
+                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">전체</button>
+            <button onclick="filterPages('violation')" id="filter-violation"
+                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">위반만</button>
+            <button onclick="filterPages('caution')" id="filter-caution"
+                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">주의만</button>
+            <button onclick="filterPages('clean')" id="filter-clean"
+                    class="filter-btn text-xs px-3 py-1.5 rounded-full bg-slate-100 text-slate-600">이상없음</button>
+          </div>
           <!-- 인물사진 토글 -->
-          <label id="toggle-person-wrap" class="ml-auto flex items-center gap-2 cursor-pointer select-none" title="인물사진 탐지 결과 표시/숨김">
+          <label id="toggle-person-wrap" class="flex items-center gap-2 cursor-pointer select-none shrink-0 bg-slate-50 border border-slate-200 rounded-full px-3 py-1.5" title="인물사진 탐지 결과 표시/숨김">
             <span class="text-xs text-slate-500">👤 인물사진</span>
-            <div class="relative">
+            <div class="relative w-9 h-5">
               <input type="checkbox" id="togglePersonDets" class="sr-only" checked onchange="togglePersonDetections(this.checked)">
               <div class="toggle-track w-9 h-5 bg-indigo-500 rounded-full transition-colors duration-200"></div>
               <div class="toggle-thumb absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 translate-x-4"></div>
