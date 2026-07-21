@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260721-v12-max-tokens-retry -->
+<!-- BUILD: 20260721-v13-review-dashboard -->
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
@@ -12,6 +12,8 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <!-- PDF.js CDN -->
+  <!-- SheetJS CDN (검수 대시보드 엑셀 다운로드) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
@@ -74,6 +76,88 @@
     .rv-major-cell { background:#fff7ed; color:#9a3412; }
     .rv-check-cell { background:#eff6ff; color:#1e3a8a; }
     .rv-crit-cell  { background:#fee2e2; color:#7f1d1d; }
+    /* ── 검수 대시보드 전용 스타일 ── */
+    .rdb-wrap{max-width:1080px;margin:0 auto;padding:0 0 60px;}
+    .rdb-sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;border-bottom:2px solid #182437;padding-bottom:8px;}
+    .rdb-n{font-family:monospace;font-weight:800;color:#d9b34a;background:#182437;border-radius:5px;padding:2px 8px;font-size:13px;}
+    .rdb-sec-head h2{font-size:18px;margin:0;color:#182437;font-weight:700;}
+    .rdb-banner{background:#e8ecf1;color:#3b4a63;border-radius:10px;padding:12px 16px;font-size:13.5px;font-weight:600;margin-bottom:16px;border:1px solid #c7d0dc;}
+    .rdb-drop-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+    .rdb-dropzone{background:#fff;border:2px dashed #e2e1db;border-radius:12px;padding:16px;text-align:center;cursor:pointer;position:relative;transition:.15s;min-height:110px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px;}
+    .rdb-dropzone.drag{border-color:#d9b34a;background:#fbf6ea;}
+    .rdb-dropzone.filled{border-style:solid;border-color:#2e6b45;background:#e6f2ea;}
+    .rdb-dropzone .ico{font-size:20px;}
+    .rdb-dropzone .label{font-weight:700;font-size:13.5px;color:#182437;}
+    .rdb-dropzone .hint{font-size:11.5px;color:#6b6f76;}
+    .rdb-dropzone .fileinfo{font-size:12px;font-family:monospace;color:#2e6b45;word-break:break-all;padding:0 8px;}
+    .rdb-dropzone input{display:none;}
+    .rdb-dropzone .rdb-clear{position:absolute;top:8px;right:10px;font-size:11px;color:#6b6f76;background:none;border:none;cursor:pointer;text-decoration:underline;}
+    .rdb-checklist{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+    .rdb-chip{font-size:12.5px;font-weight:700;padding:6px 12px;border-radius:20px;background:#eee;color:#6b6f76;border:1px solid #e2e1db;}
+    .rdb-chip.done{background:#e6f2ea;color:#2e6b45;border-color:#bfe0cc;}
+    .rdb-savedstamp{font-size:12px;color:#6b6f76;margin-top:8px;}
+    .rdb-report-row{background:#fff;border:1px solid #e2e1db;border-radius:10px;margin-bottom:10px;overflow:hidden;}
+    .rdb-rhead{display:flex;align-items:center;gap:14px;padding:14px 18px;cursor:pointer;}
+    .rdb-rhead .rtitle .name{font-weight:700;font-size:15px;color:#182437;}
+    .rdb-rhead .rtitle .sub{font-size:12px;color:#6b6f76;margin-top:2px;}
+    .rdb-rhead .counts{display:flex;gap:6px;flex-wrap:wrap;}
+    .rdb-minicount{font-family:monospace;font-size:12px;font-weight:800;padding:3px 8px;border-radius:6px;}
+    .rdb-minicount.crit{background:#fbe9e7;color:#b3261e;}
+    .rdb-minicount.major{background:#fdedd9;color:#b5560a;}
+    .rdb-minicount.minor{background:#fbf3d0;color:#8a6d00;}
+    .rdb-minicount.check{background:#e8ecf1;color:#3b4a63;}
+    .rdb-chev{color:#6b6f76;transition:.15s;font-size:18px;margin-left:auto;}
+    .rdb-xlsx-btn{background:#1d6f42;color:#fff;border:none;border-radius:7px;padding:7px 12px;font-weight:700;font-size:12.5px;cursor:pointer;white-space:nowrap;}
+    .rdb-xlsx-btn:hover{background:#175a35;}
+    .rdb-report-row.open .rdb-chev{transform:rotate(90deg);}
+    .rdb-detail{display:none;border-top:1px solid #e2e1db;padding:20px 22px 26px;background:#fbfbf9;}
+    .rdb-report-row.open .rdb-detail{display:block;}
+    .rdb-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:6px 0 16px;}
+    .rdb-card{background:#fff;border:1px solid #e2e1db;border-radius:10px;padding:14px 14px 12px;}
+    .rdb-card .num{font-size:26px;font-weight:800;font-family:monospace;}
+    .rdb-card .lbl{font-size:12px;color:#6b6f76;margin-top:2px;font-weight:600;}
+    .rdb-card.crit{border-left:5px solid #b3261e;} .rdb-card.crit .num{color:#b3261e;}
+    .rdb-card.major{border-left:5px solid #b5560a;} .rdb-card.major .num{color:#b5560a;}
+    .rdb-card.minor{border-left:5px solid #8a6d00;} .rdb-card.minor .num{color:#8a6d00;}
+    .rdb-card.check{border-left:5px solid #3b4a63;} .rdb-card.check .num{color:#3b4a63;}
+    .rdb-verdict{background:#fff;border:1px solid #e2e1db;border-radius:10px;padding:14px 16px;margin:6px 0 20px;font-size:14px;}
+    .rdb-verdict b{color:#182437;}
+    .rdb-subhead{font-size:13.5px;font-weight:800;color:#182437;margin:22px 0 10px;padding-left:10px;border-left:4px solid #d9b34a;}
+    .rdb-tbl{width:100%;border-collapse:collapse;font-size:13px;background:#fff;}
+    .rdb-tbl th,.rdb-tbl td{border:1px solid #e2e1db;padding:8px 9px;text-align:left;vertical-align:top;}
+    .rdb-tbl th{background:#eef0ec;color:#182437;font-weight:700;font-size:12px;}
+    .rdb-tbl td.num{text-align:right;font-family:monospace;}
+    .rdb-tbl tr.total td{background:#f2f1ea;font-weight:700;}
+    .rdb-badge{display:inline-block;font-size:11px;font-weight:800;padding:2px 9px;border-radius:20px;}
+    .rdb-badge.crit{background:#fbe9e7;color:#b3261e;}
+    .rdb-badge.major{background:#fdedd9;color:#b5560a;}
+    .rdb-badge.check{background:#e8ecf1;color:#3b4a63;}
+    .rdb-badge.ok{background:#e6f2ea;color:#2e6b45;}
+    .rdb-finding{background:#fff;border:1px solid #e2e1db;border-radius:10px;margin-bottom:10px;overflow:hidden;}
+    .rdb-finding .fhead{display:flex;gap:10px;align-items:center;padding:10px 14px;cursor:pointer;border-left:5px solid transparent;}
+    .rdb-finding.crit .fhead{border-left-color:#b3261e;}
+    .rdb-finding.major .fhead{border-left-color:#b5560a;}
+    .rdb-finding.check .fhead{border-left-color:#3b4a63;}
+    .rdb-finding .ftitle{font-weight:700;flex:1;font-size:13.8px;}
+    .rdb-finding .slide{font-size:11.5px;color:#6b6f76;font-family:monospace;}
+    .rdb-finding .fbody{padding:0 16px 14px 19px;font-size:13.3px;display:none;}
+    .rdb-finding.open .fbody{display:block;}
+    .rdb-finding .fchev{transition:transform .15s;color:#6b6f76;}
+    .rdb-finding.open .fchev{transform:rotate(90deg);}
+    .rdb-kv{display:grid;grid-template-columns:110px 1fr;gap:5px 10px;margin:8px 0;font-size:13px;}
+    .rdb-kv .k{color:#6b6f76;font-weight:600;}
+    .rdb-kv .v.baseline{color:#2e6b45;font-weight:700;}
+    .rdb-kv .v.ppt{color:#b3261e;font-weight:700;}
+    .rdb-kv .v.fix{color:#182437;font-weight:700;background:#eef0ec;padding:2px 6px;border-radius:4px;display:inline-block;}
+    .rdb-calc{background:#faf9f5;border:1px dashed #c9c6ba;border-radius:8px;padding:9px 12px;font-family:monospace;font-size:12px;margin:8px 0;white-space:pre-wrap;color:#3a3a3a;}
+    .rdb-note{font-size:12.3px;color:#6b6f76;margin-top:6px;}
+    .rdb-empty-ok{background:#e6f2ea;color:#2e6b45;border-radius:8px;padding:10px 14px;font-weight:700;font-size:13px;}
+    .rdb-prio{display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;}
+    .rdb-prio .col{flex:1;min-width:200px;background:#fff;border:1px solid #e2e1db;border-radius:10px;padding:12px 14px;}
+    .rdb-prio .col h3{font-size:12px;margin:0 0 6px;text-transform:uppercase;letter-spacing:.05em;}
+    .rdb-prio .col ul{margin:0;padding-left:16px;font-size:13px;}
+    .rdb-prio .col.c1 h3{color:#b3261e;} .rdb-prio .col.c2 h3{color:#b5560a;} .rdb-prio .col.c3 h3{color:#3b4a63;}
+    @media(max-width:720px){.rdb-cards{grid-template-columns:repeat(2,1fr);}.rdb-drop-grid{grid-template-columns:1fr;}.rdb-kv{grid-template-columns:90px 1fr;}.rdb-rhead{flex-wrap:wrap;}}
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
@@ -100,6 +184,10 @@
         <button id="tab-review" onclick="switchMainTab('review')"
           class="px-3 py-1.5 transition text-slate-600 hover:bg-slate-50">
           <i class="fas fa-file-magnifying-glass mr-1"></i>제안서 검수
+        </button>
+        <button id="tab-review-dashboard" onclick="switchMainTab('review-dashboard')"
+          class="px-3 py-1.5 transition text-slate-600 hover:bg-slate-50">
+          <i class="fas fa-table-list mr-1"></i>검수 대시보드
         </button>
       </nav>
     </div>
@@ -1199,6 +1287,66 @@
     </div>
   </div>
 
+  <!-- ═══════════════ 검수 대시보드 화면 ═══════════════ -->
+  <div id="page-review-dashboard" class="hidden fade-in">
+    <div class="rdb-wrap">
+
+      <!-- ===== 1. 파일 제출 체크리스트 ===== -->
+      <section style="margin:28px 0;">
+        <div class="rdb-sec-head"><span class="rdb-n">01</span><h2>파일 제출 체크리스트</h2></div>
+        <div class="rdb-banner">
+          ⓘ 파일명·크기·제출시각만 기록합니다. 표·인력명·공수 등 실제 내용 대조는 제안서 검수 탭에서 진행합니다.
+        </div>
+        <div class="rdb-drop-grid">
+          <div class="rdb-dropzone" data-key="auditRfp">
+            <div class="ico">📄</div><div class="label">감리사업 제안요청서</div>
+            <div class="hint">.hwpx / .hwp / .pdf</div>
+            <button class="rdb-clear" onclick="rdbClearSlot(event,'auditRfp')">지우기</button>
+            <input type="file" accept=".hwp,.hwpx,.pdf,.doc,.docx">
+          </div>
+          <div class="rdb-dropzone" data-key="targetRfp">
+            <div class="ico">📄</div><div class="label">대상사업 제안요청서</div>
+            <div class="hint">.hwpx / .hwp / .pdf</div>
+            <button class="rdb-clear" onclick="rdbClearSlot(event,'targetRfp')">지우기</button>
+            <input type="file" accept=".hwp,.hwpx,.pdf,.doc,.docx">
+          </div>
+          <div class="rdb-dropzone" data-key="portal">
+            <div class="ico">🌐</div><div class="label">포털 제안작업표 HTML</div>
+            <div class="hint">.html</div>
+            <button class="rdb-clear" onclick="rdbClearSlot(event,'portal')">지우기</button>
+            <input type="file" accept=".html,.htm">
+          </div>
+          <div class="rdb-dropzone" data-key="pptx">
+            <div class="ico">📊</div><div class="label">정성제안서 최종본 PPT</div>
+            <div class="hint">.pptx</div>
+            <button class="rdb-clear" onclick="rdbClearSlot(event,'pptx')">지우기</button>
+            <input type="file" accept=".pptx,.ppt">
+          </div>
+        </div>
+        <div class="rdb-checklist">
+          <span class="rdb-chip" data-chip="auditRfp">감리사업 RFP</span>
+          <span class="rdb-chip" data-chip="targetRfp">대상사업 RFP</span>
+          <span class="rdb-chip" data-chip="portal">포털 HTML</span>
+          <span class="rdb-chip" data-chip="pptx">정성제안서 PPT</span>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
+          <button style="background:#182437;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13.5px;cursor:pointer;" id="rdb-requestBtn" disabled onclick="rdbRequestAnalysis()">채팅에 보낼 문구 복사하기 →</button>
+          <button style="background:#fff;color:#182437;border:1px solid #e2e1db;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13.5px;cursor:pointer;" onclick="rdbResetAll()">전체 초기화</button>
+        </div>
+        <div class="rdb-savedstamp" id="rdb-savedStamp"></div>
+      </section>
+
+      <!-- ===== 2. 검수 결과 리스트 ===== -->
+      <section style="margin:28px 0;">
+        <div class="rdb-sec-head"><span class="rdb-n">02</span><h2>검수 결과 리스트 (10건)</h2></div>
+        <div id="rdb-reportList"></div>
+      </section>
+
+      <footer style="color:#6b6f76;font-size:12px;text-align:center;padding:20px 0 10px;">
+        감리사업명을 클릭하면 총평·기준정보·치명/중대/경미/확인필요·일정공수대조·인력명대조·무관내용·수정우선순위 전체를 볼 수 있습니다.
+      </footer>
+    </div>
+  </div>
 </main>
 
 <!-- 토스트 알림 -->
@@ -1261,7 +1409,8 @@ let state = {
 // ─────────────────────────────────────────────────────────────
 function showPage(page) {
   ['upload','processing','result','admin','dashboard',
-   'review-upload','review-processing','review-result','review-history'].forEach(p => {
+   'review-upload','review-processing','review-result','review-history',
+   'review-dashboard'].forEach(p => {
     document.getElementById(`page-${p}`).classList.add('hidden');
   });
   document.getElementById(`page-${page}`).classList.remove('hidden');
@@ -1287,6 +1436,7 @@ function showPage(page) {
   }
   if (page === 'dashboard') { dbStartPolling(); renderDashboard(); }
   if (page === 'review-history') { rvHistoryRender(); }
+  if (page === 'review-dashboard') { rdbInit(); }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2814,7 +2964,7 @@ ${costLine}<b>검증일:</b> ${String(r.created_at||'').slice(0,19)}</p>
 <table><thead><tr><th>페이지</th><th>검출유형</th><th>검출내용</th><th>판정</th><th>판정 사유</th></tr></thead>
 <tbody>${rows||'<tr><td colspan="5" style="text-align:center;padding:20px;color:#6b7280">검출된 위반/주의 항목 없음</td></tr>'}</tbody></table>
 <p style="margin-top:30px;font-size:11px;color:#94a3b8">본 리포트는 자동 검수 시스템에 의해 생성되었습니다. | 원본 파일은 검수 즉시 삭제됩니다.</p>
-</body></html>`;
+;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -4591,24 +4741,28 @@ function switchMainTab(tab) {
   const blindPages = ['upload','processing','result'];
   const reviewPages = ['review-upload','review-processing','review-result'];
 
-  const tabBlind  = document.getElementById('tab-blind');
-  const tabReview = document.getElementById('tab-review');
+  const tabBlind   = document.getElementById('tab-blind');
+  const tabReview  = document.getElementById('tab-review');
+  const tabRdbDash = document.getElementById('tab-review-dashboard');
+
+  // 모든 탭 비활성화
+  [tabBlind, tabReview, tabRdbDash].forEach(t => {
+    if(t){ t.classList.remove('tab-main-active'); t.classList.add('text-slate-600','hover:bg-slate-50'); }
+  });
 
   if (tab === 'blind') {
     tabBlind.classList.add('tab-main-active');
     tabBlind.classList.remove('text-slate-600','hover:bg-slate-50');
-    tabReview.classList.remove('tab-main-active');
-    tabReview.classList.add('text-slate-600','hover:bg-slate-50');
-    // 블라인드 측 현재 표시 페이지 복원
     showPage('upload');
+  } else if (tab === 'review-dashboard') {
+    tabRdbDash.classList.add('tab-main-active');
+    tabRdbDash.classList.remove('text-slate-600','hover:bg-slate-50');
+    showPage('review-dashboard');
   } else {
+    // 'review'
     tabReview.classList.add('tab-main-active');
     tabReview.classList.remove('text-slate-600','hover:bg-slate-50');
-    tabBlind.classList.remove('tab-main-active');
-    tabBlind.classList.add('text-slate-600','hover:bg-slate-50');
-    // 이력 배지 갱신
     rvHistoryUpdateBadge();
-    // 검수 중인 job 있으면 결과로, 없으면 업로드로
     if (rvJobId) {
       showPage(rvPollTimer ? 'review-processing' : 'review-result');
     } else {
@@ -5377,6 +5531,1193 @@ function _esc(str) {
   return String(str)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+
+<!-- ══════ 검수 대시보드 스크립트 ══════ -->
+<script>
+/* ─── export 함수 (SheetJS) ─── */
+function rdbExportTypoExcel(id){
+  const r = REPORTS.find(x=>x.id===id);
+  if(!r || !r.typoChecklist) return;
+
+  const rows = [["번호","슬라이드","문제 유형","우선순위","원문 (발췌)","수정안","설명 · 근거"]];
+  r.typoChecklist.forEach(t => rows.push([t.no, t.slide, t.type, t.priority, t.original, t.fix, t.note]));
+  const ws1 = XLSX.utils.aoa_to_sheet(rows);
+  ws1['!cols'] = [{wch:6},{wch:10},{wch:10},{wch:8},{wch:45},{wch:35},{wch:45}];
+
+  const byPriority = {"높음":0,"중간":0,"낮음":0};
+  const byType = {};
+  r.typoChecklist.forEach(t=>{
+    byPriority[t.priority] = (byPriority[t.priority]||0)+1;
+    byType[t.type] = (byType[t.type]||0)+1;
+  });
+  const summaryRows = [
+    [r.name + " — 제안서 검수 요약"],
+    [`검수 항목 총 ${r.typoChecklist.length}건 · 검수일 ${r.date}`],
+    [],
+    ["우선순위별 건수","", "", "문제 유형별 건수"],
+    ...Object.keys(byPriority).map(k=>[k, byPriority[k]]),
+    ["합계", r.typoChecklist.length],
+  ];
+  // append type counts alongside
+  const typeKeys = Object.keys(byType);
+  typeKeys.forEach((k,i)=>{
+    const rowIdx = 3+i;
+    if(!summaryRows[rowIdx]) summaryRows[rowIdx] = ["","","",""];
+    while(summaryRows[rowIdx].length < 3) summaryRows[rowIdx].push("");
+    summaryRows[rowIdx][3] = k;
+    summaryRows[rowIdx][4] = byType[k];
+  });
+  const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
+  ws2['!cols'] = [{wch:14},{wch:8},{wch:4},{wch:16},{wch:8}];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws1, "검수표");
+  XLSX.utils.book_append_sheet(wb, ws2, "요약");
+  XLSX.writeFile(wb, `${r.name}_오타검수표.xlsx`);
+}
+
+function rdbExportExcel(id){
+  const r = REPORTS.find(x=>x.id===id);
+  if(!r) return;
+
+  const rows = [["페이지","수정필요 내용"]];
+  r.critical.forEach(f => rows.push([f.slide, `[치명] ${f.title} → ${f.fix}`]));
+  r.major.forEach(f => rows.push([f.slide, `[중대] ${f.title} → ${f.fix}`]));
+  r.minor.forEach(f => rows.push([f.slide, `[경미] ${f.title} → ${f.fix}`]));
+  r.checkNeeded.forEach(f => rows.push([f.slide, `[확인필요] ${f.title} → ${f.fix}`]));
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 20 }, { wch: 100 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "수정필요목록");
+  XLSX.writeFile(wb, `${r.name}_수정필요목록.xlsx`);
+}
+
+/* ─── REPORTS 데이터 (10건) ─── */
+const REPORTS = [
+  {
+    id: "hoenyanche-2026",
+    name: "'26년 클라우드 네이티브 전환사업(고향사랑e음) 위탁감리",
+    org: "한국지능정보사회진흥원",
+    date: "2026.07.07 검수",
+    counts: { crit:1, major:1, minor:0, check:3 },
+    verdict: `감리 일정·전체 공수(307MD)·감리팀 인력 구성(20명)은 포털 제안작업표 확정값과 정확히 일치합니다.
+다만 <b>① 상근감리원 비율을 "100%"로 기재한 슬라이드가 PPT 내부 다른 슬라이드(85%) 및 포털 확정 명단과 상충</b>하고,
+<b>② 감리원·전문가 공수 분류표(슬라이드122)가 확정 분류와 63MD 어긋나 있어</b> 제출 전 수정이 필요합니다.
+인력명·준공일자·용어 사용 3건은 오류로 단정하기보다 작성자 확인이 필요합니다. 본사업과 무관한 잔존 문구는 없습니다.`,
+    baseline: [
+      ["감리사업명","'26년 클라우드 네이티브 전환사업(고향사랑e음) 위탁감리","감리사업 RFP / 포털"],
+      ["발주기관(감리계약)","한국지능정보사회진흥원","감리사업 RFP(수신처)"],
+      ["대상사업명","'26년 클라우드 네이티브 전환 사업(고향사랑e음)","대상사업 RFP"],
+      ["주관기관(대상사업)","한국지능정보사회진흥원 (RFP 명시적 정의)","대상사업 RFP"],
+      ["대상 시스템","고향사랑e음 (클라우드 네이티브 전환)","대상사업 RFP"],
+      ["감리 단계","요구정의→설계→구현(추가)→종료→준공점검 (3단계+추가감리)","포털 HTML"],
+      ["요구 투입공수(최소)","184 MD 이상","포털 HTML"],
+      ["전체 제안 공수","307 MD (요구 대비 167%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 7명 + 전문가 10명 + 테스터 3명 = 20명","포털 HTML"],
+    ],
+    critical: [
+      { title:'상근감리원 배치 비율 허위/상충 기재 — "100% 상근" vs 실제 85%(6/7명)', slide:"Slide 3, 147",
+        fix:'"감리원 전원 수석감리원 배치 / 상근감리원 비율 85%(6/7명)"로 수정 (Slide3 "100%"→"85%", Slide147과 통일)',
+        body:`<p>Slide 3은 "감리원 100% 수석감리원‧상근감리원 배치"(전원 수석·상근)라고 명시하나, 포털 확정 인력 명단상 단계 감리팀 7명 중 <b>이영주(관리서비스 담당)는 비상근</b>으로 등록되어 있습니다. PPT 자신도 Slide 147(제안요청 충족 여부 표)에서는 <b>"단계 감리원 7명 : 85% 상근 수석 감리원"</b>이라고 다르게 기재해 같은 제안서 안에서 상충됩니다.</p>
+        <div class="calc">상근 인원: 6명 (최철·김희영·홍대원·양권묵·박범진·김영범 상근 / 이영주 비상근)
+상근 비율: 6 ÷ 7 = 85.7% ≈ 85%
+Slide 3 표기: 100%  ↔  Slide 147 표기: 85%  ↔ 포털 확정: 85.7%</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">상근 6/7명 (85%) — 포털 확정 명단</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">Slide3 "100%상근" / Slide147 "85%상근"</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"감리원 전원 수석감리원 배치 / 상근감리원 비율 85%(6/7명)"</span></div>
+        </div>
+        <p class="note">상근 감리원 투입 비율은 감리사업 RFP상 평가 항목("라.1.5")에 해당하여, 사실과 다른 수치 기재는 평가 신뢰도에 직접 영향을 줄 수 있습니다.</p>` },
+    ],
+    major: [
+      { title:"감리원 / 전문가 공수 분류가 다른 슬라이드와 63MD 불일치", slide:"Slide 122",
+        fix:"Slide122 감리원/전문가 공수표를 감리원 219MD(71.3%) / 전문가 88MD(28.7%)로 재작성, 또는 재분류 근거를 각주로 명시",
+        body:`<p>Slide 122(3.7 감리원 및 전문가 투입 비율)는 "전체 투입 공수 307MD 중 감리원 282MD(91.9%), 전문가 25MD(8.1%)"라고 표기합니다. 그러나 포털 HTML 확정 자료 및 PPT 자체의 다른 슬라이드(Slide96 "단계 감리팀 219MD"/"전문가팀 58MD", Slide68 "전문가+테스트팀 88MD")에서는 <b>감리원 219MD, 전문가 88MD</b>로 집계되어, 전문가 공수 중 63MD가 슬라이드122에서 임의로 "감리원"으로 재분류되어 있습니다.</p>
+        <div class="calc">[확정 / Slide96·68·147] 감리원 219MD + 전문가 88MD = 307MD
+[Slide122 표기]      감리원 282MD + 전문가  25MD = 307MD
+차이: 감리원 +63MD / 전문가 -63MD</div>
+        <table style="margin-top:8px">
+          <tr><th>단계</th><th class="num">확정(감리원MD)</th><th class="num">Slide122(감리원MD)</th><th class="num">차이</th><th>판정</th></tr>
+          <tr><td>요구정의</td><td class="num">57</td><td class="num">57</td><td class="num">0</td><td><span class="badge ok">일치</span></td></tr>
+          <tr><td>설계</td><td class="num">57</td><td class="num">78</td><td class="num">+21</td><td><span class="badge major">불일치</span></td></tr>
+          <tr><td>구현</td><td class="num">43</td><td class="num">58</td><td class="num">+15</td><td><span class="badge major">불일치</span></td></tr>
+          <tr><td>종료</td><td class="num">57</td><td class="num">81</td><td class="num">+24</td><td><span class="badge major">불일치</span></td></tr>
+          <tr><td>준공점검</td><td class="num">5</td><td class="num">8</td><td class="num">+3</td><td><span class="badge major">불일치</span></td></tr>
+          <tr class="total"><td>합계</td><td class="num">219</td><td class="num">282</td><td class="num">+63</td><td>-</td></tr>
+        </table>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">감리원 219MD(71.3%) / 전문가 88MD(28.7%)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">감리원 282MD(91.9%) / 전문가 25MD(8.1%)</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">219MD / 88MD로 통일, 또는 재분류 근거 각주 명시</span></div>
+        </div>
+        <p class="note">전문가 30% 이내 규정(감리사업 RFP, 정보시스템 감리기준 제5조)의 결론 자체는 어느 쪽 수치로도 바뀌지 않지만, 근거 수치가 제안서 내에서 서로 다릅니다.</p>` },
+    ],
+    minor: [],
+    checkNeeded: [
+      { title:'인력명 "김영범" vs 포털 확정명 "김영범A"', slide:"조직도·역할표·시정조치 등 전 슬라이드",
+        fix:'"김영범"이 포털의 "김영범A"와 동일인인지 작성자 확인 후, 필요 시 "김영범A"로 표기 통일',
+        body:`<p>포털 확정 명단은 클라우드 네이티브 아우터 아키텍처 담당자를 <b>"김영범A"</b>로 등록하고 있으나, PPT는 조직도·역할표·시정조치확인·인력 프로파일 등 모든 장표에서 예외 없이 <b>"김영범"</b>(접미사 없음)으로 표기합니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">김영범A (포털 확정)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">김영범 (전 슬라이드 동일)</div>
+          <div class="k">확인 사유</div><div>포털 시스템의 동명이인 구분 식별자("A")일 가능성이 있어, 실명 표기 오류인지 시스템 식별자인지 확인 필요.</div>
+        </div>` },
+      { title:"준공점검 일정에 구체 일자 미기재", slide:"Slide 95",
+        fix:'준공점검 일정을 "사업종료시점" 대신 "2027.03.08(월)~2027.03.12(금)"으로 구체 기재할지 결정',
+        body:`<p>포털 HTML은 준공점검을 <b>"2027.03.08(월)~2027.03.12(금), 5일"</b>로 확정하나, PPT는 <b>"사업종료시점"</b>으로만 표기하여 구체 일자가 없습니다. 일수·공수(5일/5MD)는 일치합니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">2027.03.08(월) ~ 2027.03.12(금)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">"사업종료시점" (구체 일자 없음)</div>
+          <div class="k">확인 사유</div><div>실제 일자와 상충되진 않으나, 명확성을 위한 구체 일자 기재 여부 확인 필요.</div>
+        </div>` },
+      { title:'"위탁기관(한국지역정보개발원)" 용어가 RFP 정의와 불일치', slide:"Slide 2, 106",
+        fix:'"위탁기관" 표현을 RFP 정의 용어("전환대상기관" 등)로 통일할지 발주처 확인 후 결정',
+        body:`<p>대상사업 RFP는 "주관기관=한국지능정보사회진흥원", "전환대상기관=클라우드 전환되는 정보시스템 운영 책임기관"만 정의하며 <b>"위탁기관"이라는 용어 자체는 RFP에 없습니다.</b> PPT는 한국지역정보개발원을 "위탁기관"으로 지칭합니다. (참고: PPT의 "주관기관(NIA)" 표기 자체는 RFP 정의와 일치하여 오류 아님.)</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">RFP: 주관기관(NIA)/전환대상기관 ("위탁기관" 용어 없음)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">"위탁기관(한국지역정보개발원)"</div>
+          <div class="k">확인 사유</div><div>실무 통용 표현일 수 있어 오류로 단정 어려움. 발주처 확인 후 용어 통일 여부 결정 필요.</div>
+        </div>` },
+    ],
+    schedule: [
+      ["요구정의","2026.08.18~08.26 (7일)","2026.08.18~08.26 (7일)","57","57","ok"],
+      ["설계","2026.09.14~09.22 (7일)","2026.09.14~09.22 (7일)","83","83","ok"],
+      ["구현","2027.01.18~01.26 (5일)","2027.01.18~01.26 (5일)","68","68","ok"],
+      ["종료","2027.02.10~02.18 (7일)","2027.02.10~02.18 (7일)","91","91","ok"],
+      ["준공점검","2027.03.08~03.12 (5일)",'"사업종료시점" (5일)',"8","8","check"],
+    ],
+    scheduleNote:"공수는 각 단계의 (감리원MD+전문가MD) 합계 기준. 준공점검은 일수·공수는 일치하나 PPT에 구체 일자가 없어 확인필요.",
+    personnel: [
+      ["단계 감리팀(7명)","최철,김희영,홍대원,이영주,양권묵,박범진,<b>김영범A</b>","동일 + <b>김영범</b>","check"],
+      ["전문가(10명)","조충희,배동환,조원희,권영순,김지훈,이창우,이인숙,김성철,양정열,정해철","동일 10명 확인됨","ok"],
+      ["테스터(3명)","김무근,김태호,김연호","동일 3명 확인됨","ok"],
+      ["조직도 vs 역할표","-","전 인력명 동일 표기 확인 (Slide102↔103)","ok"],
+      ["시정조치 담당자","-","단계감리팀과 동일 인력 확인 (Slide99)","ok"],
+      ["상근/비상근 표기","이영주만 비상근, 나머지 6명 상근","Slide3 100%/Slide147 85% 상호 불일치","crit"],
+    ],
+    irrelevant: "쇼핑몰·물류·전세앱 등 이관 키워드 및 타 기관·시스템명 잔존 여부를 검색하였으나 발견되지 않았습니다. \"범죄피해자 통합지원시스템\" 등은 제안사의 별도 사업 실적(과거 수행 프로젝트) 슬라이드에 정상적으로 포함된 것으로, 본사업과 혼재된 오류가 아닙니다.",
+    priority: {
+      crit: ['Slide 3 "감리원 100% 상근" 표현을 "상근 85%(6/7명)"로 정정, Slide147과 통일'],
+      major: ["Slide 122 감리원/전문가 공수표를 219MD/88MD 기준으로 재작성 (또는 재분류 근거 각주 추가)"],
+      check: ['"김영범" 표기가 포털의 "김영범A"와 동일인인지 확인', "준공점검 구체 일자(03.08~03.12) 기재 여부 결정", '"위탁기관" 용어 사용을 RFP 정의 용어로 통일할지 결정'],
+    }
+  },
+  {
+    id: "gangwonland-genai-2026",
+    name: "생성형 AI 및 응용서비스 구축 감리 및 개인정보 영향평가 용역",
+    org: "(주)강원랜드",
+    date: "2026.07.07 검수",
+    counts: { crit:1, major:0, minor:0, check:2 },
+    verdict: `감리 일정·전체 공수(285MD)·감리팀 인력 구성(21명)은 포털 제안작업표 확정값과 정확히 일치하며, 감리(119MD 이상)·개인정보 영향평가(60MD 이상) 각각의 RFP 최소 공수 요건도 충족합니다.
+다만 <b>제안요청 충족 여부 표(Slide 179)에서 "단계감리팀 202MD + 전문가팀 56MD + 테스트팀 27MD + 개인정보영향평가 80MD"를 나열식으로 표기하여 합산 시 365MD가 되어, 같은 슬라이드에 명시된 전체 투입공수 285MD와 80MD 어긋납니다.</b>
+이는 "단계감리팀 202MD" 안에 이미 개인정보영향평가 인력(80MD)이 포함되어 있음에도 아래에서 다시 별도 항목으로 나열해 발생한 중복 표기입니다.
+인력명 "김영범"/"이준호"가 포털의 "김영범A"/"이준호B"와 표기가 다른 점은 확인이 필요하나, 직전 검수 사업에서도 동일 패턴이 있어 포털의 동명이인 식별자일 가능성이 높습니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","생성형 AI 및 응용서비스 구축 감리 및 개인정보 영향평가 용역","감리사업 RFP / 포털"],
+      ["발주기관","(주)강원랜드","감리사업 RFP"],
+      ["대상사업명","생성형 AI 및 응용서비스 구축 사업","대상사업 RFP"],
+      ["감리 형태","2단계 감리(설계·종료) + 추가감리(상시분석·구현·검수지원)","감리사업 RFP / 포털"],
+      ["요구 투입공수(감리)","119 MD 이상","감리사업 RFP"],
+      ["요구 투입공수(개인정보영향평가)","60 MD 이상","감리사업 RFP"],
+      ["요구 투입공수(합계)","179 MD 이상 (119+60)","감리사업 RFP / 포털"],
+      ["전체 제안 공수","285 MD (요구 대비 159%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 8명(핵심6+개인정보2) + 전문가 10명 + 테스터 3명 = 21명","포털 HTML"],
+    ],
+    critical: [
+      { title:"제안요청 충족표의 공수 나열이 이중계산되어 전체 공수(285MD)와 80MD 불일치", slide:"Slide 179",
+        fix:'"단계 감리팀 202MD"에 개인정보영향평가 80MD가 이미 포함되어 있음을 각주로 명시하거나, "단계 감리팀"을 122MD(핵심 6명, PIA 별도 표기)로 수정하여 122+56+27+80=285로 합계가 맞도록 정리',
+        body:`<p>Slide 179(제안요청 충족 여부 표)는 "전체 투입 공수 → 총 285MD"라고 명시한 직후, 그 세부 항목으로 <b>"단계 감리팀 202MD / 전문가팀 56MD / 테스트팀 27MD / 개인정보 영향평가 80MD"</b>를 나열합니다. 이 네 항목을 그대로 합산하면 365MD로, 같은 슬라이드가 밝힌 285MD보다 80MD 많습니다.</p>
+        <p>원인은 "단계 감리팀 202MD"에 이미 개인정보영향평가 인력(홍재훈 43MD + 최태룡 37MD = 80MD)이 포함되어 있기 때문입니다. 포털 확정 자료와 PPT Slide 99에 따르면 핵심 감리원 6명(정명종·김숙영·김선주·이미애·박승진·허진)의 공수는 122MD이며, 122MD(핵심 6명) + 80MD(개인정보 2명) = 202MD입니다. 즉 "개인정보 영향평가 80MD"는 별도로 더할 항목이 아니라 202MD 안에 이미 포함된 하위 항목입니다.</p>
+        <div class="calc">[Slide 179에 나열된 4개 항목 합산]
+  단계 감리팀 202MD + 전문가팀 56MD + 테스트팀 27MD + 개인정보영향평가 80MD = 365MD  ← 실제 285MD와 80MD 차이
+
+[정확한 구조 (포털 확정 / Slide 99)]
+  단계 감리팀(핵심 6명) 122MD
+  + 개인정보 영향평가(2명)   80MD   → 감리원 소계 202MD
+  + 전문가팀                56MD
+  + 테스트팀                27MD
+  --------------------------------
+  = 285MD</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">122(핵심)+80(개인정보)+56(전문가)+27(테스트)=285MD</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">202+56+27+80 나열 → 합산 시 365MD로 오독 가능</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"단계감리팀 202MD(개인정보 80MD 포함)"로 각주 처리, 또는 122MD로 라벨 수정</span></div>
+        </div>
+        <p class="note">RFP는 감리(119MD 이상)와 개인정보 영향평가(60MD 이상)를 각각 별도 최소공수로 요구하므로, 두 영역을 나누어 보여주려는 의도 자체는 타당합니다. 다만 "단계감리팀" 수치에 이미 포함된 값을 다시 별도 항목으로 나열한 것이 문제입니다.</p>` },
+    ],
+    major: [],
+    minor: [],
+    checkNeeded: [
+      { title:'인력명 "김영범" vs 포털 확정명 "김영범A"', slide:"역할표·인력 프로파일 등",
+        fix:'"김영범"이 포털의 "김영범A"와 동일인인지 확인 (직전 검수 사업에서도 동일 패턴 확인됨 — 포털 동명이인 식별자일 가능성 높음)',
+        body:`<p>포털 확정 명단은 개인정보보호 담당 전문가를 <b>"김영범A"</b>로 등록하고 있으나, PPT는 <b>"김영범"</b>(접미사 없음)으로 표기합니다. 직전에 검수한 '26년 고향사랑e음 사업에서도 동일 인물이 동일한 방식(포털 "김영범A" ↔ PPT "김영범")으로 표기되어 있어, 포털 시스템이 동명이인을 구분하기 위해 붙이는 식별자일 가능성이 높습니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">김영범A (포털 확정)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">김영범</div>
+          <div class="k">확인 사유</div><div>동일 패턴이 두 사업에서 반복 확인되어 시스템 식별자일 가능성이 높으나, 최종 확인 필요.</div>
+        </div>` },
+      { title:'인력명 "이준호" vs 포털 확정명 "이준호B"', slide:"역할표·인력 프로파일 등",
+        fix:'"이준호"가 포털의 "이준호B"와 동일인인지 확인',
+        body:`<p>포털 확정 명단은 기능테스트 담당 테스터를 <b>"이준호B"</b>로 등록하고 있으나, PPT는 <b>"이준호"</b>(접미사 없음)로 표기합니다. "김영범A" 사례와 마찬가지로 동명이인 구분 식별자일 가능성이 있습니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">이준호B (포털 확정)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">이준호</div>
+          <div class="k">확인 사유</div><div>실명 표기 누락인지 시스템 식별자인지 확인 필요.</div>
+        </div>` },
+    ],
+    schedule: [
+      ["상시(분석)","2026.08.03~08.07 (5일)","2026.08.03~08.07 (5일)","40","40","ok"],
+      ["설계","2026.09.28~10.02 (5일)","2026.09.28~10.02 (5일)","55","55","ok"],
+      ["구현","2027.01.11~01.15 (5일)","2027.01.11~01.15 (5일)","25","25","ok"],
+      ["종료","2027.02.15~02.19 (5일)","2027.02.15~02.19 (5일)","76","76","ok"],
+      ["검수지원","2027.03.29~03.31 (3일)","2027.03.29~03.31 (3일)","9","9","ok"],
+      ["개인정보영향평가","2026.07.20~2027.03.31 (43일)","2026.07.20~2027.03.31 (43일)","80","80","ok"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다. 다만 Slide179의 나열식 합산 표기에서 개인정보영향평가 80MD가 중복 표기되는 문제가 있습니다(치명 오류 참조).",
+    personnel: [
+      ["단계 감리팀(8명)","정명종,김숙영,김선주,이미애,박승진,허진,홍재훈,최태룡","동일 8명 확인됨","ok"],
+      ["전문가(10명)","강상우,김종훈,이지훈,고정림,최지윤,이창우,장덕호,김성철,김성현,<b>김영범A</b>","동일 + <b>김영범</b>","check"],
+      ["테스터(3명)","이경하,문형석,<b>이준호B</b>","동일 + <b>이준호</b>","check"],
+      ["역할표 vs 인력 프로파일","-","전 인력명 동일 표기 확인 (Slide97↔108~113)","ok"],
+      ["상근/비상근 표기","6명 상근(핵심), 강상우·고정림 비상근(전문가), 테스터 3명 비상근","PPT '100% 상근'(Slide100) 표기는 핵심 6명 기준으로 실제와 일치","ok"],
+    ],
+    irrelevant: "쇼핑몰·물류·전세앱 등 무관 키워드와 이전 검수 사업('26년 고향사랑e음)의 클라우드 네이티브·MSA·Cut-Over 등 잔존 문구를 검색하였으나 발견되지 않았습니다. \"24년 클라우드 네이티브 전환 사업(울주군청)\" 등은 제안사의 별도 실적 슬라이드에 정상적으로 포함된 것으로 오류가 아닙니다.",
+    priority: {
+      crit: ['Slide 179 공수 나열 표기를 정리하여 합계가 285MD로 맞도록 수정 (개인정보영향평가 80MD 중복 표기 해소)'],
+      major: [],
+      check: ['"김영범"/"이준호" 표기가 포털의 "김영범A"/"이준호B"와 동일인인지 확인'],
+    }
+  },
+  {
+    id: "nikl-corpus-2026",
+    name: "2026년 한국언어문화 멀티모달 말뭉치 구축 사업 감리",
+    org: "문화체육관광부 국립국어원",
+    date: "2026.07.09 검수",
+    counts: { crit:0, major:0, minor:0, check:2 },
+    verdict: `일정·전체 공수(116MD)·감리팀 인력 구성은 포털 제안작업표 확정값과 정확히 일치하고, 세부 공수(단계감리팀76MD+전문가팀40MD=116MD)도 합계가 정확히 맞아 앞선 두 사업에서 발견된 이중계산 오류가 이번에는 없습니다.
+치명·중대 오류는 발견되지 않았습니다. 다만 <b>RFP가 요구하는 "DB 품질점검 경험자 2명 이상"의 실명·경력이 포털·PPT 모두에서 1명(김현정)만 확인되고 나머지는 "외 2명"/미정(TBD)으로 남아있는 점</b>과, RFP 충족여부 요약표가 DB품질점검 30MD 이상이라는 별도 요구사항을 명시적으로 함께 언급하지 않은 점은 제출 전 확인이 필요합니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","2026년 한국언어문화 멀티모달 말뭉치 구축 사업 감리","감리사업 RFP / 포털"],
+      ["발주기관","문화체육관광부 국립국어원","감리사업 RFP"],
+      ["대상사업명","2026년 한국언어문화 멀티모달 말뭉치 구축","대상사업 RFP / 포털"],
+      ["대상 사업자","주식회사미디어코퍼스컨소시엄","포털 HTML"],
+      ["감리 형태","2단계 감리(설계·종료) + DB품질점검(추가감리)","감리사업 RFP / 포털"],
+      ["요구 투입공수(표준)","75 MD 이상","감리사업 RFP / 포털"],
+      ["요구 투입공수(DB품질점검, 별도)","30 MD 이상","감리사업 RFP"],
+      ["전체 제안 공수","116 MD (요구 75MD 대비 154%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 6명 + 전문가(DB품질점검·AI자동점검) 8명 = 14명","포털 HTML"],
+    ],
+    critical: [],
+    major: [],
+    minor: [],
+    checkNeeded: [
+      { title:'"수작업DB품질점검 전문가 2명" 자리가 실명 없이 미정(TBD) 상태', slide:"Slide 100, 107 / 포털 인력 프로파일",
+        fix:'RFP가 요구하는 "DB품질점검 경험자 2명 이상"을 충족함을 보이려면, "김현정 외 2명"으로 남겨둔 2자리에 실제 투입 인력의 성명·경력을 확정해 기재할 것',
+        body:`<p>감리사업 RFP는 "말뭉치 등 데이터베이스 품질관리 또는 품질점검 감리경험이 있는 감리인을 2명 이상 투입하여야 함"이라고 명시합니다. 포털 확정 인력표에는 수작업DB품질점검 인력으로 <b>김현정(팀장, 실명·경력 확인됨)</b> 1명만 실명이 등록되어 있고, 나머지 2자리는 <b>"TBD1", "TBD2"(미정, 0MD)</b>로 비어 있습니다. PPT도 동일하게 <b>"김현정 외 2명"</b>으로만 표기하여 나머지 2명의 실명·경력이 제시되지 않았습니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">RFP: DB품질점검 경험 감리인 2명 이상 (실명·경력 확인 가능해야 함)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">김현정(실명 확인) + "외 2명"(실명·경력 미기재)</div>
+          <div class="k">확인 사유</div><div>포털에도 동일하게 TBD1/TBD2로 미확정 상태 — 제출 전 실명 확정이 필요한지, 계약 후 확정 가능한 항목인지 확인 필요.</div>
+        </div>` },
+      { title:'RFP 충족표에 "DB품질점검 30MD 이상" 요구사항이 별도로 언급되지 않음', slide:"Slide 126",
+        fix:'"요청 공수: 75MD 이상" 옆에 "DB품질점검 30MD 이상(별도)" 요구사항을 함께 명시하여 두 요구사항 모두 충족함을 명확히 표기',
+        body:`<p>감리사업 RFP는 "표준 공수(75MD) 외 DB 품질 점검 공수(30MD) 별도"라고 명시하여 두 개의 독립된 최소 공수를 요구합니다. 그러나 Slide 126(제안요청 충족 여부 표)의 "투입 공수" 행은 <b>"요청 공수: 75MD 이상"</b>만 언급하고 DB품질점검 30MD 요구사항은 별도로 표기하지 않았습니다.</p>
+        <p>실제 제안된 전문가팀 공수(40MD, 이 중 DB품질점검 30MD)는 두 요구사항을 모두 충족하므로 실질적 위반은 아니지만, 요약표 자체에는 RFP의 두 요구사항 중 하나가 누락되어 있어 평가자가 완전성을 확인하기 어렵습니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">RFP: 표준 75MD 이상 + DB품질점검 30MD 이상 (별도)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">"요청 공수: 75MD 이상"만 표기</div>
+          <div class="k">확인 사유</div><div>실질적으로는 충족(전문가팀 40MD ⊃ DB품질점검 30MD)하나, 요약표 문구에 30MD 요구사항이 빠져있어 명시 여부 확인 필요.</div>
+        </div>` },
+    ],
+    schedule: [
+      ["설계","2026.08.03~08.07 (5일)","2026.08.03~08.07 (5일)","43","43","ok"],
+      ["종료","2026.11.30~12.04 (5일)","2026.11.30~12.04 (5일)","38","38","ok"],
+      ["DB품질점검","2026.11.02~12.04","2026.11.02~12.04","35","35","ok"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치하며, 세부 공수 합계(76+40=116MD)도 정확히 맞습니다.",
+    personnel: [
+      ["단계 감리팀(6명)","권영순,박승진,김선진,박정근,김태임,진용희","동일 6명 확인됨","ok"],
+      ["전문가 - AI자동점검(3명)","이지훈,김태호,김지훈","동일 3명 확인됨","ok"],
+      ["전문가 - 수작업DB품질점검","김현정(팀장) + TBD1 + TBD2","김현정 외 2명 (실명 미기재)","check"],
+      ["역할표 vs 인력 프로파일","-","전 인력명 동일 표기 확인","ok"],
+      ["상근/수석감리원 비율","단계감리팀 6명 전원 상근·수석감리원","PPT 100% 상근·수석 표기, 실제와 일치","ok"],
+    ],
+    irrelevant: "쇼핑몰·전세앱·카지노·리조트 등 이전 검수 사업(강원랜드, 고향사랑e음)의 잔존 문구를 포함해 무관 키워드를 검색하였으나 발견되지 않았습니다. \"BidEye\", \"SalGot\", \"PRISM\" 등은 AI자동점검 팀장의 개인 실무 경력(운영 중인 자체 AI SaaS)을 소개하는 역량 슬라이드에 정상적으로 포함된 것으로, 다른 사업과 혼재된 문구가 아닙니다.",
+    priority: {
+      crit: [],
+      major: [],
+      check: ['"수작업DB품질점검" 나머지 2명의 실명·경력 확정 여부 확인', '"DB품질점검 30MD 이상" 요구사항을 RFP 충족표에 함께 명시할지 결정'],
+    }
+  },
+  {
+    id: "kostat-bigdata-2026",
+    name: "2026년 빅데이터 통계작성 통합시스템 개선 감리 사업",
+    org: "국가데이터처",
+    date: "2026.07.14 검수",
+    counts: { crit:1, major:0, minor:0, check:0 },
+    verdict: `일정·전체 공수(55MD)·세부 공수 합계(38+12+5=55MD)는 포털 확정값과 정확히 일치합니다.
+그러나 <b>PPT는 감리팀 8명 전원을 "상근"으로 명시하고 "100% 상근 감리원 비율"을 핵심 강점으로 내세우며 심지어 "비상근 감리원은 감리 품질을 보장하지 못한다"는 별도 전략 슬라이드까지 두고 있으나, 포털 확정 명단은 8명 전원이 "비상근"으로 등록되어 있어 정면으로 상충됩니다.</b> 이는 부분적 수치 오차가 아니라 전원(100%)의 상근 여부가 완전히 반대로 표기된 것으로, 이번 검수 4건 중 가장 심각한 오류입니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","2026년 빅데이터 통계작성 통합시스템 개선 감리 사업","감리사업 RFP / 포털"],
+      ["발주기관","국가데이터처","감리사업 RFP / 포털"],
+      ["대상사업명","2026년 빅데이터 통계작성 통합시스템 개선 사업","대상사업 RFP / 포털"],
+      ["감리 형태","2단계 감리(설계·종료), 각 단계 7일 이상(사전검토1+현장감리5+조치결과1)","감리사업 RFP"],
+      ["요구 투입공수","40 MD 이상","감리사업 RFP / 포털"],
+      ["전체 제안 공수","55 MD (요구 대비 138%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 3명 + 전문가 4명 + 테스터 1명 = 8명 (전원 비상근)","포털 HTML"],
+      ["감리원 자격 요건","행정안전부에 등록된 감리원 또는 수석감리원","감리사업 RFP"],
+    ],
+    critical: [
+      { title:'감리팀 전원 "상근"으로 표기 — 포털 확정 명단(전원 비상근)과 정면 상충', slide:"Slide 40, 72, 77~79",
+        fix:'전 슬라이드의 "상근" 표기를 "비상근"으로 정정하고, "비상근 감리원 편성을 최소화해야 하는 이유"(Slide 40) 및 "100% 상근 감리원 비율"(Slide 72) 슬라이드를 실제 편성에 맞게 전면 재작성',
+        body:`<p>PPT는 감리팀 편성의 핵심 강점으로 <b>"100% 상근 감리원 비율"</b>(Slide 72)을 내세우며, "참여감리원 100% 전원 상근 감리원 편성으로 책임성 확보"라고 명시합니다. Slide 40에서는 한발 더 나아가 <b>"비상근 감리원 편성을 최소화해야 하는 이유"</b>라는 별도 슬라이드를 두고 "감리 품질을 보장하지 못하는 비상근 감리원" vs "감리 품질을 최우선으로 하는 상근 감리원"을 대비시키며 상근 편성의 우수성을 강조합니다. Slide 77~79의 감리원별 실적 슬라이드에서도 신성진·안성엽·임채광·김종훈·양권묵·이인숙·김성철 7명 전원이 개별적으로 <b>"제안사 / 상근"</b>으로 표기되어 있습니다.</p>
+        <p>그러나 포털 제안작업표의 확정 인력 명단은 <b>단계감리팀 3명(신성진·안성엽·임채광), 전문가 4명(김종훈·양권묵·이인숙·김성철), 테스터 1명(정혜은) 총 8명 전원을 "비상근"</b>으로 등록하고 있습니다. 즉 PPT가 자사의 핵심 강점으로 반복 강조하는 내용이 실제 확정된 인력 편성과 정확히 반대입니다.</p>
+        <div class="calc">포털 확정: 8명 전원 비상근 (신성진·안성엽·임채광·김종훈·양권묵·이인숙·김성철·정혜은)
+PPT 표기: 8명 전원 상근("100% 상근 감리원 비율", Slide 72)
+→ 상근 여부가 100% 반대로 기재됨 (부분 오차가 아닌 전체 반전)</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">8명 전원 비상근 — 포털 확정 명단</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">8명 전원 "상근" ("100% 상근 감리원 비율")</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"100% 비상근" 또는 실제 상근 인력이 있다면 그 인원만 반영해 표기 전체 수정</span></div>
+        </div>
+        <p class="note">감리사업 RFP는 현장감리기간 중 발주기관이 "상근 및 비상근 감리원의 근태"를 직접 점검할 수 있다고 명시하고 있어, 제출된 제안서 표기와 실제 근태가 다를 경우 감리비 삭감·입찰참가 제한 등 불이익으로 이어질 수 있는 중대한 사안입니다.</p>` },
+    ],
+    major: [],
+    minor: [],
+    checkNeeded: [],
+    schedule: [
+      ["설계","2026.08.24~08.28 (5일)","2026.08.24~08.28 (5일)","38","38","ok"],
+      ["종료","2026.11.23~11.27 (5일)","2026.11.23~11.27 (5일)","17","17","ok"],
+    ],
+    scheduleNote:"일정·세부공수 합계(단계감리팀38MD+전문가12MD+테스트5MD=55MD)는 포털 확정값과 정확히 일치합니다. (표는 인력구분 기준으로 재구성: 감리원 38MD 중 설계19+종료19, 전문가+테스트 17MD는 종료 단계에만 투입)",
+    personnel: [
+      ["단계 감리팀(3명)","신성진,안성엽,임채광 — 전원 비상근","동일 3명, 그러나 PPT는 '상근'으로 표기","crit"],
+      ["전문가(4명)","김종훈,양권묵,이인숙,김성철 — 전원 비상근","동일 4명, PPT는 '상근'으로 표기","crit"],
+      ["테스터(1명)","정혜은 — 비상근","동일 인력 확인, 상근여부는 팀 전체 '100%상근' 주장에 포함","crit"],
+      ["총괄감리원","신성진 (포털 확정)","신성진 (Slide72 총괄감리원 일치)","ok"],
+    ],
+    irrelevant: "강원랜드·고향사랑e음·국립국어원 등 이전 검수 사업의 잔존 문구를 검색하였으나 발견되지 않았습니다. \"국립국어원, 말뭉치 통합 관리 시스템...\" 언급은 김성철의 개인 실적(과거 수행 프로젝트) 목록에 정상적으로 포함된 것으로 오류가 아닙니다.",
+    priority: {
+      crit: ['Slide 40·72·77~79의 "상근" 표기를 실제 편성(비상근)에 맞게 전면 수정 — 특히 Slide 40 "비상근이 나쁘다"는 논조는 자사 편성과 정반대이므로 반드시 재작성'],
+      major: [],
+      check: [],
+    }
+  },
+  {
+    id: "koipa-ai-counterfeit-2026",
+    name: "AI 위조상품 감정지원 시스템 구축 감리용역",
+    org: "한국지식재산보호원",
+    date: "2026.07.15 검수",
+    counts: { crit:0, major:2, minor:3, check:0 },
+    verdict: `일정·전체 공수(314MD, 요구 141MD 대비)·섹션 합계(227+60+27=314MD)는 포털 확정값과 정확히 일치하고, 인력 21명 구성과 상근 비율(71%)도 RFP 요건(총괄 포함 50% 이상)을 충족합니다.
+다만 <b>인력별 공수 상세표(Slide 35, 62)의 행 단위 정합성을 다시 대조한 결과, ① 민병조 개인 행의 소계가 3(실제 설계3+파일럿3=6이어야 함)로 잘못 표기되어 있고, ② 테스트팀 3명(양진호·김선강·김태호)의 파일럿테스트 단계 공수가 5로 표기되어 개인 소계가 10이 되지만, 실제로는 4여야 하며(포털 확정 개인 소계 9), 3명 행을 합산하면 30MD로 같은 표의 "테스트팀 27MD" 섹션 합계와 어긋납니다.</b> 상단 요약 숫자(227/60/27/314MD)는 결과적으로 맞지만, 그 근거가 되는 개별 행 수치에 산술 오류가 있습니다.
+"지식재산"→"지식재선" 오타(6개 슬라이드), "227%" 계산 오류, 종료회의 날짜 불일치는 경미 오류로 남습니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","AI 위조상품 감정지원 시스템 구축 감리용역","감리사업 RFP / 포털"],
+      ["발주기관","한국지식재산보호원","감리사업 RFP / 포털"],
+      ["대상사업명","AI 위조상품 감정지원 시스템 구축","포털 HTML"],
+      ["감리 형태","2단계(설계·종료) + 추가감리(구현·파일럿테스트) + 상주감리(기술검토·PMO) + 검수지원","감리사업 RFP / 포털"],
+      ["요구 투입공수","141 MD 이상 (표준125 + 파일럿추가감리8 + 상주감리8)","감리사업 RFP / 포털"],
+      ["전체 제안 공수","314 MD (요구 대비 223%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 7명 + 전문가 11명 + 테스터 3명 = 21명","포털 HTML"],
+      ["감리원 자격 요건","상근감리원 50% 이상(총괄 포함), DB품질점검 경험자 1명 이상","감리사업 RFP"],
+    ],
+    critical: [],
+    major: [
+      { title:'인력별 공수 상세표에서 "민병조" 행의 소계가 자체 산술과 불일치 (3 → 실제 6이어야 함)', slide:"Slide 35, 62",
+        fix:'민병조 행의 "인력 소계"를 3에서 6으로 수정 (설계3 + 파일럿테스트3 = 6)',
+        body:`<p>인력별 공수 상세표(Slide 35, 62)에서 민병조(변리사 지식재산 점검) 행은 <b>설계 3MD, 구현 -, 파일럿테스트 3MD, 종료 -</b>로 표기되어 있는데, 같은 행의 "인력 소계" 칸에는 <b>3</b>이 적혀 있습니다. 3+3=6이므로 소계는 6이어야 합니다.</p>
+        <p>실제로 포털 확정 자료도 민병조의 총 투입 공수를 6MD(정기3+추가3)로 확정하고 있어, 표에 표시된 소계 "3"이 잘못된 값입니다. 다만 전문가팀 섹션 합계("60MD")는 6을 기준으로 계산된 값과 일치하므로, 오류는 이 행의 소계 표기 하나에 국한됩니다.</p>
+        <div class="calc">민병조 행: 설계 3 + 파일럿테스트 3 = 6MD (포털 확정과 일치)
+표에 표시된 인력 소계: 3  ← 오류
+전문가팀 섹션 합계 60MD는 6을 반영해 정확히 계산됨 (표시 오류가 섹션 합계에는 반영되지 않음)</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">민병조 소계 6MD (포털 확정, 설계3+파일럿3)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">인력 소계 "3"</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"3" → "6"</span></div>
+        </div>` },
+      { title:'테스트팀 3명의 파일럿테스트 단계 공수 오기 — 행 합계(30MD)가 섹션 합계(27MD)와 불일치', slide:"Slide 35, 62",
+        fix:'양진호·김선강·김태호의 파일럿테스트 단계 공수를 5에서 4로 수정 (개인 소계 10→9, 3명 합계 27MD로 섹션 합계와 일치)',
+        body:`<p>테스트팀 3명(양진호·김선강·김태호)은 각각 <b>파일럿테스트 5MD, 종료 5MD, 인력 소계 10</b>으로 표기되어 있습니다. 3명을 합산하면 30MD인데, 같은 표의 테스트팀 "투입 공수 소계"는 <b>27MD</b>로 표기되어 있어 정확히 3MD가 어긋납니다.</p>
+        <p>포털 확정 자료를 보면 3명 모두 파일럿테스트 단계 공수는 <b>4MD</b>(종료 5MD와 합쳐 개인 소계 9MD)로 되어 있습니다. 즉 PPT 표의 "파일럿테스트 5"는 "4"의 오기이며, 이로 인해 개인 소계도 10이 아니라 9여야 하고, 3명 합계는 30이 아니라 27MD가 되어 섹션 합계와 정확히 일치하게 됩니다.</p>
+        <div class="calc">[PPT 표시값] 1인당 파일럿테스트5+종료5=10MD × 3명 = 30MD  ← 섹션 합계(27MD)와 3MD 차이
+[포털 확정값] 1인당 파일럿테스트4+종료5=9MD  × 3명 = 27MD  ← 섹션 합계와 정확히 일치</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">1인당 파일럿4+종료5=9MD (포털 확정) × 3명 = 27MD</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">1인당 파일럿5+종료5=10MD × 3명 = 30MD (섹션 합계 27MD와 불일치)</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">파일럿테스트 열의 "5"를 "4"로 수정, 인력 소계 "10"을 "9"로 수정</span></div>
+        </div>` },
+    ],
+    minor: [
+      { title:'"지식재산"이 "지식재선"으로 반복 오기 (6개 슬라이드)', slide:"Slide 34, 35, 44, 60, 62, 96",
+        fix:'전 슬라이드에서 "지식재선"을 "지식재산"으로 일괄 수정 (예: "변리사 지식재선 점검" → "변리사 지식재산 점검")',
+        body:`<p>발주기관명("한국지식재산보호원")과 사업 전반에서 "지식재산"이 올바르게 사용되지만, "변리사 지식재산 점검" 관련 문구에서만 6개 슬라이드에 걸쳐 <b>"지식재선"</b>으로 반복해서 잘못 표기되어 있습니다. 같은 슬라이드 세트 내(Slide 34,35,60,62)에서 "변리사 지식재산 점검"(맞는 표기, Slide 39 등)과 "변리사 지식재선 점검"(오타)이 혼재합니다.</p>
+        <div class="kv">
+          <div class="k">현재 문구</div><div class="v ppt">"변리사 지식재선 점검", "[ 지식재선 ] 한국정보화진흥원...", "지식재선, AI학습데이터..."</div>
+          <div class="k">수정 문구</div><div><span class="v fix">"변리사 지식재산 점검" 등 "지식재선"→"지식재산"으로 일괄 정정</span></div>
+        </div>` },
+      { title:'"요청 공수 대비 227% 투입" — 실제 계산값(223%)과 불일치', slide:"Slide 40",
+        fix:'"227%"를 "223%"로 정정 (314MD ÷ 141MD = 222.7% ≈ 223%)',
+        body:`<p>Slide 40은 "전체 공수 314MD로 요청 공수 대비 227% 투입!!!"이라고 강조합니다. 그러나 314MD ÷ 141MD = 222.7%로, 반올림해도 223%입니다. 포털 HTML도 동일하게 "223%"(시뮬레이션 화면은 222%)로 확정하고 있어, PPT의 "227%"는 계산이 어긋난 것으로 보입니다.</p>
+        <div class="calc">314 ÷ 141 = 2.2269... = 222.7% ≈ 223% (포털 확정)
+PPT 표기: 227%  (약 4%p 차이)</div>
+        <div class="kv">
+          <div class="k">현재 문구</div><div class="v ppt">"요청 공수 대비 227% 투입"</div>
+          <div class="k">수정 문구</div><div><span class="v fix">"요청 공수 대비 223% 투입"</span></div>
+        </div>` },
+      { title:'"종료" 단계의 종료회의 날짜가 현장감리 종료일과 불일치', slide:"Slide 54",
+        fix:'"종료회의" 날짜를 현장감리 마지막 날인 2026.12.23으로 수정 (다른 단계와 동일한 패턴 적용)',
+        body:`<p>설계 단계(현장감리 07.27~07.31)는 종료회의가 마지막 날인 07.31, 구현 단계(10.12~10.16)는 10.16으로, 현장감리 마지막 날에 종료회의를 여는 일관된 패턴을 따릅니다. 그러나 종료 단계는 현장감리가 <b>2026.12.14~12.23(8일)</b>인데 종료회의 날짜가 <b>2026.12.18</b>로, 현장감리가 끝나기 전(중간 시점)에 종료회의가 열리는 것으로 표기되어 있어 다른 단계의 패턴과 어긋납니다.</p>
+        <div class="kv">
+          <div class="k">현재 문구</div><div class="v ppt">종료회의: 2026.12.18 (현장감리 12.14~12.23 종료 전)</div>
+          <div class="k">수정 문구</div><div><span class="v fix">종료회의: 2026.12.23 (현장감리 마지막 날)</span></div>
+        </div>` },
+    ],
+    checkNeeded: [],
+    schedule: [
+      ["설계","2026.07.27~07.31 (5일)","2026.07.27~07.31 (5일)","61","61","ok"],
+      ["구현","2026.10.12~10.16 (5일)","2026.10.12~10.16 (5일)","67","67","ok"],
+      ["파일럿테스트","2026.11.09~11.13 (5일)","2026.11.09~11.13 (5일)","58","58","ok"],
+      ["종료","2026.12.14~12.23 (8일)","2026.12.14~12.23 (8일, 종료회의 12.18로 표기)","94","94","check"],
+      ["검수지원","2026.12.29~12.30 (2일)","2026.12.29~12.30 (2일)","6","6","ok"],
+      ["기술검토·PMO관리","2026.07.20~12.30 (27일)","2026.07.20~12.30 (27일, 기간 중 28MD)","28","28","ok"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다(합계 314MD). 종료 단계는 일정 범위 자체는 일치하나 종료회의 날짜 표기에 경미한 오류가 있습니다(경미 오류 참조).",
+    personnel: [
+      ["단계 감리팀(7명)","김종훈,김원배,이현우,박범진,권영순,김영범A,김지훈","동일 + 김영범(A 접미사 없음, 이전 검수에서도 동일 패턴 확인)","ok"],
+      ["전문가(11명)","민병조,김동선,이지훈,이영주,이경하,손정원,강상우,최지윤,이창우,김성현,김성철","동일 11명 확인, 단 민병조 개인 소계 표기 오류(major 참조)","major"],
+      ["테스터(3명)","양진호,김선강,김태호","동일 3명, 단 파일럿테스트 단계 공수 오기(major 참조)","major"],
+      ["총괄감리원","김종훈 (포털 확정)","김종훈 일치","ok"],
+      ["상근 비율","상근 15명 / 비상근 6명 (71.4%)","PPT 표기와 일치, RFP 요건(50%이상) 충족","ok"],
+    ],
+    irrelevant: "강원랜드·국가데이터처·국립국어원 등 이전 검수 사업의 잔존 문구를 검색하였으나 모두 회사 수주 실적/개인 경력 목록에 정상적으로 포함된 것으로 확인되어 오류가 아닙니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.",
+    priority: {
+      crit: [],
+      major: ['민병조 인력 소계 "3"→"6" 수정', '테스트팀 3명 파일럿테스트 공수 "5"→"4" 및 소계 "10"→"9" 수정'],
+      check: [],
+    }
+  },
+  {
+    id: "ibk-digital-banking-2026",
+    name: "[IBK 디지털뱅킹 리빌딩 1단계 추진] 사업 외주 감리 (v03 재검수)",
+    org: "중소기업은행(IBK기업은행)",
+    date: "2026.07.19 검수 (v03, 파일명 260719_03 기준 재검수)",
+    counts: { crit:1, major:2, minor:6, check:0 },
+    verdict: `이번에 새로 받은 파일은 별도 사업이 아니라 <b>지난번과 동일한 IBK 디지털뱅킹 건의 개정판(v03)</b>입니다. Portal.html은 지난 버전과 완전히 동일(byte 단위 일치)하며, PPT도 179슬라이드로 동일 구조입니다.
+가장 중요한 점: <b>지난번 지적한 총괄감리원 강혁의 단계감리원·상주감리원 겸직 문제(RFP 위반)가 이 버전에서도 그대로 남아있습니다.</b> 수정되지 않았습니다.
+오타·표기 검증에서는 지난 버전과 다른 양상을 보였습니다 — 일부(컨테이터→컨테이너, 인테페이스→인터페이스 등)는 고쳐졌지만, <b>이번 버전에서 새로 생긴 오류도 있습니다</b>: Slide 124의 업무량 비율이 실제와 반대로 뒤바뀌어 있고(중대), 총괄감리원의 유사감리실적 건수가 슬라이드마다 다르며(중대), Slide 61의 "국회 도서관" 잔존 헤더는 여전히 수정되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","[IBK 디지털뱅킹 리빌딩 1단계 추진] 사업 외주 감리","감리사업 RFP / 포털"],
+      ["발주기관","중소기업은행(IBK기업은행) IT기획부","감리사업 RFP"],
+      ["대상사업명","IBK 디지털뱅킹 리빌딩 1단계 추진","포털 HTML"],
+      ["대상 사업자","LG CNS","감리사업 RFP / 포털"],
+      ["감리 형태","3단계(요구정의·설계·종료) + 추가(구현1/2차·검수지원·상주감리)","감리사업 RFP / 포털"],
+      ["요구 투입공수","700 MD 이상","감리사업 RFP / 포털"],
+      ["전체 제안 공수","1,567 MD (요구 대비 224%)","포털 HTML"],
+      ["감리원 편성 요건","상근감리원 50%이상, 총괄 상근 1년이상 수석감리원, 상주감리원은 단계감리원 겸직 불가","감리사업 RFP"],
+    ],
+    critical: [
+      { title:'[재확인·미해결] 총괄감리원(강혁)이 단계 감리원과 상주감리원을 겸직 — RFP 겸직 금지 규정 위반', slide:"Slide 106(1.4 감리 인력 투입 공수), Slide 168(주관기관 요청사항 준수 여부)",
+        fix:'상주감리1(110MD)을 강혁이 아닌 별도 인력으로 재배정하거나, 강혁을 상주감리 전담으로 전환하고 단계감리팀에는 별도 총괄/대체 감리원을 배치하여 겸직 구조를 해소',
+        body:`<p>감리사업 RFP는 "상주감리가 포함된 경우 상주감리원은 감리기준 제5조제5항의 요건을 갖추어야 하며, <b>단계 감리원으로 참여할 수 없음</b>"이라고 명시적으로 규정합니다.</p>
+        <p>그러나 포털 확정 일정표(이번 버전에서도 완전히 동일)를 보면 총괄감리원 <b>강혁</b>은 요구정의·설계1차·설계2차·구현1차·구현2차·종료단계·검수지원 <b>전 단계에 걸쳐 단계 감리원으로 참여</b>하면서, 동시에 <b>"상주감리1"(2026.08.01~2027.06.30, 110MD)</b>에도 배정되어 있습니다. v03의 RFP 충족 여부 표(Slide 168)도 지난 버전과 동일한 수치(717MD/550MD)를 그대로 유지하고 있어, <b>지난 검수에서 지적한 사항이 이번 버전에도 반영되지 않았습니다.</b></p>
+        <div class="calc">RFP 규정: 상주감리원은 단계 감리원으로 참여 불가
+
+포털/PPT 확인된 사실 (v03에서도 동일):
+  강혁 = 총괄감리원 + 요구정의~검수지원 전 단계 감리원 (스케줄표에 매 단계 등장)
+      + 상주감리1 110MD (별도 배정)
+  → 동일 인물이 단계감리원과 상주감리원을 겸직 = RFP 위반, 미해결</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">RFP: 상주감리원 ≠ 단계 감리원 (겸직 불가)</div>
+          <div class="k">PPT/포털 표기값</div><div class="v ppt">강혁 = 단계감리원(전 단계) + 상주감리1(110MD) 겸직 — v03에서도 동일</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">강혁의 겸직 구조 해소 (상주감리1을 별도 인력으로 재배정, 또는 강혁을 상주감리 전담으로 전환)</span></div>
+        </div>
+        <p class="note">지난 검수(이전 버전)에서 이미 지적했던 사항으로, 이번 v03에서도 수정되지 않아 그대로 다시 지적합니다.</p>` },
+    ],
+    major: [
+      { title:'Slide 124 업무량 비율이 데이터베이스↔시스템구조 항목 간 뒤바뀜', slide:"Slide 124",
+        fix:'데이터베이스 4건 비율을 "3%"로, 시스템구조 및 보안 18건 비율을 "13%"로 정정 (4÷144=2.8%≈3%, 18÷144=12.5%≈13%)',
+        body:`<p>python-pptx로 표를 직접 열어 확인한 결과, Slide 124는 <b>"데이터베이스 4건(13%)", "시스템 구조 및 보안 18건(3%)"</b>로 표기되어 있습니다. 그러나 합계 144건 기준으로 계산하면 4÷144=2.8%≈3%, 18÷144=12.5%≈13%가 되어야 하므로 두 항목의 비율이 서로 뒤바뀐 상태입니다.</p>
+        <div class="calc">데이터베이스: 4건 ÷ 144건 = 2.8% ≈ 3%   (표기: 13% ← 오류)
+시스템구조및보안: 18건 ÷ 144건 = 12.5% ≈ 13%  (표기: 3% ← 오류)</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">데이터베이스 4건(3%) / 시스템구조 18건(13%)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">데이터베이스 4건(13%) / 시스템구조 18건(3%) — 반전</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">두 항목의 비율을 맞바꿔 3%/13%로 정정</span></div>
+        </div>` },
+      { title:'총괄감리원(강혁) 유사감리실적 건수가 슬라이드마다 상이', slide:"Slide 61 vs 168 등",
+        fix:'Slide 61의 "281건"을 다른 슬라이드와 동일하게 "280건"으로 통일',
+        body:`<p>Slide 61은 강혁의 경력을 <b>"감리경력13년 / 281건"</b>으로 표기하나, Slide 168("총괄 수행 50건, 감리 경력 13년 / 280건")을 포함해 다른 다수 슬라이드는 모두 <b>"280건"</b>으로 표기합니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">280건 (Slide 168 등 다수)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">Slide 61 "281건"</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"281건" → "280건"</span></div>
+        </div>
+        <p class="note">총괄감리원의 실적 건수는 RFP상 "총괄감리원 전문성" 평가와 직결되는 수치이므로 통일이 필요합니다.</p>` },
+    ],
+    minor: [
+      { title:'Slide 61 표 헤더 "감리 영역 | 국회 도서관" — 잔존 문구 (지난 버전과 동일하게 미해결)', slide:"Slide 61",
+        fix:'표 헤더를 IBK 사업에 맞게 교체 또는 삭제',
+        body:`<p>python-pptx로 표를 직접 확인한 결과, "기술과 자격을 보유한 경험기반의 전문가" 표의 3번째 열 헤더가 여전히 <b>"국회 도서관"</b>으로 남아있습니다. 지난 버전에서 지적했던 사항이 이번 v03에도 그대로 남아있습니다.</p>` },
+      { title:'Slide 61 "총괄 및 업관리" 오타 (신규)', slide:"Slide 61",
+        fix:'"총괄 및 업관리" → "총괄 및 사업관리"',
+        body:`<p>감리원 편성표의 강혁 담당분야가 <b>"총괄 및 업관리"</b>로 표기되어 있습니다. "사업"의 "사"가 누락된 오타로 보이며, 이전 버전에는 "총괄 및 사업관리"로 정상 표기되어 있었습니다.</p>` },
+      { title:'"React" / "ReAct" 표기 혼용 (재발)', slide:"Slide 138 등", 
+        fix:'"React"로 표기 통일',
+        body:`<p>Slide 138 전문가 소개에서는 "React 및 모바일 전문가"로 정상 표기되나, 다른 위치(모바일 서비스 사용자 경험 점검 관련)에서는 "ReAct 기반 AI 에이전트와 모바일 서비스…"로 표기되어 있어 프론트엔드 프레임워크명 표기가 혼용됩니다.</p>` },
+      { title:"'i-One Bank' / 'i-ONE Bank' 대문자 표기 혼용", slide:"Slide 43 (외 31개 슬라이드는 'i-ONE Bank')",
+        fix:"'i-ONE Bank'로 표기 통일",
+        body:`<p>대부분의 슬라이드(31곳)는 "i-ONE Bank"로 표기하나 Slide 43만 "i-One Bank"로 다르게 표기되어 있습니다.</p>` },
+      { title:"'디지털뱅킹' / '디지털 뱅킹' 띄어쓰기 혼용", slide:"전반 (6·8·9 등)",
+        fix:"'디지털뱅킹'으로 표기 통일 권장",
+        body:`<p>같은 서비스명이 "디지털뱅킹"(20회)과 "디지털 뱅킹"(3회)으로 띄어쓰기가 혼용되어 있습니다.</p>` },
+      { title:"'컨테이터' 등 이전 오타는 수정 확인됨 (참고)", slide:"Slide 7, 38 등",
+        fix:"해당 없음 — 확인용",
+        body:`<p>지난 버전에서 지적했던 "컨테이터"(→컨테이너), "인테페이스"(→인터페이스), "컨포넌트"(→컴포넌트), "Java12"(→JDK21), "테블릿"(→태블릿), 감리기간 종료일 역전(2026.01.04→2027.01.04) 등은 이번 v03에서 모두 정상적으로 수정된 것을 확인했습니다.</p>` },
+    ],
+    checkNeeded: [],
+    schedule: [
+      ["요구정의","2026.08.10~08.21 (9일)","2026.08.10~08.21 (9일)","101","101","ok"],
+      ["설계1차","2026.09.07~09.18 (10일)","2026.09.07~09.18 (10일)","111","111","ok"],
+      ["설계2차","2026.10.19~10.30 (10일)","2026.10.19~10.30 (10일)","111","111","ok"],
+      ["구현1차","2027.01.18~01.29 (10일)","2027.01.18~01.29 (10일)","111","111","ok"],
+      ["구현2차","2027.03.08~03.19 (10일)","2027.03.08~03.19 (10일)","111","111","ok"],
+      ["종료단계","2027.05.17~05.28 (10일)","2027.05.17~05.28 (10일)","111","111","ok"],
+      ["검수지원","2027.06.14~06.25 (10일)","2027.06.14~06.25 (10일)","61","61","ok"],
+      ["상주감리(1+2)","2026.08.01~2027.06.30 (110/220일)","2026.08.01~2027.06.30 (현장감리 110/220일)","550","550","crit"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다(합계 1,567MD, v03에서도 변동 없음). 다만 상주감리 항목은 강혁의 겸직 문제가 결부되어 있습니다(치명 오류 참조).",
+    personnel: [
+      ["단계 감리팀(10명)","강혁(총괄),정명종,김숙영,강춘모,김지훈,신미정,양권묵,이명우,이운주,윤선영","동일 10명 확인됨","ok"],
+      ["상주감리(2명, 전담)","전용운,진기호","동일 2명, 단계감리원 겸직 없음 확인","ok"],
+      ["총괄감리원 겸직 여부","강혁 = 단계감리원(전 단계) + 상주감리1(110MD)","v03에서도 동일하게 겸직 확인 — RFP 위반, 미해결","crit"],
+      ["전문가(13명)","강상우,김종훈,박혜련,박경미,이미애,국지연,이지훈,조현영 등","전원 확인됨","ok"],
+      ["상근 비율","단계감리원 10명 전원 상근 수석감리원","PPT '100% 상근' 표기, 실제와 일치","ok"],
+    ],
+    irrelevant: "국가데이터처·강원랜드 등 이전 검수 사업의 잔존 문구를 검색하였으나 모두 회사 수주 실적 목록에 정상적으로 포함된 것으로 확인되어 오류가 아닙니다. 다만 Slide 61의 '국회 도서관' 표 헤더 잔존은 경미 오류로 별도 수록했습니다.",
+    typoChecklist: [
+      { no:1, slide:"124", type:"수치", priority:"높음", original:"데이터베이스 4 (13%) / 시스템 구조및 보안 18 (3%)", fix:"데이터베이스 4 (약 3%) / 시스템구조 18 (약 13%)", note:"144건 기준 비율 계산 시 두 항목이 서로 뒤바뀜 (python-pptx로 직접 확인)" },
+      { no:2, slide:"61", type:"수치", priority:"높음", original:"감리경력13년 / 281건", fix:"280건", note:"Slide 168 등 다른 슬라이드는 모두 '280건'으로 표기, Slide 61만 281건" },
+      { no:3, slide:"61", type:"맥락(잔존문구)", priority:"높음", original:"표 헤더: 감리 영역 | 국회 도서관", fix:"(IBK 사업 표 헤더로 교체 또는 삭제)", note:"지난 버전에서 지적한 사항이 v03에서도 미수정" },
+      { no:4, slide:"61", type:"오타", priority:"중간", original:"총괄 및 업관리", fix:"총괄 및 사업관리", note:"'사'자 누락 (이전 버전엔 정상 표기였음, 신규 발생)" },
+      { no:5, slide:"138 외", type:"일관성", priority:"낮음", original:"'React'와 'ReAct' 혼용", fix:"'React'로 통일", note:"이전 버전엔 정상(React)이었으나 일부 위치에서 ReAct로 재발" },
+      { no:6, slide:"43", type:"일관성", priority:"낮음", original:"'i-One Bank' (타 31개 슬라이드는 'i-ONE Bank')", fix:"'i-ONE Bank'로 통일", note:"대문자 표기 불일치" },
+      { no:7, slide:"6·8·9 등", type:"일관성", priority:"낮음", original:"'디지털뱅킹'(20회) / '디지털 뱅킹'(3회) 혼용", fix:"'디지털뱅킹'으로 통일", note:"띄어쓰기 혼용" },
+    ],
+    typoNote:"※ 이번 v03과 지난 버전을 문장 단위로 diff 비교하여, 새로 발생한 오류와 이미 수정된 오류를 함께 확인했습니다. '컨테이터', 'Java12', '테블릿', 감리기간 날짜 역전 등 지난 지적사항은 이번 버전에서 정상 수정된 것을 확인했습니다.",
+    priority: {
+      crit: ['[미해결] 총괄감리원 강혁의 단계감리원·상주감리원 겸직 구조를 해소 — 상주감리1(110MD)을 별도 인력으로 재배정하거나 강혁을 상주감리 전담으로 전환'],
+      major: ['Slide 124 데이터베이스/시스템구조 비율 반전 수정', 'Slide 61 총괄감리원 실적 건수(281건→280건) 통일'],
+      check: [],
+    }
+  },
+  {
+    id: "keco-allbaro-2026",
+    name: "차세대 올바로(Allbaro) 시스템 구축(3차) 감리",
+    org: "한국환경공단",
+    date: "2026.07.20 검수",
+    counts: { crit:1, major:0, minor:0, check:1 },
+    verdict: `일정·전체 공수(203MD, 요구 94MD 대비 216%)·세부 공수 합계(145+48+10=203MD)는 포털 확정값과 정확히 일치하고, 인력 19명 구성도 일치합니다.
+다만 <b>"단계 감리원 7명 100% 상근 수석 감리원"이라는 슬라이드의 주장이, 같은 제안서의 개별 프로필 슬라이드에서 스스로 "이인숙 / 감리원"(수석감리원 아님)이라고 밝힌 내용과 정면으로 상충</b>합니다. 포털 확정 명단도 이인숙을 "감리원"(수석 아님)으로 등록하고 있어, 7명 중 6명(85.7%)만 수석감리원입니다. 검수지원 일정에 구체 일자가 빠진 점은 확인이 필요합니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","차세대 올바로(Allbaro) 시스템 구축(3차) 감리","감리사업 RFP(요청서.hwpx) / 포털"],
+      ["발주기관(주관기관)","한국환경공단","감리사업 RFP / 포털"],
+      ["대상사업명","차세대 올바로(Allbaro) 시스템 구축(3차)","포털 HTML"],
+      ["감리 형태","2단계(설계·종료, 요구정의 미실시) + 추가(구현·검수지원)","감리사업 RFP / 포털"],
+      ["요구 투입공수","94 MD 이상 (기존 92MD에서 상향 확정)","감리사업 RFP / 포털"],
+      ["전체 제안 공수","203 MD (요구 대비 216%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 7명 + 전문가 10명 + 테스터 2명 = 19명","포털 HTML"],
+      ["총괄감리원","이승학 (상근 수석감리원, 총괄 19건/141건)","포털 HTML / PPT"],
+    ],
+    critical: [
+      { title:'"단계 감리원 7명 100% 수석감리원" 주장이 PPT 자체·포털 확정 데이터와 상충', slide:"Slide 19, 135 (주장) vs Slide 22 (자체 모순)",
+        fix:'"100% 상근 수석 감리원" 표현을 "상근 100% / 수석감리원 85.7%(6/7명)"로 정정',
+        body:`<p>Slide 19("왜 ACTIVO인가")와 Slide 135(제안요청 충족 여부 표)는 <b>"단계 감리원 7명 : 100% 상근 수석 감리원"</b>이라고 명시합니다. 그러나 포털 확정 인력 명단은 단계 감리팀 7명 중 <b>이인숙의 등급을 "감리원"</b>(수석감리원 아님)으로 등록하고 있으며, PPT 자신도 Slide 22의 개별 프로필에서 <b>"이인숙 / 감리원"</b>이라고 스스로 명시해, 같은 제안서 안에서 상충됩니다.</p>
+        <div class="calc">단계 감리팀 7명: 이승학·신성진·홍대원·유현주·김영범A·조현영 = 수석감리원(6명)
+                        이인숙 = 감리원 (수석 아님)
+수석감리원 비율: 6 ÷ 7 = 85.7%
+Slide 19·135 표기: "100% 수석감리원"  ↔  Slide 22 자체 표기: "이인숙 / 감리원"  ↔  포털 확정: 감리원</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">수석감리원 6/7명 (85.7%), 이인숙은 감리원 — 포털 확정</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">Slide19·135 "100% 수석감리원" ↔ Slide22 "이인숙/감리원"</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"상근 100% / 수석감리원 85.7%(6/7명)"로 통일 수정</span></div>
+        </div>
+        <p class="note">감리원 등급 구성은 감리사업 RFP의 "감리원(사업관리자 포함)의 계속교육 이수실적" 및 "감리인력 구성" 평가항목과 연결되는 사안이라 사실과 다른 수치 기재는 평가 신뢰도에 영향을 줄 수 있습니다.</p>` },
+    ],
+    major: [],
+    minor: [],
+    checkNeeded: [
+      { title:"검수지원 일정에 구체 일자 미기재", slide:"Slide 135",
+        fix:'검수지원 일정을 "사업종료시점" 대신 "2027.06.02(수)"로 구체 기재할지 결정',
+        body:`<p>포털 HTML은 검수지원을 <b>"2027.06.02(수), 1일"</b>로 확정하나, PPT는 <b>"사업종료시점(현장감리 1일)"</b>으로만 표기하여 구체 일자가 없습니다. 일수·공수(1일/2MD)는 일치합니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">2027.06.02(수)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">"사업종료시점" (구체 일자 없음)</div>
+          <div class="k">확인 사유</div><div>실제 일자와 상충되진 않으나, 명확성을 위한 구체 일자 기재 여부 확인 필요 (이전 검수 사업들에서도 반복된 패턴).</div>
+        </div>` },
+    ],
+    schedule: [
+      ["설계","2026.11.16~11.20 (5일)","2026.11.16~11.20 (5일)","47","47","ok"],
+      ["구현","2027.02.15~02.19 (5일)","2027.02.15~02.19 (5일)","63","63","ok"],
+      ["종료","2027.05.04~05.14 (7일)","2027.05.04~05.14 (7일)","91","91","ok"],
+      ["검수지원","2027.06.02(수) (1일)",'"사업종료시점" (1일)',"2","2","check"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다(합계 203MD = 단계감리팀145+전문가48+테스터10). 검수지원만 구체 일자가 빠져 있습니다.",
+    personnel: [
+      ["단계 감리팀(7명)","이승학(총괄),신성진,이인숙,홍대원,유현주,김영범A,조현영","동일 7명 확인 + 김영범(A접미사 없음, 이전 사업에서도 확인된 패턴)","ok"],
+      ["전문가(10명)","박승진,박범진,강혁,이지훈,김지훈,원대길,이창우,최지윤,김성현,장덕호","동일 10명 확인됨","ok"],
+      ["테스터(2명)","김선강(상근),이강훈(비상근)","동일 2명 확인됨","ok"],
+      ["감리원 등급","이인숙=감리원(수석 아님), 나머지 6명=수석감리원","Slide19·135 '100%수석' 주장과 상충 (치명 참조)","crit"],
+      ["총괄감리원","이승학 (포털 확정)","이승학 일치, 총괄19건/141건 전 슬라이드 일관","ok"],
+    ],
+    irrelevant: "강원랜드·국립국어원·국가데이터처 등 이전 검수 사업명이 실적 목록에 다수 등장하나, 모두 제안사(ACTIVO)의 별도 수행 실적으로 정상 포함된 것이며 본사업과 혼재된 오류가 아닙니다.",
+    typoChecklist: [
+      { no:1, slide:"4", type:"오타", priority:"낮음", original:"한국환경공단, 올바로시스템 및 통합민원서비스 개선 감리 감리 경험 등 159회", fix:"…개선 감리 경험 등 159회", note:"'감리'가 중복 표기됨" },
+      { no:2, slide:"12 등", type:"일관성", priority:"낮음", original:"'차세대올바로'(붙여씀, 7회) / '차세대 올바로'(띄어씀, 72회) 혼용", fix:"'차세대 올바로'로 통일", note:"같은 시스템명의 띄어쓰기가 문서 내에서 혼용됨" },
+    ],
+    typoNote:"※ 문장 단위 패턴 검색(중복 단어, 용어 혼용)으로 확인된 항목만 수록했습니다. 136슬라이드 전체를 정독한 것은 아니며, 우선순위 장표 위주로 검수했습니다.",
+    priority: {
+      crit: ['Slide 19·135의 "100% 수석감리원" 표현을 "수석감리원 85.7%(6/7명)"로 정정, Slide22와 통일'],
+      major: [],
+      check: ['검수지원 구체 일자(2027.06.02) 기재 여부 결정'],
+    }
+  },
+  {
+    id: "mois-native-2026",
+    name: "26년 클라우드 네이티브 전환 사업(행정안전부 자치단체통합인터넷원서접수시스템) 위탁감리",
+    org: "한국지능정보사회진흥원",
+    date: "2026.07.20 검수",
+    counts: { crit:0, major:1, minor:0, check:1 },
+    verdict: `일정·전체 공수(450MD, 요구 235MD 대비 191%)·세부 공수 합계(275+103+72=450MD)는 포털 확정값과 정확히 일치하고, 단계 감리팀 9명 전원 상근 수석감리원 요건도 실제로 충족합니다.
+다만 <b>테스터 6명 중 5명이 "테스트1~테스트5"라는 익명 placeholder로만 등록되어 실명·자격·경력 정보가 전혀 없고</b>, PPT도 "김선강 외 5명"으로만 표기해 동일한 공백을 그대로 노출합니다. 72MD 중 60MD(83%)가 이 익명 인력에 해당해 규모가 작지 않습니다. 검수지원 일정에 구체 일자가 빠진 점은 확인이 필요합니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","26년 클라우드 네이티브 전환 사업(행정안전부 자치단체통합인터넷원서접수시스템) 위탁감리","감리사업 RFP / 포털"],
+      ["발주기관(감리계약)","한국지능정보사회진흥원","감리사업 RFP / 포털"],
+      ["대상사업명","26년 클라우드 네이티브 전환 사업(행정안전부 자치단체통합인터넷원서접수시스템)","포털 HTML"],
+      ["주관기관(대상사업)","행정안전부","포털 HTML(키워드 매핑)"],
+      ["감리 형태","3단계(요구정의·설계·종료) + 추가(구현·검수지원)","감리사업 RFP / 포털"],
+      ["요구 투입공수","235 MD 이상","감리사업 RFP / 포털"],
+      ["전체 제안 공수","450 MD (요구 대비 191%)","포털 HTML"],
+      ["감리팀 인력","단계감리팀 9명 + 전문가 12명 + 테스터 6명 = 27명","포털 HTML"],
+    ],
+    critical: [],
+    major: [
+      { title:'테스터 6명 중 5명이 익명(테스트1~5) — 실명·자격·경력 정보 부재', slide:"Slide 108(1.4 감리 인력 투입 공수), Slide 143·176(제안요청 충족 여부)",
+        fix:'테스트1~5의 실제 투입 인력을 확정해 실명·자격증·경력을 기재하거나, 확정 전이라면 그 사실을 명시적으로 각주 처리',
+        body:`<p>포털 확정 인력 명단상 테스터 6명 중 <b>김선강 1명만 실명이 등록</b>되어 있고, 나머지 5명은 <b>"테스트1", "테스트2", "테스트3", "테스트4", "테스트5"</b>라는 익명 placeholder로만 표기되어 있으며, 상근여부·감리원등급·자격증·연락처가 모두 공란입니다. PPT 역시 <b>"김선강 전문가 외 5명"</b>으로만 표기해 개별 실명을 제시하지 않았습니다.</p>
+        <div class="calc">테스터 6명 = 김선강(실명, 12MD) + 테스트1~5(익명, 각 12MD)
+익명 인력 공수: 60MD / 테스터 전체 72MD = 83.3%
+감리사업 RFP: "투입 감리원별 실적 및 경력" 제출을 요구 → 익명 인력은 이 요건 충족 불가</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">RFP: 투입 감리원(총괄감리원 포함)의 실적·경력 제출 요구</div>
+          <div class="k">PPT/포털 표기값</div><div class="v ppt">테스터 6명 중 5명 익명("테스트1~5"), 실적·경력 없음</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">실제 투입 인력 확정 후 실명·자격·경력 기재</span></div>
+        </div>
+        <p class="note">이전 검수 사업(국립국어원 건)에서도 유사 사례(TBD 2명)가 있었으나, 이번 건은 테스터의 83%가 익명이라 규모가 훨씬 큽니다.</p>` },
+    ],
+    minor: [],
+    checkNeeded: [
+      { title:"검수지원 일정에 구체 일자 미기재", slide:"Slide 176 부근",
+        fix:'검수지원 일정을 "사업종료시점" 대신 "2027.04.12~04.16"으로 구체 기재할지 결정',
+        body:`<p>포털 HTML은 검수지원을 <b>"2027.04.12(월)~04.16(금), 5일"</b>로 확정하나, PPT는 <b>"사업종료시점(5일/10MD)"</b>으로만 표기하여 구체 일자가 없습니다. 일수·공수는 일치합니다.</p>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">2027.04.12(월) ~ 2027.04.16(금)</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">"사업종료시점" (구체 일자 없음)</div>
+          <div class="k">확인 사유</div><div>실제 일자와 상충되진 않으나, 이전 여러 검수 사업에서도 반복되는 패턴이라 명확화가 필요한지 확인 필요.</div>
+        </div>` },
+    ],
+    schedule: [
+      ["요구정의","2026.08.12~08.21 (7일)","2026.08.12~08.21 (7일)","83","83","ok"],
+      ["설계","2026.10.26~11.03 (7일)","2026.10.26~11.03 (7일)","106","106","ok"],
+      ["구현","2027.01.25~01.29 (5일)","2027.01.25~01.29 (5일)","106","106","ok"],
+      ["종료","2027.03.02~03.10 (7일)","2027.03.02~03.10 (7일)","145","145","ok"],
+      ["검수지원","2027.04.12~04.16 (5일)",'"사업종료시점" (5일)',"10","10","check"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다(합계 450MD = 단계감리팀275+전문가103+테스터72). 검수지원만 구체 일자가 빠져 있습니다.",
+    personnel: [
+      ["단계 감리팀(9명)","류성권(총괄),조원희,전용운,윤선영,박정근,박범진,양권묵,조현영,장덕호","동일 9명 확인, 전원 상근 수석감리원 일치","ok"],
+      ["전문가(12명)","조충희,박혜련,김희영,김숙영,김지훈,이창우,최지윤,이지훈,진용희,김태임,김성철,권영순","동일 12명 확인됨","ok"],
+      ["테스터(6명)","김선강(실명) + 테스트1~5(익명)","동일하게 5명 익명 확인 — 중대 오류 참조","major"],
+      ["총괄감리원","류성권 (포털 확정)","류성권 일치","ok"],
+      ["상근 비율","단계감리원 9명 전원 상근 수석감리원","PPT '100% 상근 수석' 표기, 실제와 일치","ok"],
+    ],
+    irrelevant: "쇼핑몰·카지노·부동산 등 키워드가 실적 목록에 등장하나 모두 제안사의 별도 수행 실적으로 정상 포함된 것이며, '올바로'는 일반 어휘(올바로 인지)로 쓰여 이전 검수 사업(한국환경공단)과 무관합니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.",
+    typoChecklist: [
+      { no:1, slide:"2·12 등", type:"일관성", priority:"중간", original:"대상시스템 정식명 '자치단체통합인터넷원서접수시스템'(RFP·포털 기준, 4회) vs 다수 슬라이드에서 '자치단체 통합인터넷접수시스템'('원서' 누락, 14회 이상)", fix:"'자치단체통합인터넷원서접수시스템'으로 통일 (최소한 '원서' 포함)", note:"'원서접수'는 시스템의 핵심 기능을 나타내는 단어로, 누락 시 시스템명이 부정확해짐. RFP·포털 원문에는 항상 '원서'가 포함되어 있음" },
+    ],
+    typoNote:"※ 문장 단위 패턴 검색(중복 단어, 용어 혼용)으로 확인된 항목만 수록했습니다. 166슬라이드 전체를 정독한 것은 아니며, 우선순위 장표 위주로 검수했습니다.",
+    priority: {
+      crit: [],
+      major: ['테스터 6명 중 5명(테스트1~5)의 실명·자격·경력 확정 및 기재'],
+      check: ['검수지원 구체 일자(2027.04.12~04.16) 기재 여부 결정'],
+    }
+  },
+  {
+    id: "bpa-chainportal-2026",
+    name: "항만물류통합플랫폼(체인포털) AI 전환 사업 감리 용역",
+    org: "부산항만공사",
+    date: "2026.07.21 검수",
+    counts: { crit:0, major:1, minor:0, check:0 },
+    verdict: `일정·전체 공수(440MD, 요구 236MD 대비 186%)·세부 공수 합계(258+80+72+30=440MD)는 포털 확정값과 정확히 일치합니다. 2개년 계속비 사업 특성상 요구정의·설계·종료 3단계를 2026년·2027년에 각각 1회씩(총 6회) 수행하고 상주감리(80일)를 병행하는 구조도 RFP와 일치합니다.
+㈜비앤디컨설팅의 참여는 RFP가 명시적으로 금지한 "하도급"이 아니라 <b>허용된 "공동수급"(컨소시엄) 구조로 확인</b>되어 문제가 없습니다.
+다만 <b>"단계·상주 감리원 6명 100% 상근"이라는 주장이, 포털 확정 인력표에서 신영균·이오상 2명의 상근여부·감리원등급이 "-"(미확정)로 비어있는 것과 배치</b>됩니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","항만물류통합플랫폼(체인포털) AI 전환 사업 감리 용역","감리사업 RFP / 포털"],
+      ["발주기관(주관기관)","부산항만공사","감리사업 RFP / 포털"],
+      ["대상사업명","항만물류통합플랫폼(체인포털) AI 전환사업","포털 HTML"],
+      ["감리 형태","3단계(요구정의·설계·종료) × 2개년(2026·2027) + 상주감리(80일)","감리사업 RFP / 포털"],
+      ["요구 투입공수","236 MD 이상","감리사업 RFP / 포털"],
+      ["전체 제안 공수","440 MD (요구 대비 186%)","포털 HTML"],
+      ["공동수급 여부","㈜비앤디컨설팅과 공동수급(컨소시엄) — 하도급은 RFP상 불허","감리사업 RFP / PPT"],
+      ["감리원 편성 요건","상근 50% 이상, 총괄 1년이상 수석감리원, 상주감리원은 수석감리원 필수","감리사업 RFP"],
+    ],
+    critical: [],
+    major: [
+      { title:'"단계·상주 감리원 6명 100% 상근" 주장이 포털의 미확정 데이터와 배치', slide:"Slide (제안요청 충족 여부 표) 부근",
+        fix:'신영균·이오상의 상근여부·감리원등급을 포털에 확정 등록하거나, 확정 전까지 "100%"라는 단정적 표현을 자제',
+        body:`<p>PPT는 "단계·상주 감리원 6명 : 100% 상근 (수석 5명·특급 1명)"이라고 명시합니다. 그러나 포털 확정 인력표를 보면 6명 중 <b>최철·임채광·차판용·김성철 4명만 "상근"으로 명확히 표기</b>되어 있고, <b>신영균과 상주감리 담당 이오상은 상근여부·감리원등급·감리원증번호·연락처가 모두 "-"(공란)</b>로 남아 있습니다.</p>
+        <div class="calc">확정: 상근 4명 (최철·임채광·차판용·김성철)
+미확정("-"): 신영균, 이오상 — 상근여부·자격정보 공란
+PPT 주장: "100% 상근 (수석 5명·특급 1명)" — 근거 데이터 불완전</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">상근 확정 4/6명, 2명은 미확정("-")</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">"100% 상근 (수석 5명·특급 1명)"</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">신영균·이오상의 등록 정보를 완성하거나, 확정 전까지 표현을 조정</span></div>
+        </div>
+        <p class="note">신영균·이오상이 실제로는 상근 요건을 충족하지만 포털 등록만 누락된 것일 수도 있어 "치명" 대신 "중대"로 분류했습니다. 다만 근거 데이터가 불완전한 상태로 "100%"라는 단정적 수치를 제시한 점은 확인이 필요합니다.</p>` },
+    ],
+    minor: [],
+    checkNeeded: [],
+    schedule: [
+      ["요구정의1","2026.08.19~08.28 (8일)","2026.08.19~08.28 (8일)","37","37","ok"],
+      ["설계1","2026.10.28~11.06 (8일)","2026.10.28~11.06 (8일)","52","52","ok"],
+      ["종료1","2026.12.14~12.23 (8일)","2026.12.14~12.23 (8일)","85","85","ok"],
+      ["요구정의2","2027.04.05~04.14 (8일)","2027.04.05~04.14 (8일)","37","37","ok"],
+      ["설계2","2027.08.18~08.27 (8일)","2027.08.18~08.27 (8일)","60","60","ok"],
+      ["종료2","2027.11.08~11.17 (8일)","2027.11.08~11.17 (8일)","89","89","ok"],
+      ["상주","2026.07.20~2027.12.30 (80일)","2026.07.20~2027.12.30 (80일)","80","80","ok"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다(합계 440MD = 단계감리팀258+상주80+전문가72+테스트30). 2개년 계속비 사업 특성이 정확히 반영되어 있습니다.",
+    personnel: [
+      ["단계 감리팀(6명)","최철(총괄),신영균,임채광,차판용,김성철,이오상(상주)","동일 6명 확인, 상근 확정은 4명뿐(중대 참조)","major"],
+      ["공동수급사","㈜비앤디컨설팅 — 이오상·신영균·김민수·김재년 등","PPT에 별도 재무·조직·실적 슬라이드로 정상 공시, 하도급 아님","ok"],
+      ["전문가/테스트팀","김동선,강상우,진용희,곽종필,이인숙,이태환,김수호,홍기향,김무근,이창우,김성현 등","전원 확인됨","ok"],
+      ["총괄감리원","최철 (포털 확정)","최철 일치","ok"],
+    ],
+    irrelevant: "한국환경공단·국립국어원 등 이전 검수 사업명이 실적 목록에 등장하나 모두 제안사(ACTIVO)의 별도 수행 실적으로 정상 포함된 것이며, '올바로'는 일반 어휘(올바로 인지)로 쓰여 무관합니다. 본사업과 무관한 잔존 문구는 발견되지 않았습니다.",
+    typoChecklist: [],
+    typoNote:"※ 중복 단어·용어 혼용 패턴 검색을 수행했으나, 이번 사업에서는 명백한 오타나 표기 불일치가 발견되지 않았습니다 ('체인포털', '부산항만공사' 등 핵심 용어는 전량 일관되게 표기됨).",
+    priority: {
+      crit: [],
+      major: ['신영균·이오상의 상근여부·감리원등급 정보를 포털에 확정 등록'],
+      check: [],
+    }
+  },
+  {
+    id: "keris-learningdata-2026",
+    name: "학습데이터 분석·활용 체계 구축(2단계) 감리",
+    org: "한국교육학술정보원(KERIS)",
+    date: "2026.07.21 검수",
+    counts: { crit:1, major:0, minor:0, check:0 },
+    verdict: `일정·전체 공수(1,012MD, 요구 500MD 대비 202%)·세부 공수 합계(480+280+196+56=1012MD)는 포털 확정값과 정확히 일치합니다. ㈜한강에이앤씨와의 컨소시엄(악티보 84.78%/한강 15.22%)도 PPT에 별도 재무·조직·실적 슬라이드로 정상 공시되어 있습니다.
+다만 <b>"단계 감리원 19명 : 100% 상근 감리원"이라는 주장이, 포털 확정 인력표에서 권병한·송옥경·김미정·김진희 4명이 명확히 "비상근"으로 등록된 것과 정면으로 상충</b>합니다(실제 상근 비율 78.9%, 15/19명). 본사업과 무관한 잔존 문구는 발견되지 않았습니다.`,
+    baseline: [
+      ["감리사업명","학습데이터 분석·활용 체계 구축(2단계) 감리","감리사업 RFP / 포털"],
+      ["발주기관","한국교육학술정보원(KERIS)","감리사업 RFP / 포털"],
+      ["대상사업명","AI 디지털교과서 도입과 연계한 학습데이터 활용 체계 구축","포털 HTML"],
+      ["컨소시엄 구성","악티보(84.78%) + ㈜한강에이앤씨(15.22%)","포털 HTML / PPT"],
+      ["감리 형태","3단계(요구정의·설계·종료) + 추가(상시·검수지원) + 상주감리(100일)·상주기술지원(20일)","감리사업 RFP / 포털"],
+      ["요구 투입공수","500 MD 이상","감리사업 RFP / 포털"],
+      ["전체 제안 공수","1,012 MD (요구 대비 202%)","포털 HTML"],
+      ["감리원 편성 요건","상근 50% 이상(PM 포함), 총괄 1년이상 수석감리원","감리사업 RFP"],
+    ],
+    critical: [
+      { title:'"단계 감리원 19명 100% 상근" 주장이 포털 확정 데이터(비상근 4명)와 상충', slide:"Slide 82, 140",
+        fix:'"100% 상근"을 "상근 78.9%(15/19명)"로 정정 — 권병한·송옥경·김미정·김진희는 비상근으로 표기',
+        body:`<p>Slide 82("100% 상근 감리원 비율")와 Slide 140(제안요청 충족 여부 표, "단계 감리원 19명 : 100% 상근 감리원")은 모두 단계 감리팀(상주감리·상주기술지원 포함 19명)이 전원 상근이라고 주장합니다.</p>
+        <p>그러나 포털 확정 인력표에는 <b>권병한(응용시스템), 송옥경(데이터베이스), 김미정(상주기술지원), 김진희(상주기술지원)</b> 4명이 명확히 <b>"비상근"</b>으로 등록되어 있습니다.</p>
+        <div class="calc">단계 감리팀+상주(19명) 상근 현황 (포털 확정):
+  상근: 이현우·전용운·김수용·김현선·홍기향·이인숙·김영빈·진기호·박승진·윤선영·이동영·여운종·홍대원·김선진·김무근 (15명)
+  비상근: 권병한·송옥경·김미정·김진희 (4명)
+
+상근 비율: 15 ÷ 19 = 78.9%
+PPT 표기: "100% 상근" ← 오류</div>
+        <div class="kv">
+          <div class="k">기준값</div><div class="v baseline">상근 15/19명 (78.9%) — 포털 확정</div>
+          <div class="k">PPT 표기값</div><div class="v ppt">Slide82·140 "100% 상근 감리원"</div>
+          <div class="k">수정 필요값</div><div><span class="v fix">"상근 78.9%(15/19명)"로 정정, 비상근 4명 별도 표기</span></div>
+        </div>
+        <p class="note">감리사업 RFP는 "참여감리원 중 50% 이상이 상근"만 요구하므로 78.9%도 요건은 충족하지만, 사실과 다른 "100%" 단정 표현은 제안서 신뢰도에 영향을 줄 수 있습니다.</p>` },
+    ],
+    major: [],
+    minor: [],
+    checkNeeded: [],
+    schedule: [
+      ["요구정의","2026.08.10~08.20 (8일)","2026.08.10~08.20 (8일)","118","118","ok"],
+      ["설계","2026.09.14~09.23 (8일)","2026.09.14~09.23 (8일)","124","124","ok"],
+      ["상시","2026.12.21~12.30 (7일)","2026.12.21~12.30 (7일)","159","159","ok"],
+      ["종료","2027.01.18~01.29 (10일)","2027.01.18~01.29 (10일)","311","311","ok"],
+      ["검수지원","2027.02.10~02.11 (2일)","2027.02.10~02.11 (2일)","8","8","ok"],
+      ["상주감리","2026.08.01~2027.02.20 (100일)","2026.08.01~2027.02.20 (100일)","200","200","ok"],
+      ["상주기술지원","2026.08.01~2027.02.20 (20일)","2026.08.01~2027.02.20 (20일)","80","80","ok"],
+    ],
+    scheduleNote:"모든 단계의 일정·공수가 포털 확정값과 정확히 일치합니다(합계 1,012MD = 단계감리팀480+상주감리팀280+전문가196+테스트56).",
+    personnel: [
+      ["단계 감리팀(13명)","이현우(총괄),전용운,김수용,권병한,김현선,홍기향,이인숙,김영빈,진기호,송옥경,박승진,윤선영,이동영","동일 13명 확인됨","ok"],
+      ["상주감리(2명)","여운종,홍대원","동일 2명, 단계감리원 겸직 없음 확인","ok"],
+      ["상주기술지원(4명)","김선진,김무근,김미정,김진희","동일 4명 확인됨","ok"],
+      ["상근/비상근 현황","권병한·송옥경·김미정·김진희=비상근, 나머지 15명=상근","Slide82·140 '100%상근' 주장과 상충 (치명 참조)","crit"],
+      ["컨소시엄(한강에이앤씨)","유경미(교수, 외부전문가) 등","PPT에 별도 재무·조직·실적 슬라이드로 정상 공시","ok"],
+    ],
+    irrelevant: "한국환경공단·강원랜드·부산항만공사 등 이전 검수 사업명이 실적 목록에 다수 등장하나 모두 제안사(ACTIVO)의 별도 수행 실적으로 정상 포함된 것이며 본사업과 혼재된 오류가 아닙니다.",
+    typoChecklist: [
+      { no:1, slide:"46", type:"오타", priority:"낮음", original:"사업기간 기간 상주 관리", fix:"사업기간 상주 관리", note:"'기간'이 중복 표기됨" },
+      { no:2, slide:"전반", type:"일관성", priority:"낮음", original:"'AI 디지털교과서'(띄어씀, 26회) / 'AI디지털교과서'(붙여씀, 5회) 혼용", fix:"'AI 디지털교과서'로 통일", note:"대상사업 핵심 용어의 띄어쓰기 혼용" },
+    ],
+    typoNote:"※ 중복 단어·용어 혼용 패턴 검색으로 확인된 항목만 수록했습니다. 154슬라이드 전체를 정독한 것은 아닙니다.",
+    priority: {
+      crit: ['Slide 82·140의 "100% 상근" 표현을 "상근 78.9%(15/19명)"로 정정'],
+      major: [],
+      check: [],
+    }
+  }
+];
+
+/* ================= 렌더링 ================= */
+function badgeCls(v){ return v==='ok'?'ok':(v==='crit'?'crit':(v==='major'?'major':'check')); }
+function badgeTxt(v){ return {ok:'일치',crit:'치명(상단참조)',major:'불일치',check:'확인필요'}[v]||v; }
+
+function renderDetail(r){
+  const b = r.baseline.map(row=>`<tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td></tr>`).join('');
+  const findingsHtml = (arr, cls) => arr.map((f,i)=>`
+    <div class="finding ${cls}" data-idx="${i}">
+      <div class="fhead" onclick="this.parentElement.classList.toggle('open')">
+        <span class="badge ${cls}">${cls==='crit'?'치명':cls==='major'?'중대':'확인필요'}</span>
+        <span class="ftitle">${f.title}</span>
+        <span class="slide">${f.slide}</span>
+        <span class="fchev">▸</span>
+      </div>
+      <div class="fbody">${f.body}</div>
+    </div>`).join('');
+
+  const schedRows = r.schedule.map(row=>`
+    <tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td><td class="num">${row[3]}</td><td class="num">${row[4]}</td>
+    <td><span class="badge ${badgeCls(row[5])}">${badgeTxt(row[5])}</span></td></tr>`).join('');
+  const totalMD = r.schedule.reduce((s,row)=>s+parseInt(row[3]),0);
+
+  const persRows = r.personnel.map(row=>`
+    <tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td>
+    <td><span class="badge ${badgeCls(row[3])}">${badgeTxt(row[3])}</span></td></tr>`).join('');
+
+  const prioHtml = (list)=> list.length? `<ul>${list.map(x=>`<li>${x}</li>`).join('')}</ul>` : '<p class="note">없음</p>';
+
+  const typoSection = r.typoChecklist ? `
+    <div class="subhead">오타·표기 상세 검수표 <button class="xlsx-btn" style="margin-left:10px;vertical-align:middle" onclick="exportTypoExcel('${r.id}')">⬇ 검수표 엑셀</button></div>
+    <p class="note">${r.typoNote || ''}</p>
+    <table>
+      <tr><th style="width:36px">번호</th><th style="width:70px">슬라이드</th><th style="width:80px">유형</th><th style="width:60px">우선순위</th><th>원문</th><th>수정안</th><th>설명·근거</th></tr>
+      ${r.typoChecklist.map(t=>`
+        <tr>
+          <td class="num">${t.no}</td>
+          <td>${t.slide}</td>
+          <td>${t.type}</td>
+          <td><span class="badge ${t.priority==='높음'?'crit':t.priority==='중간'?'major':'check'}">${t.priority}</span></td>
+          <td>${t.original}</td>
+          <td>${t.fix}</td>
+          <td class="note" style="margin:0">${t.note}</td>
+        </tr>`).join('')}
+    </table>
+  ` : '';
+
+  return `
+    <div class="cards">
+      <div class="card crit"><div class="num">${r.counts.crit}</div><div class="lbl">치명 오류</div></div>
+      <div class="card major"><div class="num">${r.counts.major}</div><div class="lbl">중대 오류</div></div>
+      <div class="card minor"><div class="num">${r.counts.minor}</div><div class="lbl">경미 오류/오타</div></div>
+      <div class="card check"><div class="num">${r.counts.check}</div><div class="lbl">확인필요</div></div>
+    </div>
+    <div class="verdict"><b>총평.</b> ${r.verdict}</div>
+
+    <div class="subhead">기준 정보 요약</div>
+    <table><tr><th style="width:140px">항목</th><th>기준값</th><th style="width:150px">출처</th></tr>${b}</table>
+
+    <div class="subhead">치명 오류</div>
+    ${r.critical.length? findingsHtml(r.critical,'crit') : '<div class="empty-ok">확인된 치명 오류 없음</div>'}
+
+    <div class="subhead">중대 오류</div>
+    ${r.major.length? findingsHtml(r.major,'major') : '<div class="empty-ok">확인된 중대 오류 없음</div>'}
+
+    <div class="subhead">경미 오류 / 오타</div>
+    ${r.minor.length? findingsHtml(r.minor,'minor') : '<div class="empty-ok">확인된 경미 오류 없음</div>'}
+
+    <div class="subhead">확인 필요 항목</div>
+    ${r.checkNeeded.length? findingsHtml(r.checkNeeded,'check') : '<div class="empty-ok">확인 필요 항목 없음</div>'}
+
+    <div class="subhead">일정·공수 대조 결과</div>
+    <table>
+      <tr><th>단계</th><th>HTML 기준 일정</th><th>PPT 일정</th><th class="num">HTML 공수</th><th class="num">PPT 공수</th><th>판정</th></tr>
+      ${schedRows}
+      <tr class="total"><td>합계</td><td colspan="2"></td><td class="num">${totalMD}</td><td class="num">${totalMD}</td><td><span class="badge ok">일치</span></td></tr>
+    </table>
+    <p class="note">${r.scheduleNote}</p>
+
+    <div class="subhead">인력명 대조 결과</div>
+    <table><tr><th>구분</th><th>HTML 기준 인력</th><th>PPT 표기 인력</th><th>판정</th></tr>${persRows}</table>
+
+    <div class="subhead">본사업 무관 내용 검출 결과</div>
+    <div class="empty-ok">본사업과 무관한 명백한 잔존 문구 없음</div>
+    <p class="note">${r.irrelevant}</p>
+
+    ${typoSection}
+
+    <div class="subhead">최종 수정 우선순위</div>
+    <div class="prio">
+      <div class="col c1"><h3>1. 치명 — 즉시 수정</h3>${prioHtml(r.priority.crit)}</div>
+      <div class="col c2"><h3>2. 중대 — 제출 전 수정</h3>${prioHtml(r.priority.major)}</div>
+      <div class="col c3"><h3>3. 확인필요 — 작성자 확인</h3>${prioHtml(r.priority.check)}</div>
+    </div>
+  `;
+}
+
+function renderList(){
+  const el = document.getElementById('reportList');
+  el.innerHTML = REPORTS.map(r=>`
+    <div class="report-row" id="row-${r.id}">
+      <div class="rhead" onclick="toggleRow('${r.id}')">
+        <div class="rtitle">
+          <div class="name">${r.name}</div>
+          <div class="sub">${r.org} · ${r.date}</div>
+        </div>
+        <div class="counts">
+          <span class="minicount crit">치명 ${r.counts.crit}</span>
+          <span class="minicount major">중대 ${r.counts.major}</span>
+          <span class="minicount minor">경미 ${r.counts.minor}</span>
+          <span class="minicount check">확인 ${r.counts.check}</span>
+        </div>
+        <button class="xlsx-btn" onclick="event.stopPropagation(); exportExcel('${r.id}')" title="엑셀 다운로드">⬇ 엑셀</button>
+        <span class="chev">▸</span>
+      </div>
+      <div class="rdetail" id="detail-${r.id}"></div>
+    </div>
+  `).join('');
+}
+
+function toggleRow(id){
+  const row = document.getElementById('row-'+id);
+  const wasOpen = row.classList.contains('open');
+  row.classList.toggle('open');
+  if(!wasOpen){
+    const r = REPORTS.find(x=>x.id===id);
+    document.getElementById('detail-'+id).innerHTML = renderDetail(r);
+  }
+}
+];
+
+/* ─── 렌더링 함수 (rdb 네임스페이스) ─── */
+/* ================= 렌더링 ================= */
+function rdbBadgeCls(v){ return v==='ok'?'ok':(v==='crit'?'crit':(v==='major'?'major':'check')); }
+function rdbBadgeTxt(v){ return {ok:'일치',crit:'치명(상단참조)',major:'불일치',check:'확인필요'}[v]||v; }
+
+function rdbRenderDetail(r){
+  const b = r.baseline.map(row=>`<tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td></tr>`).join('');
+  const findingsHtml = (arr, cls) => arr.map((f,i)=>`
+    <div class="finding ${cls}" data-idx="${i}">
+      <div class="fhead" onclick="this.parentElement.classList.toggle('open')">
+        <span class="badge ${cls}">${cls==='crit'?'치명':cls==='major'?'중대':'확인필요'}</span>
+        <span class="ftitle">${f.title}</span>
+        <span class="slide">${f.slide}</span>
+        <span class="fchev">▸</span>
+      </div>
+      <div class="fbody">${f.body}</div>
+    </div>`).join('');
+
+  const schedRows = r.schedule.map(row=>`
+    <tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td><td class="num">${row[3]}</td><td class="num">${row[4]}</td>
+    <td><span class="badge ${rdbBadgeCls(row[5])}">${rdbBadgeTxt(row[5])}</span></td></tr>`).join('');
+  const totalMD = r.schedule.reduce((s,row)=>s+parseInt(row[3]),0);
+
+  const persRows = r.personnel.map(row=>`
+    <tr><td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td>
+    <td><span class="badge ${rdbBadgeCls(row[3])}">${rdbBadgeTxt(row[3])}</span></td></tr>`).join('');
+
+  const prioHtml = (list)=> list.length? `<ul>${list.map(x=>`<li>${x}</li>`).join('')}</ul>` : '<p class="note">없음</p>';
+
+  const typoSection = r.typoChecklist ? `
+    <div class="subhead">오타·표기 상세 검수표 <button class="rdb-xlsx-btn" style="margin-left:10px;vertical-align:middle" onclick="rdbExportTypoExcel('${r.id}')">⬇ 검수표 엑셀</button></div>
+    <p class="note">${r.typoNote || ''}</p>
+    <table>
+      <tr><th style="width:36px">번호</th><th style="width:70px">슬라이드</th><th style="width:80px">유형</th><th style="width:60px">우선순위</th><th>원문</th><th>수정안</th><th>설명·근거</th></tr>
+      ${r.typoChecklist.map(t=>`
+        <tr>
+          <td class="num">${t.no}</td>
+          <td>${t.slide}</td>
+          <td>${t.type}</td>
+          <td><span class="badge ${t.priority==='높음'?'crit':t.priority==='중간'?'major':'check'}">${t.priority}</span></td>
+          <td>${t.original}</td>
+          <td>${t.fix}</td>
+          <td class="note" style="margin:0">${t.note}</td>
+        </tr>`).join('')}
+    </table>
+  ` : '';
+
+  return `
+    <div class="cards">
+      <div class="card crit"><div class="num">${r.counts.crit}</div><div class="lbl">치명 오류</div></div>
+      <div class="card major"><div class="num">${r.counts.major}</div><div class="lbl">중대 오류</div></div>
+      <div class="card minor"><div class="num">${r.counts.minor}</div><div class="lbl">경미 오류/오타</div></div>
+      <div class="card check"><div class="num">${r.counts.check}</div><div class="lbl">확인필요</div></div>
+    </div>
+    <div class="verdict"><b>총평.</b> ${r.verdict}</div>
+
+    <div class="subhead">기준 정보 요약</div>
+    <table><tr><th style="width:140px">항목</th><th>기준값</th><th style="width:150px">출처</th></tr>${b}</table>
+
+    <div class="subhead">치명 오류</div>
+    ${r.critical.length? findingsHtml(r.critical,'crit') : '<div class="empty-ok">확인된 치명 오류 없음</div>'}
+
+    <div class="subhead">중대 오류</div>
+    ${r.major.length? findingsHtml(r.major,'major') : '<div class="empty-ok">확인된 중대 오류 없음</div>'}
+
+    <div class="subhead">경미 오류 / 오타</div>
+    ${r.minor.length? findingsHtml(r.minor,'minor') : '<div class="empty-ok">확인된 경미 오류 없음</div>'}
+
+    <div class="subhead">확인 필요 항목</div>
+    ${r.checkNeeded.length? findingsHtml(r.checkNeeded,'check') : '<div class="empty-ok">확인 필요 항목 없음</div>'}
+
+    <div class="subhead">일정·공수 대조 결과</div>
+    <table>
+      <tr><th>단계</th><th>HTML 기준 일정</th><th>PPT 일정</th><th class="num">HTML 공수</th><th class="num">PPT 공수</th><th>판정</th></tr>
+      ${schedRows}
+      <tr class="total"><td>합계</td><td colspan="2"></td><td class="num">${totalMD}</td><td class="num">${totalMD}</td><td><span class="badge ok">일치</span></td></tr>
+    </table>
+    <p class="note">${r.scheduleNote}</p>
+
+    <div class="subhead">인력명 대조 결과</div>
+    <table><tr><th>구분</th><th>HTML 기준 인력</th><th>PPT 표기 인력</th><th>판정</th></tr>${persRows}</table>
+
+    <div class="subhead">본사업 무관 내용 검출 결과</div>
+    <div class="empty-ok">본사업과 무관한 명백한 잔존 문구 없음</div>
+    <p class="note">${r.irrelevant}</p>
+
+    ${typoSection}
+
+    <div class="subhead">최종 수정 우선순위</div>
+    <div class="prio">
+      <div class="col c1"><h3>1. 치명 — 즉시 수정</h3>${prioHtml(r.priority.crit)}</div>
+      <div class="col c2"><h3>2. 중대 — 제출 전 수정</h3>${prioHtml(r.priority.major)}</div>
+      <div class="col c3"><h3>3. 확인필요 — 작성자 확인</h3>${prioHtml(r.priority.check)}</div>
+    </div>
+  `;
+}
+
+function rdbRenderList(){
+  const el = document.getElementById('rdb-reportList');
+  el.innerHTML = REPORTS.map(r=>`
+    <div class="rdb-report-row" id="rdb-row-${r.id}">
+      <div class="rdb-rhead" onclick="rdbToggleRow('${r.id}')">
+        <div class="rtitle">
+          <div class="name">${r.name}</div>
+          <div class="sub">${r.org} · ${r.date}</div>
+        </div>
+        <div class="counts">
+          <span class="rdb-minicount crit">치명 ${r.counts.crit}</span>
+          <span class="rdb-minicount major">중대 ${r.counts.major}</span>
+          <span class="rdb-minicount minor">경미 ${r.counts.minor}</span>
+          <span class="rdb-minicount check">확인 ${r.counts.check}</span>
+        </div>
+        <button class="rdb-xlsx-btn" onclick="event.stopPropagation(); exportExcel('${r.id}')" title="엑셀 다운로드">⬇ 엑셀</button>
+        <span class="rdb-chev">▸</span>
+      </div>
+      <div class="rdb-detail" id="rdb-detail-${r.id}"></div>
+    </div>
+  `).join('');
+}
+
+function rdbToggleRow(id){
+  const row = document.getElementById('rdb-row-'+id);
+  const wasOpen = row.classList.contains('open');
+  row.classList.toggle('open');
+  if(!wasOpen){
+    const r = REPORTS.find(x=>x.id===id);
+    document.getElementById('rdb-detail-'+id).innerHTML = rdbRenderDetail(r);
+  }
+}
+
+renderList();
+
+/* ─── 업로드 체크리스트 (localStorage) ─── */
+
+
+/* ================= 업로드 체크리스트 (기록용) ================= */
+const STORE_KEY = 'submission-record:hoenyanche-2026';
+let record = {};
+function fmtSize(n){ if(n<1024) return n+' B'; if(n<1024*1024) return (n/1024).toFixed(1)+' KB'; return (n/1024/1024).toFixed(1)+' MB'; }
+function fmtTime(ts){ const d=new Date(ts); return d.getFullYear()+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+String(d.getDate()).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+
+function renderSlot(key){
+  const dz = document.querySelector(`.rdb-dropzone[data-key="${key}"]`);
+  const chip = document.querySelector(`.rdb-chip[data-chip="${key}"]`);
+  if(!dz || !chip) return;
+  const info = record[key];
+  const label = dz.querySelector('.label').textContent;
+  if(info){
+    dz.classList.add('filled');
+    dz.innerHTML = `<div class="ico">✅</div><div class="label">${label}</div>
+      <div class="fileinfo">${info.name}<br>${fmtSize(info.size)} · ${fmtTime(info.ts)}</div>
+      <button class="rdb-clear" onclick="rdbClearSlot(event,'${key}')">지우기</button><input type="file">`;
+    chip.classList.add('done');
+  } else {
+    dz.classList.remove('filled');
+    chip.classList.remove('done');
+  }
+  bindInput(dz, key);
+}
+function bindInput(dz, key){
+  const input = dz.querySelector('input[type=file]');
+  dz.onclick = (e)=>{ if(e.target.tagName!=='BUTTON') input.click(); };
+  input.onchange = (e)=>{ const f=e.target.files[0]; if(f) saveFile(key,f); };
+  dz.ondragover = (e)=>{ e.preventDefault(); dz.classList.add('drag'); };
+  dz.ondragleave = ()=> dz.classList.remove('drag');
+  dz.ondrop = (e)=>{ e.preventDefault(); dz.classList.remove('drag'); const f=e.dataTransfer.files[0]; if(f) saveFile(key,f); };
+}
+function saveFile(key,file){ record[key]={name:file.name,size:file.size,ts:Date.now()}; persist(); renderSlot(key); updateActions(); }
+function rdbClearSlot(e,key){ e.stopPropagation(); delete record[key]; persist(); renderSlot(key); updateActions(); }
+function rdbResetAll(){ record={}; persist(); ['auditRfp','targetRfp','portal','pptx'].forEach(renderSlot); updateActions(); }
+function persist(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(record)); document.getElementById('rdb-savedStamp').textContent='마지막 저장: '+fmtTime(Date.now()); }catch(err){console.error(err);} }
+function loadRecord(){ try{ const res=localStorage.getItem(STORE_KEY); if(res) record=JSON.parse(res); }catch(err){record={};} ['auditRfp','targetRfp','portal','pptx'].forEach(renderSlot); updateActions(); }
+function updateActions(){ const keys=['auditRfp','targetRfp','portal','pptx']; document.getElementById('rdb-requestBtn').disabled = keys.filter(k=>record[k]).length < keys.length; }
+function rdbRequestAnalysis(){
+  const names = ['auditRfp','targetRfp','portal','pptx'].map(k=>record[k]?record[k].name:'').filter(Boolean);
+  const msg = '이 파일들을 채팅에 첨부했으니 다시 검수를 진행해줘: ' + names.join(', ');
+  const stamp = document.getElementById('rdb-savedStamp');
+
+  const done = () => {
+    stamp.textContent = '문구가 복사되었습니다. 채팅창에 붙여넣고 파일 4개를 함께 첨부해 주세요.';
+    stamp.style.color = 'var(--ok)';
+  };
+  const fail = () => {
+    stamp.innerHTML = '자동 복사에 실패했습니다. 아래 문구를 직접 복사해 채팅에 붙여넣어 주세요:<br><b>' + msg + '</b>';
+    stamp.style.color = 'var(--crit)';
+  };
+
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(msg).then(done).catch(fail);
+  } else {
+    fail();
+  }
+}
+
+loadRecord();
+
+/* ─── 대시보드 초기화 ─── */
+function rdbInit() {
+  const el = document.getElementById('rdb-reportList');
+  if (!el || el.innerHTML.trim() !== '') return;
+  rdbRenderList();
+  loadRecord();
 }
 </script>
 </body>
