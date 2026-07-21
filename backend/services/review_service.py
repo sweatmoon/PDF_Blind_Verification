@@ -181,11 +181,15 @@ def _extract_text_from_pptx(data: bytes) -> str:
                         t = shape.text_frame.text.strip()
                         if t:
                             texts.append(t)
-                    # 표
+                    # 표 — 빈 셀도 "-"로 유지해 열 번호가 밀리지 않게 함
                     if shape.has_table:
                         for row in shape.table.rows:
-                            row_texts = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                            if row_texts:
+                            row_texts = [
+                                cell.text.strip() if cell.text.strip() else "-"
+                                for cell in row.cells
+                            ]
+                            # 전체가 "-"뿐인 행(완전 빈 행)은 생략
+                            if any(t != "-" for t in row_texts):
                                 texts.append(" | ".join(row_texts))
                 except Exception:
                     pass
@@ -216,11 +220,32 @@ def _extract_text_from_html(data: bytes) -> str:
 
 
 def _truncate(text: str, max_chars: int = 40000) -> str:
-    """토큰 초과 방지용 텍스트 절삭"""
+    """토큰 초과 방지용 텍스트 절삭.
+    PPT 텍스트([슬라이드 N] 마커 포함)는 슬라이드 단위로 균등 샘플링해서
+    전체 흐름을 놓치지 않게 한다. 슬라이드 마커 없는 문서는 앞/뒤 방식 유지."""
     if len(text) <= max_chars:
         return text
-    half = max_chars // 2
-    return text[:half] + f"\n\n... [중간 {len(text)-max_chars:,}자 생략] ...\n\n" + text[-half:]
+
+    # [슬라이드 N] 단위로 쪼개기
+    parts = re.split(r'(?=\[슬라이드 \d+\])', text)
+    if len(parts) <= 1:
+        # 슬라이드 마커 없음(HWP·PDF 등) — 앞/뒤 방식 유지
+        half = max_chars // 2
+        return text[:half] + f"\n\n... [중간 생략] ...\n\n" + text[-half:]
+
+    # 전체 글자 수를 max_chars에 맞추기 위해 슬라이드를 균등 간격으로 선택
+    total_len = sum(len(p) for p in parts)
+    if total_len <= max_chars:
+        return text
+    keep_ratio = max_chars / total_len
+    step = max(1, round(1 / keep_ratio))
+    kept = parts[::step]
+    result = "".join(kept)
+    return (
+        result
+        + f"\n\n[※ 전체 {len(parts)}개 슬라이드 중 {len(kept)}개만 샘플링됨. "
+        + "세부 확인이 필요하면 checkNeeded에 '전체 슬라이드 미확인' 명시할 것]"
+    )
 
 
 # ── 경량 재시도 프롬프트 (max_tokens 잘림 시 핵심 필드만 요청) ───────────────
@@ -295,7 +320,50 @@ _SYSTEM_PROMPT = """\
   "typoChecklist": [{"no":1,"slide":"string","type":"string","priority":"높음|중간|낮음","original":"string","fix":"string","note":"string"}, ...],
   "typoNote": "string",
   "priority": {"crit":["string"],"major":["string"],"check":["string"]}
-}"""
+}
+
+## 검수 규율 (반드시 지킬 것 — 위반 시 그 항목은 아예 출력하지 않는다)
+
+너는 지금까지 이 회사의 제안서 10건을 검수한 적이 있는 다른 AI의 결과와 반드시 같은
+수준으로 나와야 한다. 그 AI는 10건을 검수하면서 프로젝트당 평균 1~3개의 진짜 오류만
+찾았다(치명+중대+경미 합쳐서 10개를 넘긴 경우가 거의 없었다). 네 결과가 그보다 훨씬
+많다면(예: 20개 이상), 너는 근거 없는 항목을 만들어내고 있는 것이다.
+
+### 규칙 A — 숫자/비율 관련 지적은 계산 없이는 절대 쓰지 않는다
+숫자 불일치를 지적하려면:
+1) 기준 문서에서 해당 수치를 직접 인용한다 (예: "포털 확정 총 공수 = 307 MD").
+2) PPT에서 해당 수치를 직접 인용한다 (예: "슬라이드 122 표 합계 = 244 MD").
+3) 두 값의 차이를 명시한다 (예: "307 - 244 = 63 MD 차이").
+위 3단계 계산 없이는 숫자 관련 항목을 절대 critical/major/minor에 넣지 않는다.
+
+### 규칙 B — 문장이 부자연스럽거나 잘려 보이면 그 자체를 오류로 쓰지 않는다
+PPT 텍스트 추출 과정에서 발생한 깨짐·잘림·표 열 밀림은 실제 슬라이드 오류가 아닐 수 있다.
+"문장이 끊겨 있다", "글자가 이상하다", "표가 깨졌다"는 이유만으로 오류로 보고하지 않는다.
+실제 내용 불일치가 있는 경우에만 지적한다.
+
+### 규칙 C — "~해 보인다", "~일 가능성", "~인 것 같다" 같은 추측성 표현이 들어가면 그 항목을 삭제한다
+body나 fix에 추측성 표현이 포함된 항목은 출력하지 않는다.
+확실한 근거가 있는 경우에만 기재하며, 표현도 단정적으로 쓴다.
+
+### 규칙 D — 카테고리별 상한선을 엄수한다
+- critical: 최대 2개 (절대 초과 불가)
+- major: 최대 2개 (절대 초과 불가)
+- minor: 최대 5개 (절대 초과 불가)
+- checkNeeded: 최대 3개 (절대 초과 불가)
+상한을 초과하는 항목이 있다면, 그중 가장 근거가 약한 것부터 삭제하여 상한에 맞춘다.
+
+### 규칙 E — 예산/일정 관련 자주 틀리는 포인트를 미리 걸러낸다
+다음 항목들은 오탐(false positive)이 잦으므로 특히 주의한다:
+- 일정 표기 차이: PPT의 "YYYY.MM" vs HTML의 "YYYY-MM-DD"는 형식 차이일 뿐, 날짜 불일치로 보지 않는다.
+- 공수(MD) 합산: 구성원별 공수를 직접 더해서 총합과 비교하지 않으면 지적하지 않는다.
+- 예산 부가세: RFP에 부가세 포함/제외 기준이 명시되지 않으면 "가격 정보 미확인"으로 checkNeeded에만 넣는다.
+- 인력 직함/등급 차이: RFP에 정확한 직함이 명시된 경우에만 지적하고, 그렇지 않으면 무시한다.
+
+### 최종 자기점검 — 출력 직전 반드시 수행
+JSON을 완성한 뒤, 출력하기 전에 다음을 점검한다:
+1. critical + major + minor의 합계가 10을 초과하면, 근거가 가장 약한 항목부터 삭제하여 10 이하로 맞춘다.
+2. 각 항목의 body에 규칙 A(계산 근거), 규칙 C(단정적 표현)를 위반한 것이 있으면 삭제한다.
+3. counts 값은 최종 배열의 실제 길이와 일치해야 한다. 배열을 삭제했다면 counts도 갱신한다."""
 
 
 def _build_messages(
