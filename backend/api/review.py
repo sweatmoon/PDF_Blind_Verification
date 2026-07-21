@@ -218,6 +218,94 @@ def get_review_debug(job_id: str):
     })
 
 
+# ── 대시보드: 완료된 검수 목록 ──────────────────────────────────
+# 규율 적용 커밋 날짜 — 이 시각 이전 결과에 legacy 배지를 붙임
+_CALIBRATION_DATE = "2026-07-21T00:00:00+09:00"
+
+@router.get("/dashboard")
+def get_review_dashboard():
+    """완료된 검수 결과를 최신순으로 반환합니다.
+    - type == 'review' & status == 'completed' 필터
+    - created_at 역순 정렬
+    - created_at < 2026-07-21(규율 적용일) 이면 legacy:true 플래그 추가
+    """
+    all_jobs = list_jobs()
+    completed = [
+        j for j in all_jobs
+        if j.get("type") == "review" and j.get("status") == "completed"
+    ]
+    # created_at 역순 정렬
+    completed.sort(key=lambda j: j.get("created_at", ""), reverse=True)
+
+    results = []
+    for j in completed:
+        # get_job()으로 report 필드 완전 로드
+        full = get_job(j["job_id"])
+        if not full:
+            continue
+        report = full.get("report") or {}
+        legacy = (j.get("created_at", "") < _CALIBRATION_DATE)
+        results.append({
+            "job_id":     j["job_id"],
+            "created_at": j.get("created_at", ""),
+            "filenames":  j.get("filenames", {}),
+            "source":     j.get("source", "api"),
+            "legacy":     legacy,
+            "report":     report,
+        })
+
+    return JSONResponse({"total": len(results), "items": results})
+
+
+# ── 샘플 10건 DB 마이그레이션 ────────────────────────────────────
+@router.post("/migrate-samples")
+def migrate_sample_reports(body: dict):
+    """하드코딩된 참고 예시 10건을 job 스토어에 삽입합니다.
+    요청 body: { "reports": [ ...REPORTS 배열... ] }
+    이미 존재하는 job_id는 건너뜁니다.
+    """
+    reports = body.get("reports", [])
+    if not isinstance(reports, list):
+        raise HTTPException(400, "reports 필드가 배열이어야 합니다.")
+
+    inserted, skipped = 0, 0
+    for r in reports:
+        rid = r.get("id")
+        if not rid:
+            skipped += 1
+            continue
+        # 이미 존재하는 항목 건너뜀
+        if get_job(rid):
+            skipped += 1
+            continue
+        # date 필드("2026.07.07 검수" 형식)를 created_at ISO로 변환
+        raw_date = r.get("date", "")
+        try:
+            date_part = raw_date.replace(" 검수", "").strip()  # "2026.07.07"
+            y, m, d = date_part.split(".")
+            created_at = f"{y}-{m.zfill(2)}-{d.zfill(2)}T09:00:00+09:00"
+        except Exception:
+            created_at = "2026-07-01T09:00:00+09:00"
+
+        job_data = {
+            "job_id":     rid,
+            "type":       "review",
+            "status":     "completed",
+            "progress":   100,
+            "message":    "검수 완료 (참고 예시)",
+            "filenames":  {},
+            "created_at": created_at,
+            "source":     "manual",   # 수동 마이그레이션 태그
+            "report":     r,          # REPORTS 배열 원소 전체를 report로 저장
+            "error":      None,
+        }
+        set_job(rid, job_data)
+        inserted += 1
+
+    logger.info(f"[review] migrate-samples: inserted={inserted}, skipped={skipped}")
+    return JSONResponse({"inserted": inserted, "skipped": skipped})
+
+
 # ── 검수 모델 조회/변경 ──────────────────────────────────────────
 @router.get("/model")
 def get_model():
