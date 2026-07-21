@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260721-v14b-junk-removed -->
+<!-- BUILD: 20260721-v15-js-fix -->
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
@@ -5801,42 +5801,47 @@ function rdbRenderDetail(r){
 }
 
 function rdbRenderList(items){
-  const el = document.getElementById('rdb-reportList');
+  var el = document.getElementById('rdb-reportList');
   if (!items || items.length === 0) {
     el.innerHTML = '<div style="padding:32px;text-align:center;color:#888;">검수 완료된 결과가 없습니다.</div>';
     return;
   }
-  el.innerHTML = items.map(function(item) {
-    const r = item.report || item;
-    const id = item.job_id || r.id;
-    const name = r.name || id;
-    const org  = r.org  || '';
-    const dateStr = r.date || item.created_at || '';
-    const counts = r.counts || { crit:0, major:0, minor:0, check:0 };
-    const legacyBadge = item.legacy
-      ? '<span style="background:#f59e0b;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px;margin-left:6px;">&#x26A0;&#xFE0F; 규율 적용 전</span>'
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var r = item.report || item;
+    var id = item.job_id || r.id;
+    var name = (r.name || id).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    var org  = (r.org  || '').replace(/</g,'&lt;');
+    var dateStr = (r.date || item.created_at || '').replace(/</g,'&lt;');
+    var counts = r.counts || { crit:0, major:0, minor:0, check:0 };
+    var legacyBadge = item.legacy
+      ? '<span style="background:#f59e0b;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px;margin-left:6px;">⚠️ 규율 적용 전</span>'
       : '';
-    const manualBadge = (item.source === 'manual')
+    var manualBadge = (item.source === 'manual')
       ? '<span style="background:#6b7280;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px;margin-left:4px;">참고 예시</span>'
       : '';
-    return '<div class="rdb-report-row" id="rdb-row-' + id + '">'
-      + '<div class="rdb-rhead" onclick="rdbToggleRow(\'' + id + '\')">'
-      + '<div class="rtitle">'
-      + '<div class="name">' + name + legacyBadge + manualBadge + '</div>'
-      + '<div class="sub">' + org + ' &middot; ' + dateStr + '</div>'
-      + '</div>'
-      + '<div class="counts">'
-      + '<span class="rdb-minicount crit">치명 ' + counts.crit + '</span>'
-      + '<span class="rdb-minicount major">중대 ' + counts.major + '</span>'
-      + '<span class="rdb-minicount minor">경미 ' + counts.minor + '</span>'
-      + '<span class="rdb-minicount check">확인 ' + counts.check + '</span>'
-      + '</div>'
-      + '<button class="rdb-xlsx-btn" onclick="event.stopPropagation(); rdbExportExcel(\'' + id + '\')" title="엑셀 다운로드">&#x2B07; 엑셀</button>'
-      + '<span class="rdb-chev">&#x25B8;</span>'
-      + '</div>'
-      + '<div class="rdb-detail" id="rdb-detail-' + id + '"></div>'
-      + '</div>';
-  }).join('');\n}
+    var safeId = id.replace(/'/g, '&#39;');
+    html += '<div class="rdb-report-row" id="rdb-row-' + safeId + '">';
+    html += '<div class="rdb-rhead" onclick="rdbToggleRow(&#39;' + safeId + '&#39;)">';
+    html += '<div class="rtitle">';
+    html += '<div class="name">' + name + legacyBadge + manualBadge + '</div>';
+    html += '<div class="sub">' + org + ' &middot; ' + dateStr + '</div>';
+    html += '</div>';
+    html += '<div class="counts">';
+    html += '<span class="rdb-minicount crit">치명 ' + counts.crit + '</span>';
+    html += '<span class="rdb-minicount major">중대 ' + counts.major + '</span>';
+    html += '<span class="rdb-minicount minor">경미 ' + counts.minor + '</span>';
+    html += '<span class="rdb-minicount check">확인 ' + counts.check + '</span>';
+    html += '</div>';
+    html += '<button class="rdb-xlsx-btn" onclick="event.stopPropagation();rdbExportExcel(&#39;' + safeId + '&#39;)" title="엑셀 다운로드">&#x2B07; 엑셀</button>';
+    html += '<span class="rdb-chev">&#x25B8;</span>';
+    html += '</div>';
+    html += '<div class="rdb-detail" id="rdb-detail-' + safeId + '"></div>';
+    html += '</div>';
+  }
+  el.innerHTML = html;
+}
 
 function rdbToggleRow(id){
   const row = document.getElementById('rdb-row-'+id);
