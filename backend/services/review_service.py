@@ -223,6 +223,43 @@ def _truncate(text: str, max_chars: int = 40000) -> str:
     return text[:half] + f"\n\n... [중간 {len(text)-max_chars:,}자 생략] ...\n\n" + text[-half:]
 
 
+# ── 경량 재시도 프롬프트 (max_tokens 잘림 시 핵심 필드만 요청) ───────────────
+_SYSTEM_PROMPT_COMPACT = """\
+당신은 입찰 제안서 전문 검수 AI입니다.
+## 절대 규칙
+1. 응답은 반드시 유효한 JSON 객체 **하나만** 출력한다. 코드블록, 설명 문구 일절 금지.
+2. JSON 문자열 값 안에 실제 줄바꿈(0x0A/0x0D) 절대 금지. \\n 이스케이프만 사용.
+3. 모든 문자열 내 이중인용부호(")는 반드시 \\" 로 이스케이프한다.
+4. 배열이 없을 때는 빈 배열 [] 또는 빈 문자열 ""을 사용한다.
+
+## 출력 JSON 스키마 (핵심 필드만 — 간략 버전)
+{
+  "id": "slug",
+  "name": "사업명",
+  "org": "발주기관",
+  "date": "검수일",
+  "counts": {"crit":0,"major":0,"minor":0,"check":0},
+  "verdict": "총평(HTML <b>태그 가능, \\n 줄바꿈)",
+  "overview": [["사업명","RFP기준","포털기준","PPT표기","ok|major|crit"]],
+  "baseline": [["항목","기준값","출처"]],
+  "scopeCoverage": [{"requirement":"","coveredInPPT":true,"ppSlide":"","note":""}],
+  "critical": [{"title":"","slide":"","fix":"","body":""}],
+  "major":    [{"title":"","slide":"","fix":"","body":""}],
+  "minor":    [{"title":"","slide":"","fix":"","body":""}],
+  "checkNeeded": [{"title":"","slide":"","fix":"","body":""}],
+  "schedule": [["단계","HTML일정","PPT일정","HTML MD","PPT MD","ok|major|check|crit"]],
+  "scheduleNote": "",
+  "personnel": [["구분","HTML기준","PPT표기","ok|major|check|crit"]],
+  "qualificationCheck": [{"person":"","requirement":"","actual":"","meets":true,"note":""}],
+  "costCheck": [["항목","RFP/포털기준","PPT표기","ok|major|check"]],
+  "deliverableCheck": [["산출물명","RFP기한","PPT기한","ok|major|check"]],
+  "irrelevant": {"summary":"","items":[{"text":"","slide":"","sourceGuess":"","severity":"high|low"}]},
+  "typoChecklist": [{"no":1,"slide":"","type":"","priority":"높음|중간|낮음","original":"","fix":"","note":""}],
+  "typoNote": "",
+  "priority": {"crit":[],"major":[],"check":[]}
+}"""
+
+
 _SYSTEM_PROMPT = """\
 당신은 입찰 제안서 전문 검수 AI입니다.
 사용자가 제공하는 4개 문서를 분석하여 정해진 JSON 스키마를 정확히 출력합니다.
@@ -332,6 +369,36 @@ verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
     ]
 
 
+def _build_messages_compact(
+    audit_rfp: str,
+    target_rfp: str,
+    portal_html: str,
+    proposal_ppt: str,
+    today: str,
+) -> list[dict]:
+    """경량 메시지 — max_tokens 잘림 시 재시도용 (입력 절삭 더 공격적)"""
+    user_content = f"""오늘 날짜: {today}
+
+4개 문서를 분석하여 간략 JSON을 출력하라. 각 배열 항목은 핵심만 간단히 기재할 것.
+
+[감리사업 RFP]
+{_truncate(audit_rfp, 15000)}
+
+[대상사업 RFP]
+{_truncate(target_rfp, 15000)}
+
+[포털 제안작업표 HTML]
+{_truncate(portal_html, 12000)}
+
+[정성제안서 PPT]
+{_truncate(proposal_ppt, 25000)}
+"""
+    return [
+        {"role": "user",      "content": user_content},
+        {"role": "assistant", "content": "{"},
+    ]
+
+
 def run_review(
     audit_rfp_data: bytes,   audit_rfp_name: str,
     target_rfp_data: bytes,  target_rfp_name: str,
@@ -398,20 +465,55 @@ def run_review(
 
     message = client.messages.create(
         model=model,
-        max_tokens=16000,          # 검수 JSON 전체 출력에 충분한 크기
+        max_tokens=32000,          # claude-sonnet-4-5 최대 64K, 32K로 충분
         system=_SYSTEM_PROMPT,
         messages=messages,
     )
 
-    # stop_reason 확인 — max_tokens로 잘린 경우 경고
+    # stop_reason 확인 — max_tokens로 잘린 경우 경량 프롬프트로 재시도
     stop_reason = message.stop_reason
+    retry_used = False
     if stop_reason == "max_tokens":
-        logger.warning(f"[review] Claude 응답이 max_tokens에 의해 잘림! 일부 결과 누락 가능")
+        logger.warning(f"[review] Claude 응답이 max_tokens에 의해 잘림! 경량 프롬프트로 재시도…")
+        # 경량 재시도: 입력 절삭 강화 + 간략 스키마
+        compact_messages = _build_messages_compact(
+            audit_rfp_text, target_rfp_text,
+            portal_html_text, proposal_ppt_text,
+            today,
+        )
+        compact_chars = sum(len(m["content"]) for m in compact_messages)
+        logger.info(f"[review] 재시도 compact: 총 입력={compact_chars:,}자")
+        message = client.messages.create(
+            model=model,
+            max_tokens=32000,
+            system=_SYSTEM_PROMPT_COMPACT,
+            messages=compact_messages,
+        )
+        stop_reason = message.stop_reason
+        retry_used = True
+        if stop_reason == "max_tokens":
+            logger.warning(f"[review] 재시도도 max_tokens 잘림! 3차 시도 (더 축약)…")
+            # 3차: 극소 입력
+            ultra_messages = _build_messages_compact(
+                _truncate(audit_rfp_text, 8000),
+                _truncate(target_rfp_text, 8000),
+                _truncate(portal_html_text, 6000),
+                _truncate(proposal_ppt_text, 15000),
+                today,
+            )
+            message = client.messages.create(
+                model=model,
+                max_tokens=32000,
+                system=_SYSTEM_PROMPT_COMPACT,
+                messages=ultra_messages,
+            )
+            stop_reason = message.stop_reason
+        logger.info(f"[review] 재시도 완료 (stop={stop_reason}, retry_used={retry_used})")
 
     # prefill "{" 포함해서 전체 JSON 복원
     raw_text = message.content[0].text if message.content else ""
     raw = "{" + raw_text          # prefill의 "{" 를 앞에 붙임
-    logger.info(f"[review] Claude 응답: {len(raw_text):,}자 (stop={stop_reason}, prefill 포함 {len(raw):,}자)")
+    logger.info(f"[review] Claude 응답: {len(raw_text):,}자 (stop={stop_reason}, retry={retry_used}, prefill 포함 {len(raw):,}자)")
 
     # ── JSON 파싱 ────────────────────────────────────────────────
     # 혹시 코드블록으로 감싸진 경우 제거 후 파싱
@@ -483,7 +585,7 @@ def run_review(
 
     if result is None:
         logger.warning(
-            f"[review] JSON 파싱 최종 실패 (stop={stop_reason}).\n"
+            f"[review] JSON 파싱 최종 실패 (stop={stop_reason}, retry={retry_used}).\n"
             f"  응답 처음 1000자: {raw[:1000]}\n"
             f"  응답 끝  500자: {raw[-500:]}"
         )
@@ -496,6 +598,7 @@ def run_review(
             "verdict": (
                 "JSON 파싱에 실패했습니다. "
                 + ("응답이 너무 길어 잘렸습니다(max_tokens 초과). " if stop_reason == 'max_tokens' else "")
+                + ("재시도를 2회 수행했지만 여전히 실패했습니다. " if retry_used else "")
                 + "파일을 다시 업로드하거나 관리자에게 문의하세요."
             ),
             "baseline": [],
@@ -508,6 +611,7 @@ def run_review(
             "_debug_raw": raw[:3000],   # 개발자 디버깅용 (첫 3000자)
             "_debug_tail": raw[-1000:], # 개발자 디버깅용 (마지막 1000자)
             "_stop_reason": stop_reason,
+            "_retry_used": retry_used,
         }
 
     # ── 신규 필드 기본값 보정 ─────────────────────────────────────

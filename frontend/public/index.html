@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260316-v11-allowed-thumbnail -->
+<!-- BUILD: 20260721-v12-max-tokens-retry -->
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
@@ -5008,23 +5008,26 @@ function rvRenderResult(r) {
     qualCard.classList.remove('hidden');
     qualBody.innerHTML = r.qualificationCheck.map(row => {
       // row: [인원, RFP요건, 포털실제값, 충족여부, 비고]  또는 객체형
-      let person, rfp, portal, met, note;
+      let person, requirement, actual, meets, note;
       if (Array.isArray(row)) {
-        [person, rfp, portal, met, note] = row;
+        [person, requirement, actual, meets, note] = row;
       } else {
-        person = row.person || row[0] || '';
-        rfp    = row.rfp    || row[1] || '';
-        portal = row.portal || row[2] || '';
-        met    = row.met    !== undefined ? row.met : (row[3] !== undefined ? row[3] : null);
-        note   = row.note   || row[4] || '';
+        // JSON 스키마: {person, requirement, actual, meets, note}
+        person      = row.person      || row[0] || '';
+        requirement = row.requirement || row.rfp || row[1] || '';
+        actual      = row.actual      || row.portal || row[2] || '';
+        meets       = row.meets !== undefined ? row.meets
+                    : row.met   !== undefined ? row.met
+                    : (row[3] !== undefined ? row[3] : null);
+        note        = row.note || row[4] || '';
       }
-      const ok = met === true || (typeof met === 'string' && met.toLowerCase() === 'ok');
+      const ok = meets === true || (typeof meets === 'string' && ['true','ok','✓'].includes(meets.toLowerCase()));
       const metCls = ok ? 'text-green-600 font-bold' : 'text-red-600 font-bold';
       const metLbl = ok ? '✓' : '✗';
       return `<tr class="border-t border-slate-100 hover:bg-slate-50">
         <td class="px-3 py-2 font-medium text-slate-700">${_esc(String(person||''))}</td>
-        <td class="px-3 py-2 text-slate-500">${_esc(String(rfp||''))}</td>
-        <td class="px-3 py-2 text-slate-700">${_esc(String(portal||''))}</td>
+        <td class="px-3 py-2 text-slate-500">${_esc(String(requirement||''))}</td>
+        <td class="px-3 py-2 text-slate-700">${_esc(String(actual||''))}</td>
         <td class="px-3 py-2 text-center text-base ${metCls}">${metLbl}</td>
         <td class="px-3 py-2 text-slate-400">${_esc(String(note||''))}</td>
       </tr>`;
@@ -5068,10 +5071,11 @@ function rvRenderResult(r) {
       if (Array.isArray(row)) {
         [item, rfpDate, pptDate, verdict] = row;
       } else {
-        item    = row.item    || row[0] || '';
-        rfpDate = row.rfpDate || row[1] || '';
-        pptDate = row.pptDate || row[2] || '';
-        verdict = row.verdict || row[3] || 'ok';
+        // JSON 스키마 키: deliverable, rfpDeadline, pptDeadline 등 다양하게 올 수 있음
+        item    = row[0] || row.deliverable || row.item    || row.name  || '';
+        rfpDate = row[1] || row.rfpDate     || row.rfpDeadline          || '';
+        pptDate = row[2] || row.pptDate     || row.pptDeadline          || '';
+        verdict = row[3] || row.verdict     || 'ok';
       }
       const v = String(verdict||'ok').toLowerCase();
       const cls = v==='ok'?'rv-ok': v.includes('crit')?'rv-crit-cell': v.includes('major')?'rv-major-cell':'rv-check-cell';
@@ -5116,14 +5120,20 @@ function rvRenderResult(r) {
         html += `<p class="text-sm text-slate-700 leading-relaxed mb-3">${_esc(irr.summary)}</p>`;
       }
       if (items.length > 0) {
-        html += `<div class="space-y-2">` + items.map(it => `
+        html += `<div class="space-y-2">` + items.map(it => {
+          const sevCls = (it.severity === 'high') ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700';
+          const sevLbl = (it.severity === 'high') ? '위험' : '낮음';
+          const source = it.sourceGuess || it.reason || '';
+          return `
           <div class="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="text-xs font-bold text-yellow-700 bg-yellow-100 px-1.5 py-0.5 rounded">${_esc(String(it.slide||''))}</span>
-              <span class="text-xs text-slate-500 font-medium">${_esc(String(it.reason||''))}</span>
+            <div class="flex items-center gap-2 mb-1 flex-wrap">
+              <span class="text-xs font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">${_esc(String(it.slide||''))}</span>
+              ${it.severity ? `<span class="text-xs font-bold px-1.5 py-0.5 rounded ${sevCls}">${sevLbl}</span>` : ''}
+              ${source ? `<span class="text-xs text-slate-500 font-medium">${_esc(String(source))}</span>` : ''}
             </div>
-            <p class="text-xs text-slate-600">${_esc(String(it.text||''))}</p>
-          </div>`).join('') + `</div>`;
+            <p class="text-xs text-slate-700">${_esc(String(it.text||''))}</p>
+          </div>`;
+        }).join('') + `</div>`;
       } else if (!irr.summary) {
         html = '<p class="text-xs text-slate-400">검출된 무관 내용 없음</p>';
       }
