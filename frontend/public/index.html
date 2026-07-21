@@ -4678,11 +4678,26 @@ async function rvStartReview() {
     showToast('4개 파일을 모두 선택해주세요.', 'error'); return;
   }
 
+  // File 객체를 ArrayBuffer로 미리 읽어둠
+  // showPage()가 DOM을 교체하면 file input이 detach되어 File 객체가 무효화됨
+  // → fetch 전에 bytes로 읽어두고, 그 다음 페이지 전환
+  let auditBuf, targetBuf, portalBuf, pptBuf;
+  try {
+    [auditBuf, targetBuf, portalBuf, pptBuf] = await Promise.all([
+      rvFiles.audit.arrayBuffer(),
+      rvFiles.target.arrayBuffer(),
+      rvFiles.portal.arrayBuffer(),
+      rvFiles.ppt.arrayBuffer(),
+    ]);
+  } catch(e) {
+    showToast(`파일 읽기 실패: ${e.message}`, 'error'); return;
+  }
+
   const fd = new FormData();
-  fd.append('audit_rfp',    rvFiles.audit);
-  fd.append('target_rfp',   rvFiles.target);
-  fd.append('portal_html',  rvFiles.portal);
-  fd.append('proposal_ppt', rvFiles.ppt);
+  fd.append('audit_rfp',    new Blob([auditBuf],  {type: rvFiles.audit.type  || 'application/octet-stream'}), rvFiles.audit.name);
+  fd.append('target_rfp',   new Blob([targetBuf], {type: rvFiles.target.type || 'application/octet-stream'}), rvFiles.target.name);
+  fd.append('portal_html',  new Blob([portalBuf], {type: rvFiles.portal.type || 'text/html'}),                rvFiles.portal.name);
+  fd.append('proposal_ppt', new Blob([pptBuf],    {type: rvFiles.ppt.type    || 'application/octet-stream'}), rvFiles.ppt.name);
 
   showPage('review-processing');
   rvSetProcMsg('파일 업로드 중…', 10);
