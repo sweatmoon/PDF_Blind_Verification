@@ -455,27 +455,37 @@ def run_review(
         today,
     )
 
-    # ── Claude API 호출 ──────────────────────────────────────────
+    # ── Claude API 호출 (Streaming — 10분 타임아웃 우회) ────────────
     model = get_review_model()
     total_chars = sum(len(m["content"]) for m in messages)
-    logger.info(f"[review] Claude 호출: model={model}, 총 입력={total_chars:,}자")
+    logger.info(f"[review] Claude 호출(stream): model={model}, 총 입력={total_chars:,}자")
 
     import anthropic
-    client = anthropic.Anthropic(api_key=key)
 
-    message = client.messages.create(
-        model=model,
-        max_tokens=32000,          # claude-sonnet-4-5 최대 64K, 32K로 충분
-        system=_SYSTEM_PROMPT,
-        messages=messages,
-    )
+    def _call_claude(sys_prompt: str, msgs: list, label: str = "") -> "anthropic.types.Message":
+        """streaming으로 Claude를 호출하고 완료된 Message 객체를 반환.
+        10분 이상 소요되는 요청은 반드시 stream=True 방식을 사용해야 함."""
+        cl = anthropic.Anthropic(api_key=key)
+        logger.info(f"[review] stream 호출 시작 {label}")
+        with cl.messages.stream(
+            model=model,
+            max_tokens=16000,   # 16K 이면 충분 (stream에서는 시간제한 없음)
+            system=sys_prompt,
+            messages=msgs,
+        ) as stream:
+            msg = stream.get_final_message()
+        logger.info(f"[review] stream 완료 {label} stop={msg.stop_reason} "
+                    f"출력={msg.usage.output_tokens if msg.usage else '?'}tok")
+        return msg
+
+    message = _call_claude(_SYSTEM_PROMPT, messages, label="[1차]")
 
     # stop_reason 확인 — max_tokens로 잘린 경우 경량 프롬프트로 재시도
     stop_reason = message.stop_reason
     retry_used = False
     if stop_reason == "max_tokens":
         logger.warning(f"[review] Claude 응답이 max_tokens에 의해 잘림! 경량 프롬프트로 재시도…")
-        # 경량 재시도: 입력 절삭 강화 + 간략 스키마
+        # 2차: 경량 스키마 + 입력 절삭 강화
         compact_messages = _build_messages_compact(
             audit_rfp_text, target_rfp_text,
             portal_html_text, proposal_ppt_text,
@@ -483,12 +493,7 @@ def run_review(
         )
         compact_chars = sum(len(m["content"]) for m in compact_messages)
         logger.info(f"[review] 재시도 compact: 총 입력={compact_chars:,}자")
-        message = client.messages.create(
-            model=model,
-            max_tokens=32000,
-            system=_SYSTEM_PROMPT_COMPACT,
-            messages=compact_messages,
-        )
+        message = _call_claude(_SYSTEM_PROMPT_COMPACT, compact_messages, label="[2차]")
         stop_reason = message.stop_reason
         retry_used = True
         if stop_reason == "max_tokens":
@@ -501,12 +506,7 @@ def run_review(
                 _truncate(proposal_ppt_text, 15000),
                 today,
             )
-            message = client.messages.create(
-                model=model,
-                max_tokens=32000,
-                system=_SYSTEM_PROMPT_COMPACT,
-                messages=ultra_messages,
-            )
+            message = _call_claude(_SYSTEM_PROMPT_COMPACT, ultra_messages, label="[3차]")
             stop_reason = message.stop_reason
         logger.info(f"[review] 재시도 완료 (stop={stop_reason}, retry_used={retry_used})")
 
