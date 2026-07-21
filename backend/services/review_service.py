@@ -219,7 +219,7 @@ def _extract_text_from_html(data: bytes) -> str:
         return re.sub(r"\s+", "\n", text).strip()
 
 
-def _truncate(text: str, max_chars: int = 40000) -> str:
+def _truncate(text: str, max_chars: int = 500000) -> str:
     """토큰 초과 방지용 텍스트 절삭.
     PPT 텍스트([슬라이드 N] 마커 포함)는 슬라이드 단위로 연속 블록을 유지하면서
     앞부분(60%) + 뒷부분(40%)을 보존한다.
@@ -462,22 +462,22 @@ verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
 ---
 
 [감리사업 RFP]
-{_truncate(audit_rfp, 50000)}
+{_truncate(audit_rfp, 200000)}
 
 ---
 
 [대상사업 RFP]
-{_truncate(target_rfp, 50000)}
+{_truncate(target_rfp, 200000)}
 
 ---
 
 [포털 제안작업표 HTML]
-{_truncate(portal_html, 40000)}
+{_truncate(portal_html, 100000)}
 
 ---
 
 [정성제안서 PPT]
-{_truncate(proposal_ppt, 150000)}
+{_truncate(proposal_ppt, 500000)}
 """
     return [
         {"role": "user",      "content": user_content},
@@ -507,16 +507,16 @@ def _build_messages_compact(
 범위 밖 항목(출력 금지): 예산·기성금·과업범위 커버리지·자격요건 세부검토
 
 [감리사업 RFP]
-{_truncate(audit_rfp, 30000)}
+{_truncate(audit_rfp, 100000)}
 
 [대상사업 RFP]
-{_truncate(target_rfp, 30000)}
+{_truncate(target_rfp, 100000)}
 
 [포털 제안작업표 HTML]
-{_truncate(portal_html, 25000)}
+{_truncate(portal_html, 50000)}
 
 [정성제안서 PPT]
-{_truncate(proposal_ppt, 80000)}
+{_truncate(proposal_ppt, 300000)}
 """
     return [
         {"role": "user",      "content": user_content},
