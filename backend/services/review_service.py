@@ -221,8 +221,9 @@ def _extract_text_from_html(data: bytes) -> str:
 
 def _truncate(text: str, max_chars: int = 40000) -> str:
     """토큰 초과 방지용 텍스트 절삭.
-    PPT 텍스트([슬라이드 N] 마커 포함)는 슬라이드 단위로 균등 샘플링해서
-    전체 흐름을 놓치지 않게 한다. 슬라이드 마커 없는 문서는 앞/뒤 방식 유지."""
+    PPT 텍스트([슬라이드 N] 마커 포함)는 슬라이드 단위로 연속 블록을 유지하면서
+    앞부분(60%) + 뒷부분(40%)을 보존한다.
+    슬라이드 마커 없는 문서는 앞/뒤 방식 유지."""
     if len(text) <= max_chars:
         return text
 
@@ -233,19 +234,42 @@ def _truncate(text: str, max_chars: int = 40000) -> str:
         half = max_chars // 2
         return text[:half] + f"\n\n... [중간 생략] ...\n\n" + text[-half:]
 
-    # 전체 글자 수를 max_chars에 맞추기 위해 슬라이드를 균등 간격으로 선택
+    total_slides = len(parts)
     total_len = sum(len(p) for p in parts)
     if total_len <= max_chars:
         return text
-    keep_ratio = max_chars / total_len
-    step = max(1, round(1 / keep_ratio))
-    kept = parts[::step]
-    result = "".join(kept)
-    return (
-        result
-        + f"\n\n[※ 전체 {len(parts)}개 슬라이드 중 {len(kept)}개만 샘플링됨. "
-        + "세부 확인이 필요하면 checkNeeded에 '전체 슬라이드 미확인' 명시할 것]"
-    )
+
+    # 앞 60% + 뒤 40% 블록 보존 (연속성 유지, 일정·인력·오타는 후반에 집중)
+    front_budget = int(max_chars * 0.60)
+    back_budget  = int(max_chars * 0.40)
+
+    front_parts, front_len = [], 0
+    for p in parts:
+        if front_len + len(p) > front_budget:
+            break
+        front_parts.append(p)
+        front_len += len(p)
+
+    back_parts, back_len = [], 0
+    for p in reversed(parts):
+        if back_len + len(p) > back_budget:
+            break
+        back_parts.insert(0, p)
+        back_len += len(p)
+
+    # 겹치는 슬라이드 제거 (front 마지막 슬라이드 인덱스 기준)
+    if front_parts and back_parts:
+        last_front_idx = parts.index(front_parts[-1])
+        back_parts = [p for p in back_parts if parts.index(p) > last_front_idx]
+
+    kept_slides = len(front_parts) + len(back_parts)
+    omitted = total_slides - kept_slides
+
+    result = "".join(front_parts)
+    if omitted > 0:
+        result += f"\n\n[※ 슬라이드 {len(front_parts)+1}~{total_slides - len(back_parts)} ({omitted}개) 생략 — 분량 초과]\n\n"
+    result += "".join(back_parts)
+    return result
 
 
 # ── 경량 재시도 프롬프트 (max_tokens 잘림 시 핵심 필드만 요청) ───────────────
@@ -438,22 +462,22 @@ verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
 ---
 
 [감리사업 RFP]
-{_truncate(audit_rfp, 30000)}
+{_truncate(audit_rfp, 50000)}
 
 ---
 
 [대상사업 RFP]
-{_truncate(target_rfp, 30000)}
+{_truncate(target_rfp, 50000)}
 
 ---
 
 [포털 제안작업표 HTML]
-{_truncate(portal_html, 25000)}
+{_truncate(portal_html, 40000)}
 
 ---
 
 [정성제안서 PPT]
-{_truncate(proposal_ppt, 50000)}
+{_truncate(proposal_ppt, 150000)}
 """
     return [
         {"role": "user",      "content": user_content},
@@ -483,16 +507,16 @@ def _build_messages_compact(
 범위 밖 항목(출력 금지): 예산·기성금·과업범위 커버리지·자격요건 세부검토
 
 [감리사업 RFP]
-{_truncate(audit_rfp, 15000)}
+{_truncate(audit_rfp, 30000)}
 
 [대상사업 RFP]
-{_truncate(target_rfp, 15000)}
+{_truncate(target_rfp, 30000)}
 
 [포털 제안작업표 HTML]
-{_truncate(portal_html, 12000)}
+{_truncate(portal_html, 25000)}
 
 [정성제안서 PPT]
-{_truncate(proposal_ppt, 25000)}
+{_truncate(proposal_ppt, 80000)}
 """
     return [
         {"role": "user",      "content": user_content},
