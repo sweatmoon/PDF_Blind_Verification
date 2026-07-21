@@ -994,10 +994,10 @@
         <table class="w-full text-xs">
           <thead><tr class="bg-slate-50 text-slate-500">
             <th class="text-left px-3 py-2 font-medium">단계</th>
-            <th class="text-left px-3 py-2 font-medium">HTML 일정</th>
+            <th class="text-left px-3 py-2 font-medium">HTML 기준 일정</th>
             <th class="text-left px-3 py-2 font-medium">PPT 일정</th>
-            <th class="text-left px-3 py-2 font-medium">HTML MD</th>
-            <th class="text-left px-3 py-2 font-medium">PPT MD</th>
+            <th class="text-right px-3 py-2 font-medium">HTML 공수</th>
+            <th class="text-right px-3 py-2 font-medium">PPT 공수</th>
             <th class="text-center px-3 py-2 font-medium">판정</th>
           </tr></thead>
           <tbody id="rv-schedule-body"></tbody>
@@ -4962,19 +4962,51 @@ function rvRenderResult(r) {
   const schNote = document.getElementById('rv-schedule-note');
   if (schBody && r.schedule && r.schedule.length) {
     schCard.classList.remove('hidden');
-    schBody.innerHTML = r.schedule.map(row => {
+    // 데이터 행 렌더링
+    const dataRows = r.schedule.map(row => {
       const verdict = (row[5] || 'ok').toLowerCase();
-      const cls = verdict==='ok' ? 'rv-ok' : verdict.includes('crit') ? 'rv-crit-cell' : verdict.includes('major') ? 'rv-major-cell' : 'rv-check-cell';
-      const label = { ok:'✓', major:'중대', check:'확인', crit:'치명' }[verdict] || verdict;
+      const isCrit  = verdict.includes('crit');
+      const isMajor = verdict.includes('major');
+      const isCheck = verdict.includes('check');
+      const badgeCls = isCrit  ? 'bg-red-100 text-red-700 border border-red-300'
+                     : isMajor ? 'bg-orange-100 text-orange-700 border border-orange-300'
+                     : isCheck ? 'bg-yellow-100 text-yellow-700 border border-yellow-300'
+                     :           'bg-green-100 text-green-700 border border-green-300';
+      const label = isCrit ? '치명' : isMajor ? '중대' : isCheck ? '확인' : '일치';
+      const htmlMd = row[3] || '';
+      const pptMd  = row[4] || '';
+      const mismatch = htmlMd && pptMd && String(htmlMd).replace(/MD$/i,'').trim() !== String(pptMd).replace(/MD$/i,'').trim();
       return `<tr class="border-t border-slate-100 hover:bg-slate-50 text-xs">
         <td class="px-3 py-2 font-medium text-slate-700">${_esc(row[0]||'')}</td>
         <td class="px-3 py-2 text-slate-500">${_esc(row[1]||'')}</td>
         <td class="px-3 py-2 text-slate-700">${_esc(row[2]||'')}</td>
-        <td class="px-3 py-2 text-slate-500">${_esc(row[3]||'')}</td>
-        <td class="px-3 py-2 text-slate-700">${_esc(row[4]||'')}</td>
-        <td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${label}</span></td>
+        <td class="px-3 py-2 text-right ${mismatch?'text-red-600 font-semibold':'text-slate-500'}">${_esc(htmlMd)}</td>
+        <td class="px-3 py-2 text-right ${mismatch?'text-red-600 font-semibold':'text-slate-700'}">${_esc(pptMd)}</td>
+        <td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ${badgeCls}">${label}</span></td>
       </tr>`;
     }).join('');
+    // 합계 행: HTML MD, PPT MD 숫자 합산
+    const mdNums = r.schedule.reduce((acc, row) => {
+      const h = parseFloat(String(row[3]||'').replace(/[^0-9.]/g,''));
+      const p = parseFloat(String(row[4]||'').replace(/[^0-9.]/g,''));
+      if (!isNaN(h)) acc.html += h;
+      if (!isNaN(p)) acc.ppt  += p;
+      return acc;
+    }, {html:0, ppt:0});
+    const totalMatch = mdNums.html === mdNums.ppt;
+    const totalBadge = totalMatch
+      ? 'bg-green-100 text-green-700 border border-green-300'
+      : 'bg-red-100 text-red-700 border border-red-300';
+    const totalRow = (mdNums.html > 0 || mdNums.ppt > 0) ? `
+      <tr class="border-t-2 border-slate-300 bg-slate-50 font-semibold text-xs">
+        <td class="px-3 py-2 text-slate-700">합계</td>
+        <td class="px-3 py-2"></td>
+        <td class="px-3 py-2"></td>
+        <td class="px-3 py-2 text-right text-slate-700">${mdNums.html}</td>
+        <td class="px-3 py-2 text-right text-slate-700">${mdNums.ppt}</td>
+        <td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ${totalBadge}">${totalMatch?'일치':'불일치'}</span></td>
+      </tr>` : '';
+    schBody.innerHTML = dataRows + totalRow;
     if (schNote) schNote.textContent = r.scheduleNote || '';
   }
 

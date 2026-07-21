@@ -248,7 +248,7 @@ _SYSTEM_PROMPT = """\
   "major":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "minor":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "checkNeeded": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
-  "schedule": [["단계명","HTML일정","PPT일정","HTML MD","PPT MD","ok|major|check|crit"], ...],
+  "schedule": [["단계명","HTML기준일정","PPT일정","HTML공수(MD)","PPT공수(MD)","ok|major|check|crit"], ...],
   "scheduleNote": "string",
   "personnel": [["구분","HTML기준인력","PPT표기인력","ok|major|check|crit"], ...],
   "irrelevant": {"summary":"string","items":[{"text":"string","slide":"string","sourceGuess":"string","severity":"high|low"}]},
