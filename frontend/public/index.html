@@ -4849,22 +4849,45 @@ function rvRenderResult(r) {
       </div>`).join('');
   }
 
-  // 총평
+  // 총평 (슬라이드별 수정 권고사항)
   const verdictCard = document.getElementById('rv-verdict-card');
   if (verdictCard && r.verdict) {
-    // \n 기준으로 문단 분리, 빈 줄은 간격으로
-    const verdictHtml = _safeHtml(r.verdict)
+    const lines = _safeHtml(r.verdict)
       .split(/\n|\\n/)
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => `<p class="mb-2 last:mb-0">${line}</p>`)
-      .join('');
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    // 마지막 줄이 "총 N건 …" 요약인지 감지
+    const lastLine = lines[lines.length - 1] || '';
+    const isSummaryLine = /^총\s*\d+건/.test(lastLine);
+    const bodyLines  = isSummaryLine ? lines.slice(0, -1) : lines;
+    const summaryLine = isSummaryLine ? lastLine : '';
+
+    // 심각도 아이콘 → 배경색 클래스 매핑
+    function _verdictRowClass(line) {
+      if (line.includes('❌')) return 'bg-red-50 border-l-4 border-red-400';
+      if (line.includes('⚠️')) return 'bg-amber-50 border-l-4 border-amber-400';
+      if (line.includes('🔹')) return 'bg-blue-50 border-l-4 border-blue-300';
+      if (line.includes('❓')) return 'bg-slate-50 border-l-4 border-slate-300';
+      return 'bg-white border-l-4 border-slate-200';
+    }
+
+    const rowsHtml = bodyLines.map(line =>
+      `<div class="px-3 py-2 rounded text-sm leading-relaxed ${_verdictRowClass(line)}">${line}</div>`
+    ).join('');
+
+    const summaryHtml = summaryLine
+      ? `<div class="mt-3 pt-3 border-t border-slate-100 text-xs font-semibold text-slate-500">${summaryLine}</div>`
+      : '';
+
     verdictCard.innerHTML = `
       <div class="flex items-center gap-2 mb-3">
-        <i class="fas fa-comment-dots text-violet-500"></i>
-        <span class="font-semibold text-slate-700">총평</span>
+        <i class="fas fa-list-check text-violet-500"></i>
+        <span class="font-semibold text-slate-700">슬라이드별 수정 권고사항</span>
+        ${bodyLines.length ? `<span class="ml-auto text-xs text-slate-400">${bodyLines.length}개 항목</span>` : ''}
       </div>
-      <div class="text-sm text-slate-700 leading-relaxed space-y-1">${verdictHtml}</div>`;
+      <div class="space-y-1.5">${rowsHtml || '<p class="text-sm text-slate-500">수정 권고사항 없음</p>'}</div>
+      ${summaryHtml}`;
   }
 
   // 기준 항목 (baseline)
