@@ -4852,12 +4852,19 @@ function rvRenderResult(r) {
   // 총평
   const verdictCard = document.getElementById('rv-verdict-card');
   if (verdictCard && r.verdict) {
+    // \n 기준으로 문단 분리, 빈 줄은 간격으로
+    const verdictHtml = _safeHtml(r.verdict)
+      .split(/\\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(line => `<p class="mb-2 last:mb-0">${line}</p>`)
+      .join('');
     verdictCard.innerHTML = `
       <div class="flex items-center gap-2 mb-3">
         <i class="fas fa-comment-dots text-violet-500"></i>
         <span class="font-semibold text-slate-700">총평</span>
       </div>
-      <div class="text-sm text-slate-700 leading-relaxed">${r.verdict}</div>`;
+      <div class="text-sm text-slate-700 leading-relaxed space-y-1">${verdictHtml}</div>`;
   }
 
   // 기준 항목 (baseline)
@@ -5401,11 +5408,17 @@ function rdbRenderTable(items) {
     html += '<td class="px-4 py-3 text-center"><button onclick="rdbToggleDetail(' + idx + ')" class="text-xs text-indigo-500 hover:text-indigo-700 border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-50 transition"><i class="fas fa-chevron-down"></i></button></td>';
     html += '</tr>';
     // 상세 row — 총평 전체 텍스트를 여기서만 표시
-    var summary = _safeHtml(verdict || result.summary || result.overall_summary || result.verdict_reason || '총평 없음');
+    var rawVerdict = verdict || result.summary || result.overall_summary || result.verdict_reason || '총평 없음';
+    var summaryHtml = _safeHtml(rawVerdict)
+      .split(/\\n/)
+      .map(function(l){ return l.trim(); })
+      .filter(function(l){ return l.length > 0; })
+      .map(function(l){ return '<p class="mb-1.5 last:mb-0">' + l + '</p>'; })
+      .join('');
     html += '<tr id="rdb-detail-' + idx + '" class="rdb-detail-row bg-indigo-50/40">';
     html += '<td colspan="8" class="px-6 py-4 text-xs text-slate-600 leading-relaxed">';
-    html += '<p class="font-semibold text-slate-700 mb-1"><i class="fas fa-circle-info text-indigo-400 mr-1"></i>총평</p>';
-    html += '<p>' + summary + '</p>';
+    html += '<p class="font-semibold text-slate-700 mb-2"><i class="fas fa-circle-info text-indigo-400 mr-1"></i>총평</p>';
+    html += '<div class="space-y-0.5">' + summaryHtml + '</div>';
     html += '</td></tr>';
   });
 
