@@ -808,12 +808,21 @@
 
   <!-- ═══════════════ 제안서 검수 업로드 ═══════════════ -->
   <div id="page-review-upload" class="hidden fade-in">
-    <div class="bg-violet-50 border border-violet-200 rounded-xl p-4 mb-5 flex gap-3">
-      <i class="fas fa-file-magnifying-glass text-violet-500 mt-0.5 flex-shrink-0"></i>
-      <div class="text-sm text-violet-800">
-        <strong>제안서 검수</strong> — 4개 파일을 업로드하면 Claude Sonnet이 RFP·포털 작업표와 대조하여
-        오류·일정·인력·오타를 자동으로 검수합니다.
+    <!-- 검수 탭 헤더 -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="bg-violet-50 border border-violet-200 rounded-xl p-4 flex gap-3 flex-1 mr-3">
+        <i class="fas fa-file-magnifying-glass text-violet-500 mt-0.5 flex-shrink-0"></i>
+        <div class="text-sm text-violet-800">
+          <strong>제안서 검수</strong> — 4개 파일을 업로드하면 Claude Sonnet이 RFP·포털 작업표와 대조하여
+          오류·일정·인력·오타를 자동으로 검수합니다.
+        </div>
       </div>
+      <button onclick="showPage('review-history')"
+        class="flex-shrink-0 text-xs text-slate-600 hover:text-violet-700 border border-slate-200 hover:border-violet-300 px-3 py-2 rounded-lg hover:bg-violet-50 transition flex items-center gap-1.5">
+        <i class="fas fa-clock-rotate-left"></i>
+        <span>검수 이력</span>
+        <span id="rvHistoryBadge" class="hidden ml-0.5 bg-violet-600 text-white rounded-full text-xs px-1.5 py-0.5 font-bold leading-none"></span>
+      </button>
     </div>
 
     <div class="max-w-3xl mx-auto space-y-4">
@@ -910,9 +919,15 @@
         <h2 class="font-bold text-slate-800 text-lg" id="rv-res-title">검수 결과</h2>
         <p class="text-xs text-slate-400" id="rv-res-sub"></p>
       </div>
-      <button onclick="rvReset()" class="text-xs text-slate-500 hover:text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition">
-        <i class="fas fa-arrow-left mr-1"></i>다시 검수
-      </button>
+      <div class="flex items-center gap-2">
+        <button onclick="showPage('review-history')"
+          class="text-xs text-slate-500 hover:text-violet-700 border border-slate-200 hover:border-violet-300 px-3 py-1.5 rounded-lg hover:bg-violet-50 transition">
+          <i class="fas fa-clock-rotate-left mr-1"></i>검수 이력
+        </button>
+        <button onclick="rvReset()" class="text-xs text-slate-500 hover:text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition">
+          <i class="fas fa-arrow-left mr-1"></i>다시 검수
+        </button>
+      </div>
     </div>
 
     <!-- 요약 카운트 -->
@@ -939,8 +954,118 @@
       </div>
     </div>
 
+    <!-- 사업 개요 정합성 (overview) — 항상 표시 -->
+    <div id="rv-overview-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-building text-indigo-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">사업 개요 정합성</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-4 py-2 font-medium">항목</th>
+            <th class="text-left px-4 py-2 font-medium">RFP 기준</th>
+            <th class="text-left px-4 py-2 font-medium">포털 기준</th>
+            <th class="text-left px-4 py-2 font-medium">PPT 표기</th>
+            <th class="text-center px-4 py-2 font-medium">판정</th>
+          </tr></thead>
+          <tbody id="rv-overview-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 제안 범위 커버리지 (scopeCoverage) -->
+    <div id="rv-scope-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-check-double text-teal-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">제안 범위 커버리지</span>
+        <span id="rv-scope-missing-badge" class="hidden text-xs px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-4 py-2 font-medium">RFP 요구 항목</th>
+            <th class="text-center px-3 py-2 font-medium">PPT 반영</th>
+            <th class="text-left px-3 py-2 font-medium">슬라이드</th>
+            <th class="text-left px-4 py-2 font-medium">비고</th>
+          </tr></thead>
+          <tbody id="rv-scope-body"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- 이슈 섹션들 -->
     <div id="rv-issues"></div>
+
+    <!-- 기술 자격 요건 (qualificationCheck) -->
+    <div id="rv-qual-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-id-badge text-purple-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">기술 자격 요건 대조</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-3 py-2 font-medium">인원</th>
+            <th class="text-left px-3 py-2 font-medium">RFP 요건</th>
+            <th class="text-left px-3 py-2 font-medium">포털 실제값</th>
+            <th class="text-center px-3 py-2 font-medium">충족</th>
+            <th class="text-left px-3 py-2 font-medium">비고</th>
+          </tr></thead>
+          <tbody id="rv-qual-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 가격·비용 대조 (costCheck) -->
+    <div id="rv-cost-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-won-sign text-emerald-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">가격·비용 대조</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-4 py-2 font-medium">항목</th>
+            <th class="text-left px-4 py-2 font-medium">RFP/포털 기준</th>
+            <th class="text-left px-4 py-2 font-medium">PPT 표기</th>
+            <th class="text-center px-4 py-2 font-medium">판정</th>
+          </tr></thead>
+          <tbody id="rv-cost-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 납기·납품물 대조 (deliverableCheck) -->
+    <div id="rv-deliv-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-box-archive text-amber-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">납기·납품물 대조</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-4 py-2 font-medium">산출물</th>
+            <th class="text-left px-4 py-2 font-medium">RFP 제출기한</th>
+            <th class="text-left px-4 py-2 font-medium">PPT 기한</th>
+            <th class="text-center px-4 py-2 font-medium">판정</th>
+          </tr></thead>
+          <tbody id="rv-deliv-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 잔존 문구 (irrelevant) — 항상 표시 -->
+    <div id="rv-irr-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-triangle-exclamation text-yellow-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">본사업 무관 내용 검출</span>
+        <span id="rv-irr-badge" class="text-xs px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-500">—</span>
+      </div>
+      <div class="p-5" id="rv-irr-body">
+        <p class="text-xs text-slate-400">분석 결과 로딩 중…</p>
+      </div>
+    </div>
 
     <!-- 일정 대조 -->
     <div id="rv-schedule-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
@@ -1016,6 +1141,64 @@
     </div>
   </div>
 
+  <!-- ═══════════════ 제안서 검수 이력 ═══════════════ -->
+  <div id="page-review-history" class="hidden fade-in">
+    <!-- 헤더 -->
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="font-bold text-slate-800 text-lg flex items-center gap-2">
+          <i class="fas fa-clock-rotate-left text-violet-500"></i>
+          검수 이력
+        </h2>
+        <p class="text-xs text-slate-400 mt-0.5">완료된 제안서 검수 결과 목록</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="rvHistoryClearAll()"
+          id="rvHistoryClearBtn"
+          class="hidden text-xs text-slate-400 hover:text-red-500 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-red-50 transition">
+          <i class="fas fa-trash-can mr-1"></i>전체 삭제
+        </button>
+        <button onclick="showPage('review-upload')"
+          class="text-xs text-slate-500 hover:text-violet-700 border border-slate-200 hover:border-violet-300 px-3 py-1.5 rounded-lg hover:bg-violet-50 transition">
+          <i class="fas fa-plus mr-1"></i>새 검수
+        </button>
+      </div>
+    </div>
+
+    <!-- 빈 상태 -->
+    <div id="rvHistoryEmpty" class="hidden text-center py-20">
+      <i class="fas fa-folder-open text-4xl text-slate-200 mb-4 block"></i>
+      <p class="text-slate-400 text-sm">아직 완료된 검수 이력이 없습니다.</p>
+      <button onclick="showPage('review-upload')"
+        class="mt-4 text-sm text-violet-600 hover:text-violet-800 border border-violet-200 px-4 py-2 rounded-xl hover:bg-violet-50 transition">
+        <i class="fas fa-upload mr-1"></i>검수 시작하기
+      </button>
+    </div>
+
+    <!-- 이력 카드 목록 -->
+    <div id="rvHistoryList" class="space-y-3"></div>
+
+    <!-- 이력 상세 (선택 시 표시) -->
+    <div id="rvHistoryDetail" class="hidden mt-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h3 class="font-bold text-slate-800 text-base" id="rvHdTitle">—</h3>
+          <p class="text-xs text-slate-400" id="rvHdSub"></p>
+        </div>
+        <button onclick="rvHistoryCloseDetail()"
+          class="text-xs text-slate-400 hover:text-slate-600 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition">
+          <i class="fas fa-chevron-up mr-1"></i>목록으로
+        </button>
+      </div>
+      <!-- 요약 카운트 -->
+      <div class="grid grid-cols-4 gap-3 mb-5" id="rvHdCounts"></div>
+      <!-- 총평 -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-4 text-sm text-slate-700 leading-relaxed" id="rvHdVerdict"></div>
+      <!-- 결과 전체 재렌더링 컨테이너 -->
+      <div id="rvHdBody"></div>
+    </div>
+  </div>
+
 </main>
 
 <!-- 토스트 알림 -->
@@ -1078,7 +1261,7 @@ let state = {
 // ─────────────────────────────────────────────────────────────
 function showPage(page) {
   ['upload','processing','result','admin','dashboard',
-   'review-upload','review-processing','review-result'].forEach(p => {
+   'review-upload','review-processing','review-result','review-history'].forEach(p => {
     document.getElementById(`page-${p}`).classList.add('hidden');
   });
   document.getElementById(`page-${page}`).classList.remove('hidden');
@@ -1103,6 +1286,7 @@ function showPage(page) {
     renderRecentJobs();
   }
   if (page === 'dashboard') { dbStartPolling(); renderDashboard(); }
+  if (page === 'review-history') { rvHistoryRender(); }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -3137,7 +3321,7 @@ async function dbFetchServerJobs() {
     const saved = getSavedReports();
     const savedIds = new Set(saved.map(r => r.jobId));
     const toFetch = jobs
-      .filter(j => j.status === 'completed' && !savedIds.has(j.job_id))
+      .filter(j => j.status === 'completed' && !savedIds.has(j.job_id) && j.type !== 'review')
       .slice(0, 3);  // 한 번에 최대 3개만 (API 과부하 방지)
     for (const job of toFetch) {
       // localStorage가 여유 있을 때만 자동 저장
@@ -3348,13 +3532,15 @@ function renderDashboard() {
   const savedList = getSavedReports();
   const savedIds  = new Set(savedList.map(r => r.jobId));
 
-  // 서버 진행 중 job (pending/processing) - localStorage에 없는 것만
+  // 서버 진행 중 job (pending/processing) - localStorage에 없는 것만 + review job 제외
   const serverRunning = _dbServerJobs.filter(j =>
-    (j.status === 'pending' || j.status === 'processing') && !savedIds.has(j.job_id)
+    (j.status === 'pending' || j.status === 'processing') &&
+    !savedIds.has(j.job_id) &&
+    j.type !== 'review'
   );
 
-  // 서버 실패 job - 대시보드에 표시
-  const serverFailed = _dbServerJobs.filter(j => j.status === 'failed');
+  // 서버 실패 job - 대시보드에 표시 (review job 제외)
+  const serverFailed = _dbServerJobs.filter(j => j.status === 'failed' && j.type !== 'review');
 
   // 메모리 recentJobs (현재 세션에서 시작한 것, 서버 job 목록에 없는 경우 대비)
   const memRunning = state.recentJobs.filter(j =>
@@ -3468,7 +3654,7 @@ function renderDashboard() {
   // 서버 completed job 중 localStorage에 없는 것도 추가
   // (보조 표시용 - report 없이 메타만 표시)
   const serverDone = _dbServerJobs
-    .filter(j => j.status === 'completed' && !savedIds.has(j.job_id))
+    .filter(j => j.status === 'completed' && !savedIds.has(j.job_id) && j.type !== 'review')
     .map(j => ({
       jobId: j.job_id,
       filename: j.filename,
@@ -4420,9 +4606,10 @@ function switchMainTab(tab) {
     tabReview.classList.remove('text-slate-600','hover:bg-slate-50');
     tabBlind.classList.remove('tab-main-active');
     tabBlind.classList.add('text-slate-600','hover:bg-slate-50');
+    // 이력 배지 갱신
+    rvHistoryUpdateBadge();
     // 검수 중인 job 있으면 결과로, 없으면 업로드로
     if (rvJobId) {
-      const job = null; // 서버 체크 없이 처리중이면 processing으로
       showPage(rvPollTimer ? 'review-processing' : 'review-result');
     } else {
       showPage('review-upload');
@@ -4532,6 +4719,8 @@ function rvPollStatus() {
       if (data.status === 'completed') {
         clearInterval(rvPollTimer); rvPollTimer = null;
         rvSetProcMsg('검수 완료!', 100);
+        // 이력 저장 (ppt 파일명 포함)
+        if (data.report) rvHistorySave(rvJobId, rvFiles.ppt ? rvFiles.ppt.name : null, data.report);
         setTimeout(() => { rvRenderResult(data.report); showPage('review-result'); }, 400);
       } else if (data.status === 'failed') {
         clearInterval(rvPollTimer); rvPollTimer = null;
@@ -4607,7 +4796,52 @@ function rvRenderResult(r) {
       <div class="text-sm text-slate-700 leading-relaxed">${r.verdict}</div>`;
   }
 
-  // 기준 항목
+  // ── overview (사업 개요 정합성) ────────────────────────────────
+  const ovCard = document.getElementById('rv-overview-card');
+  const ovBody = document.getElementById('rv-overview-body');
+  if (ovBody && r.overview && r.overview.length) {
+    ovCard.classList.remove('hidden');
+    ovBody.innerHTML = r.overview.map(row => {
+      const v = (row[4]||'ok').toLowerCase();
+      const cls = v==='ok'?'rv-ok':v.includes('crit')?'rv-crit-cell':v.includes('major')?'rv-major-cell':'rv-check-cell';
+      const lbl = {ok:'✓',major:'중대',check:'확인',crit:'치명'}[v]||v;
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-4 py-2 font-semibold text-slate-700">${_esc(row[0]||'')}</td>
+        <td class="px-4 py-2 text-slate-500">${_esc(row[1]||'')}</td>
+        <td class="px-4 py-2 text-slate-500">${_esc(row[2]||'')}</td>
+        <td class="px-4 py-2 text-slate-700 font-medium">${_esc(row[3]||'')}</td>
+        <td class="px-4 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${lbl}</span></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── scopeCoverage (제안 범위 커버리지) ────────────────────────
+  const scopeCard = document.getElementById('rv-scope-card');
+  const scopeBody = document.getElementById('rv-scope-body');
+  const scopeBadge = document.getElementById('rv-scope-missing-badge');
+  if (scopeBody && r.scopeCoverage && r.scopeCoverage.length) {
+    scopeCard.classList.remove('hidden');
+    const missing = r.scopeCoverage.filter(s => !s.coveredInPPT).length;
+    if (missing > 0 && scopeBadge) {
+      scopeBadge.textContent = `미반영 ${missing}건`;
+      scopeBadge.classList.remove('hidden');
+    }
+    scopeBody.innerHTML = r.scopeCoverage.map(s => {
+      const covered = s.coveredInPPT !== false;
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-4 py-2 text-slate-700">${_esc(s.requirement||'')}</td>
+        <td class="px-3 py-2 text-center">
+          ${covered
+            ? '<span class="text-green-600 font-bold text-base">✓</span>'
+            : '<span class="text-red-600 font-bold text-base">✗</span>'}
+        </td>
+        <td class="px-3 py-2 text-slate-500">${_esc(s.ppSlide||'-')}</td>
+        <td class="px-4 py-2 text-slate-400">${_esc(s.note||'')}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // 기준 항목 (baseline)
   const baseCard = document.getElementById('rv-baseline-card');
   const baseBody = document.getElementById('rv-baseline-body');
   if (baseBody && r.baseline && r.baseline.length) {
@@ -4740,6 +4974,366 @@ function rvRenderResult(r) {
       prioBody.innerHTML = html;
     }
   }
+
+  // ── qualificationCheck (기술 자격 요건 대조) ─────────────────
+  const qualCard = document.getElementById('rv-qual-card');
+  const qualBody = document.getElementById('rv-qual-body');
+  if (qualBody && r.qualificationCheck && r.qualificationCheck.length) {
+    qualCard.classList.remove('hidden');
+    qualBody.innerHTML = r.qualificationCheck.map(row => {
+      // row: [인원, RFP요건, 포털실제값, 충족여부, 비고]  또는 객체형
+      let person, rfp, portal, met, note;
+      if (Array.isArray(row)) {
+        [person, rfp, portal, met, note] = row;
+      } else {
+        person = row.person || row[0] || '';
+        rfp    = row.rfp    || row[1] || '';
+        portal = row.portal || row[2] || '';
+        met    = row.met    !== undefined ? row.met : (row[3] !== undefined ? row[3] : null);
+        note   = row.note   || row[4] || '';
+      }
+      const ok = met === true || (typeof met === 'string' && met.toLowerCase() === 'ok');
+      const metCls = ok ? 'text-green-600 font-bold' : 'text-red-600 font-bold';
+      const metLbl = ok ? '✓' : '✗';
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-3 py-2 font-medium text-slate-700">${_esc(String(person||''))}</td>
+        <td class="px-3 py-2 text-slate-500">${_esc(String(rfp||''))}</td>
+        <td class="px-3 py-2 text-slate-700">${_esc(String(portal||''))}</td>
+        <td class="px-3 py-2 text-center text-base ${metCls}">${metLbl}</td>
+        <td class="px-3 py-2 text-slate-400">${_esc(String(note||''))}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── costCheck (가격·비용 대조) ───────────────────────────────
+  const costCard = document.getElementById('rv-cost-card');
+  const costBody = document.getElementById('rv-cost-body');
+  if (costBody && r.costCheck && r.costCheck.length) {
+    costCard.classList.remove('hidden');
+    costBody.innerHTML = r.costCheck.map(row => {
+      let item, standard, ppt, verdict;
+      if (Array.isArray(row)) {
+        [item, standard, ppt, verdict] = row;
+      } else {
+        item     = row.item     || row[0] || '';
+        standard = row.standard || row[1] || '';
+        ppt      = row.ppt      || row[2] || '';
+        verdict  = row.verdict  || row[3] || 'ok';
+      }
+      const v = String(verdict||'ok').toLowerCase();
+      const cls = v==='ok'?'rv-ok': v.includes('crit')?'rv-crit-cell': v.includes('major')?'rv-major-cell':'rv-check-cell';
+      const lbl = {ok:'✓',major:'중대',check:'확인',crit:'치명'}[v]||v;
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-4 py-2 font-medium text-slate-700">${_esc(String(item||''))}</td>
+        <td class="px-4 py-2 text-slate-500">${_esc(String(standard||''))}</td>
+        <td class="px-4 py-2 text-slate-700">${_esc(String(ppt||''))}</td>
+        <td class="px-4 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${lbl}</span></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── deliverableCheck (납기·납품물 대조) ─────────────────────
+  const delivCard = document.getElementById('rv-deliv-card');
+  const delivBody = document.getElementById('rv-deliv-body');
+  if (delivBody && r.deliverableCheck && r.deliverableCheck.length) {
+    delivCard.classList.remove('hidden');
+    delivBody.innerHTML = r.deliverableCheck.map(row => {
+      let item, rfpDate, pptDate, verdict;
+      if (Array.isArray(row)) {
+        [item, rfpDate, pptDate, verdict] = row;
+      } else {
+        item    = row.item    || row[0] || '';
+        rfpDate = row.rfpDate || row[1] || '';
+        pptDate = row.pptDate || row[2] || '';
+        verdict = row.verdict || row[3] || 'ok';
+      }
+      const v = String(verdict||'ok').toLowerCase();
+      const cls = v==='ok'?'rv-ok': v.includes('crit')?'rv-crit-cell': v.includes('major')?'rv-major-cell':'rv-check-cell';
+      const lbl = {ok:'✓',major:'중대',check:'확인',crit:'치명'}[v]||v;
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-4 py-2 font-medium text-slate-700">${_esc(String(item||''))}</td>
+        <td class="px-4 py-2 text-slate-500">${_esc(String(rfpDate||''))}</td>
+        <td class="px-4 py-2 text-slate-700">${_esc(String(pptDate||''))}</td>
+        <td class="px-4 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${lbl}</span></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── irrelevant (잔존 문구 — 객체 구조) ──────────────────────
+  const irrCard = document.getElementById('rv-irr-card');
+  const irrBody = document.getElementById('rv-irr-body');
+  const irrBadge = document.getElementById('rv-irr-badge');
+  if (irrBody) {
+    const irr = r.irrelevant;
+    if (!irr || (typeof irr === 'object' && !irr.summary && !(irr.items && irr.items.length))) {
+      // 데이터 없음
+      irrBody.innerHTML = '<p class="text-xs text-slate-400">검출된 무관 내용 없음</p>';
+      if (irrBadge) { irrBadge.textContent = '없음'; irrBadge.className = 'text-xs px-2 py-0.5 rounded-full font-bold bg-green-100 text-green-700'; }
+    } else if (typeof irr === 'string') {
+      // 문자열 fallback
+      irrBody.innerHTML = `<p class="text-sm text-slate-700 leading-relaxed">${_esc(irr)}</p>`;
+      if (irrBadge) { irrBadge.textContent = irr ? '있음' : '없음'; irrBadge.className = irr ? 'text-xs px-2 py-0.5 rounded-full font-bold bg-yellow-100 text-yellow-700' : 'text-xs px-2 py-0.5 rounded-full font-bold bg-green-100 text-green-700'; }
+    } else {
+      // 객체 구조: { summary, items: [{slide, text, reason}] }
+      const items = irr.items || [];
+      if (irrBadge) {
+        if (items.length > 0) {
+          irrBadge.textContent = `${items.length}건`;
+          irrBadge.className = 'text-xs px-2 py-0.5 rounded-full font-bold bg-yellow-100 text-yellow-700';
+        } else {
+          irrBadge.textContent = '없음';
+          irrBadge.className = 'text-xs px-2 py-0.5 rounded-full font-bold bg-green-100 text-green-700';
+        }
+      }
+      let html = '';
+      if (irr.summary) {
+        html += `<p class="text-sm text-slate-700 leading-relaxed mb-3">${_esc(irr.summary)}</p>`;
+      }
+      if (items.length > 0) {
+        html += `<div class="space-y-2">` + items.map(it => `
+          <div class="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs font-bold text-yellow-700 bg-yellow-100 px-1.5 py-0.5 rounded">${_esc(String(it.slide||''))}</span>
+              <span class="text-xs text-slate-500 font-medium">${_esc(String(it.reason||''))}</span>
+            </div>
+            <p class="text-xs text-slate-600">${_esc(String(it.text||''))}</p>
+          </div>`).join('') + `</div>`;
+      } else if (!irr.summary) {
+        html = '<p class="text-xs text-slate-400">검출된 무관 내용 없음</p>';
+      }
+      irrBody.innerHTML = html;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 검수 이력 (review history) — localStorage + 서버 job 연동
+// ─────────────────────────────────────────────────────────────
+
+// 검수 job 완료 시 localStorage에 저장
+const RV_HISTORY_KEY = 'rv_history_v1';
+const RV_HISTORY_MAX = 20;
+
+function rvHistorySave(jobId, pptFilename, report) {
+  try {
+    const list = rvHistoryLoad();
+    // 중복 제거
+    const filtered = list.filter(e => e.jobId !== jobId);
+    filtered.unshift({
+      jobId,
+      filename: pptFilename || report.name || '—',
+      savedAt: Date.now(),
+      name: report.name || '',
+      org: report.org || '',
+      date: report.date || '',
+      counts: report.counts || {},
+      verdict: report.verdict || '',
+      report,
+    });
+    const trimmed = filtered.slice(0, RV_HISTORY_MAX);
+    localStorage.setItem(RV_HISTORY_KEY, JSON.stringify(trimmed));
+    rvHistoryUpdateBadge();
+  } catch(e) { /* localStorage 용량 초과 시 무시 */ }
+}
+
+function rvHistoryLoad() {
+  try {
+    return JSON.parse(localStorage.getItem(RV_HISTORY_KEY) || '[]');
+  } catch { return []; }
+}
+
+function rvHistoryUpdateBadge() {
+  const list = rvHistoryLoad();
+  // 서버 review job도 합산
+  const serverReview = _dbServerJobs.filter(j => j.type === 'review' && j.status === 'completed');
+  const savedIds = new Set(list.map(e => e.jobId));
+  const total = list.length + serverReview.filter(j => !savedIds.has(j.job_id)).length;
+  const badge = document.getElementById('rvHistoryBadge');
+  if (badge) {
+    badge.textContent = total;
+    badge.classList.toggle('hidden', total === 0);
+  }
+}
+
+function rvHistoryRender() {
+  const list = rvHistoryLoad();
+  // 서버 review job (completed, localStorage에 없는 것)
+  const savedIds = new Set(list.map(e => e.jobId));
+  const serverReview = _dbServerJobs
+    .filter(j => j.type === 'review' && j.status === 'completed' && !savedIds.has(j.job_id))
+    .map(j => ({
+      jobId: j.job_id,
+      filename: j.filename || '—',
+      savedAt: j.created_at ? new Date(j.created_at).getTime() : Date.now(),
+      _serverOnly: true,
+    }));
+
+  const all = [...list, ...serverReview]
+    .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+  const emptyEl   = document.getElementById('rvHistoryEmpty');
+  const listEl    = document.getElementById('rvHistoryList');
+  const clearBtn  = document.getElementById('rvHistoryClearBtn');
+  const detailEl  = document.getElementById('rvHistoryDetail');
+
+  if (detailEl) detailEl.classList.add('hidden');
+  if (clearBtn) clearBtn.classList.toggle('hidden', list.length === 0);
+
+  if (all.length === 0) {
+    if (emptyEl)  emptyEl.classList.remove('hidden');
+    if (listEl)   listEl.innerHTML = '';
+    return;
+  }
+  if (emptyEl) emptyEl.classList.add('hidden');
+
+  listEl.innerHTML = '';
+  all.forEach(entry => {
+    const cnt = entry.counts || {};
+    const hasCrit  = cnt.crit  > 0;
+    const hasMajor = cnt.major > 0;
+    const levelCls = hasCrit  ? 'border-l-4 border-l-red-400'   :
+                     hasMajor ? 'border-l-4 border-l-orange-400' :
+                                'border-l-4 border-l-green-400';
+    const levelLabel = hasCrit  ? `<span class="text-xs font-bold text-red-600">치명 ${cnt.crit}</span>` :
+                       hasMajor ? `<span class="text-xs font-bold text-orange-600">중대 ${cnt.major}</span>` :
+                                  `<span class="text-xs font-bold text-green-600">이상 없음</span>`;
+    const timeStr = entry.savedAt ? timeAgo(entry.savedAt) : '—';
+    const card = document.createElement('div');
+    card.className = `bg-white rounded-xl ${levelCls} border border-slate-200 shadow-sm p-4 cursor-pointer hover:shadow-md transition`;
+    card.onclick = () => rvHistorySelectJob(entry);
+    card.innerHTML = `
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <i class="fas fa-file-powerpoint text-violet-400 flex-shrink-0"></i>
+            <p class="text-sm font-semibold text-slate-800 truncate">${_esc(entry.filename)}</p>
+          </div>
+          ${entry.name ? `<p class="text-xs text-slate-500 mt-0.5 truncate">${_esc(entry.name)}</p>` : ''}
+          <div class="flex items-center gap-3 mt-2 flex-wrap">
+            ${!entry._serverOnly ? `
+              <span class="text-xs text-slate-400">${timeStr}</span>
+              ${levelLabel}
+              ${cnt.crit  ? `<span class="text-xs text-red-600">치명 ${cnt.crit}</span>`    : ''}
+              ${cnt.major ? `<span class="text-xs text-orange-600">중대 ${cnt.major}</span>` : ''}
+              ${cnt.minor ? `<span class="text-xs text-yellow-600">경미 ${cnt.minor}</span>` : ''}
+              ${cnt.check ? `<span class="text-xs text-blue-600">확인 ${cnt.check}</span>`   : ''}
+            ` : `<span class="text-xs text-slate-400">서버 저장 · ${timeStr}</span>`}
+          </div>
+          ${entry.verdict ? `<p class="text-xs text-slate-400 mt-1.5 line-clamp-1">${_esc(entry.verdict.substring(0,80))}</p>` : ''}
+        </div>
+        <div class="flex flex-col items-end gap-2 flex-shrink-0">
+          <button onclick="event.stopPropagation(); rvHistoryDelete('${entry.jobId}')"
+            class="text-slate-300 hover:text-red-500 transition text-xs">
+            <i class="fas fa-times"></i>
+          </button>
+          <span class="text-xs text-violet-600 hover:underline">결과 보기 →</span>
+        </div>
+      </div>`;
+    listEl.appendChild(card);
+  });
+
+  rvHistoryUpdateBadge();
+}
+
+async function rvHistorySelectJob(entry) {
+  const detailEl = document.getElementById('rvHistoryDetail');
+  if (!detailEl) return;
+
+  let report = entry.report || null;
+
+  // 서버 전용 항목은 서버에서 report 로드
+  if (!report && entry._serverOnly) {
+    try {
+      const res = await fetch(`/api/review/report/${entry.jobId}`);
+      if (res.ok) {
+        const data = await res.json();
+        report = data.report || data;
+        // localStorage에 저장
+        rvHistorySave(entry.jobId, entry.filename, report);
+      }
+    } catch(e) { /* 네트워크 오류 */ }
+  }
+
+  if (!report) {
+    showToast('리포트를 불러올 수 없습니다.', 'error');
+    return;
+  }
+
+  // 헤더 업데이트
+  const hdTitle = document.getElementById('rvHdTitle');
+  const hdSub   = document.getElementById('rvHdSub');
+  if (hdTitle) hdTitle.textContent = report.name || entry.filename || '검수 결과';
+  if (hdSub)   hdSub.textContent   = [report.org, report.date].filter(Boolean).join(' · ');
+
+  // 카운트 배지
+  const cnt = report.counts || {};
+  const hdCounts = document.getElementById('rvHdCounts');
+  if (hdCounts) {
+    const items = [
+      { key:'crit',  label:'치명',    icon:'fa-circle-exclamation',   cls:'rv-count-crit'  },
+      { key:'major', label:'중대',    icon:'fa-triangle-exclamation', cls:'rv-count-major' },
+      { key:'minor', label:'경미',    icon:'fa-circle-info',          cls:'rv-count-minor' },
+      { key:'check', label:'확인필요', icon:'fa-question-circle',      cls:'rv-count-check' },
+    ];
+    hdCounts.innerHTML = items.map(it => `
+      <div class="rounded-2xl border shadow-sm p-4 text-center ${it.cls}">
+        <i class="fas ${it.icon} text-2xl mb-1"></i>
+        <div class="text-3xl font-bold">${cnt[it.key] || 0}</div>
+        <div class="text-xs font-medium mt-0.5">${it.label}</div>
+      </div>`).join('');
+  }
+
+  // 총평
+  const hdVerdict = document.getElementById('rvHdVerdict');
+  if (hdVerdict) hdVerdict.textContent = report.verdict || '—';
+
+  // 결과 바디 — 임시 DOM에 rvRenderResult 실행 후 hdBody로 이동
+  const hdBody = document.getElementById('rvHdBody');
+  if (hdBody) {
+    // 동일 결과 카드를 재사용하기 위해 별도 clone 없이 요약 링크만 제공
+    hdBody.innerHTML = `
+      <div class="text-center py-6">
+        <button onclick="rvHistoryLoadFull('${entry.jobId}')"
+          class="bg-violet-600 text-white px-6 py-2.5 rounded-xl text-sm font-semibold hover:bg-violet-700 transition">
+          <i class="fas fa-expand-alt mr-2"></i>전체 결과 보기
+        </button>
+      </div>`;
+  }
+
+  detailEl.classList.remove('hidden');
+  detailEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// 이력에서 전체 결과 화면으로 이동 (review-result 재활용)
+function rvHistoryLoadFull(jobId) {
+  const list = rvHistoryLoad();
+  const entry = list.find(e => e.jobId === jobId);
+  if (!entry || !entry.report) {
+    showToast('리포트 데이터가 없습니다.', 'error');
+    return;
+  }
+  rvJobId = jobId;
+  rvRenderResult(entry.report);
+  showPage('review-result');
+}
+
+function rvHistoryDelete(jobId) {
+  try {
+    const list = rvHistoryLoad().filter(e => e.jobId !== jobId);
+    localStorage.setItem(RV_HISTORY_KEY, JSON.stringify(list));
+  } catch(e) {}
+  rvHistoryRender();
+}
+
+function rvHistoryClearAll() {
+  if (!confirm('검수 이력을 모두 삭제하시겠습니까?')) return;
+  localStorage.removeItem(RV_HISTORY_KEY);
+  rvHistoryRender();
+}
+
+function rvHistoryCloseDetail() {
+  const detailEl = document.getElementById('rvHistoryDetail');
+  if (detailEl) detailEl.classList.add('hidden');
 }
 
 // HTML 이스케이프 (이미 있으면 덮어쓰지 않도록 이름 구분)

@@ -233,20 +233,55 @@ def _build_prompt(
     return f"""아래 4개 문서를 첨부합니다.
 
 첨부 파일:
-- 감리사업 제안요청서 (RFP)
-- 대상사업 제안요청서 (RFP)
-- 포털 제안작업표 HTML
-- 정성제안서 최종본 PPT
+- 감리사업 제안요청서 (RFP)  ← 감리원 자격·과업범위·산출물 등 규범 문서
+- 대상사업 제안요청서 (RFP)  ← 감리 대상 사업 요구사항·일정·예산 등
+- 포털 제안작업표 HTML       ← 확정 인력표·일정·공수·금액 기준
+- 정성제안서 최종본 PPT       ← 검수 대상
 
 ---
 
 ## 지시
 
-정성제안서 PPT를 감리사업 RFP, 대상사업 RFP, 포털 제안작업표 HTML과 대조하여 정합성을 검수하고,
+정성제안서 PPT를 나머지 3개 문서와 **아래 6개 카테고리를 빠짐없이** 대조·검수하라.
 아래 JSON 스키마를 **완전히** 준수하는 JSON 객체 하나를 출력하라.
 JSON 외에 다른 텍스트는 절대 출력하지 않는다. 코드블록(```json ... ```)으로 감싸서 출력한다.
+문자열 값 안에 줄바꿈이 필요하면 반드시 이스케이프 시퀀스 \\n 을 사용하고 실제 줄바꿈 문자를 넣지 않는다.
 
 오늘 날짜: {today}
+
+---
+
+## 검수 카테고리별 수행 지침
+
+### [4.1] 사업 개요 정합성 → `overview` 필드
+다음 3개 항목을 **개별 행**으로 각각 비교한다. 절대 묶어서 "대체로 일치" 식으로 넘기지 않는다.
+- 사업명: 감리사업 RFP 표지·본문 vs 포털 vs PPT 표지·본문. 괄호·부제·버전 표기까지 글자 단위로 비교.
+- 발주/주관기관명: RFP 수신처(귀하) vs 포털 vs PPT. 상위기관과 산하기관을 혼동하지 않았는지 확인.
+- 사업기간: RFP 계약기간 vs 포털 감리 전체 일정 vs PPT 전체 사업기간. 시작일>종료일인 날짜 오기 별도 확인.
+
+### [4.2] 제안 범위 커버리지 → `scopeCoverage` 필드
+RFP의 과업범위·요구사항 목록에서 개별 기능·점검 영역을 항목 단위로 추출한 뒤,
+PPT에서 각 항목이 실제로 다뤄지는지 하나씩 대조한다.
+coveredInPPT: false 항목이 하나라도 있으면 major 또는 critical 로 별도 등재한다.
+
+### [4.3] 가격·비용 대조 → `costCheck` 필드
+- 제안 총액과 RFP/공고서 추정가격의 부가세 포함·제외 기준 일치 여부
+- MD 단가 × 총 MD = 총액 재계산
+- 포털 투찰금액 시뮬레이션 값과 PPT 총액 비교
+※ 가격 정보 미확보 시 빈 배열로 두고 checkNeeded에 "가격 정보 미확인" 등재. 절대 추정하지 않는다.
+
+### [4.4] 기술 자격 요건 대조 → `qualificationCheck` 필드
+RFP 감리원 자격 기준(등급·자격증·경력 연수·상근 여부 등)을 항목화하고,
+포털 확정 인력표의 각 인원이 조건을 만족하는지 **인원별**로 대조한다.
+meets: false 가 하나라도 있으면 즉시 critical 로 등재한다.
+
+### [4.5] 잔존 문구 검출 → `irrelevant` 필드
+다른 사업에서 복붙된 것으로 의심되는 문구, 본사업과 무관한 조직명·사업명·날짜 등을
+슬라이드별로 열거한다. 발견 여부와 무관하게 summary는 항상 채운다.
+
+### [4.6] 납기·납품물 대조 → `deliverableCheck` 필드
+RFP 과업내용에서 요구 산출물 목록과 제출기한을 추출하고,
+PPT가 동일한 산출물과 기한을 제시하는지 대조한다.
 
 ---
 
@@ -254,45 +289,62 @@ JSON 외에 다른 텍스트는 절대 출력하지 않는다. 코드블록(```j
 
 ```json
 {{
-  "id": "영문소문자-숫자-하이픈 조합 슬러그 (예: kostat-bigdata-2026)",
+  "id": "영문소문자-숫자-하이픈 슬러그 (예: kostat-bigdata-2026)",
   "name": "사업명 (PPT 표지 기준)",
   "org": "발주기관명",
   "date": "{today} 검수",
-  "counts": {{
-    "crit": 0,
-    "major": 0,
-    "minor": 0,
-    "check": 0
-  }},
-  "verdict": "총평 HTML 문자열. 중요 표현은 <b>굵게</b> 처리. 줄바꿈은 \\n.",
+  "counts": {{ "crit": 0, "major": 0, "minor": 0, "check": 0 }},
+  "verdict": "총평. 중요 표현은 <b>굵게</b>. 줄바꿈은 \\n 사용.",
+  "overview": [
+    ["사업명", "RFP 기준값", "포털 기준값", "PPT 표기값", "ok|major|crit"],
+    ["발주기관", "...", "...", "...", "ok|major|crit"],
+    ["사업기간", "...", "...", "...", "ok|major|crit"]
+  ],
   "baseline": [
-    ["항목명", "기준값 (RFP/포털 확정값)", "출처 (예: 감리사업 RFP / 포털 HTML / 대상사업 RFP)"]
+    ["항목명", "기준값 (RFP/포털 확정값)", "출처"]
+  ],
+  "scopeCoverage": [
+    {{ "requirement": "RFP 요구 항목", "coveredInPPT": true, "ppSlide": "슬라이드 번호 또는 없음", "note": "" }}
   ],
   "critical": [
     {{
-      "title": "오류 제목 (한 줄, 명확하게)",
-      "slide": "Slide 번호 (예: Slide 3)",
-      "fix": "수정 필요값 — plain text",
-      "body": "상세 설명 HTML. <p>, <div class=\\"calc\\">, <div class=\\"kv\\">, <table> 사용 가능."
+      "title": "오류 제목 (한 줄)",
+      "slide": "Slide N",
+      "fix": "수정 필요값",
+      "body": "상세 설명. <p>, <table> 등 HTML 사용 가능."
     }}
   ],
   "major": [],
   "minor": [],
   "checkNeeded": [],
   "schedule": [
-    ["단계명", "HTML 기준 일정", "PPT 표기 일정", "HTML 기준 공수(MD)", "PPT 표기 공수(MD)", "ok | major | check | crit"]
+    ["단계명", "HTML 기준 일정", "PPT 표기 일정", "HTML MD", "PPT MD", "ok|major|check|crit"]
   ],
   "scheduleNote": "일정·공수 대조 전체 요약",
   "personnel": [
-    ["구분", "HTML 기준 인력", "PPT 표기 인력", "ok | major | check | crit"]
+    ["구분", "HTML 기준 인력", "PPT 표기 인력", "ok|major|check|crit"]
   ],
-  "irrelevant": "본사업과 무관한 잔존 문구 검출 결과",
+  "qualificationCheck": [
+    {{ "person": "성명 또는 직책", "requirement": "RFP 요구 조건", "actual": "포털 기준 실제값", "meets": true, "note": "" }}
+  ],
+  "costCheck": [
+    ["항목", "RFP/포털 기준", "PPT 표기", "ok|major|check"]
+  ],
+  "deliverableCheck": [
+    ["산출물명", "RFP 요구 제출기한", "PPT 제시 제출기한", "ok|major|check"]
+  ],
+  "irrelevant": {{
+    "summary": "발견 여부와 총 건수 한 문장 (예: '2건 발견' 또는 '발견되지 않음')",
+    "items": [
+      {{ "text": "잔존 문구 원문", "slide": "슬라이드 번호", "sourceGuess": "추정 출처 또는 불명", "severity": "high|low" }}
+    ]
+  }},
   "typoChecklist": [
     {{
       "no": 1,
       "slide": "슬라이드 번호",
-      "type": "오타 | 일관성 | 수치 | 맥락(잔존문구)",
-      "priority": "높음 | 중간 | 낮음",
+      "type": "오타|일관성|수치|맥락(잔존문구)",
+      "priority": "높음|중간|낮음",
       "original": "원문 발췌",
       "fix": "수정안",
       "note": "설명·근거"
@@ -306,6 +358,12 @@ JSON 외에 다른 텍스트는 절대 출력하지 않는다. 코드블록(```j
   }}
 }}
 ```
+
+### 등급 판정 추가 기준
+- scopeCoverage 에서 PPT 미커버 항목 → major 이상
+- qualificationCheck 에서 자격 미달 → critical
+- costCheck 에서 부가세 포함/제외 혼동으로 금액 불일치 → major
+- deliverableCheck 에서 산출물 자체 누락 → major, 기한만 다르면 minor
 
 ---
 
@@ -466,6 +524,23 @@ def run_review(
                 "typoChecklist": [], "typoNote": "",
                 "priority": {"crit": [], "major": [], "check": []},
             }
+
+    # ── 신규 필드 기본값 보정 ─────────────────────────────────────
+    result.setdefault("overview", [])
+    result.setdefault("scopeCoverage", [])
+    result.setdefault("qualificationCheck", [])
+    result.setdefault("costCheck", [])
+    result.setdefault("deliverableCheck", [])
+    # irrelevant: 문자열이면 신규 구조로 변환
+    irr = result.get("irrelevant", "")
+    if isinstance(irr, str):
+        result["irrelevant"] = {
+            "summary": irr if irr else "검출 결과 없음",
+            "items": [],
+        }
+    else:
+        result["irrelevant"].setdefault("summary", "")
+        result["irrelevant"].setdefault("items", [])
 
     # counts 자동 계산 (Claude가 빠뜨린 경우 보정)
     result.setdefault("counts", {})
