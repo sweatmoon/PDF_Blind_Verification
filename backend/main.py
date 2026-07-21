@@ -10,9 +10,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 
-from api.verify import router as verify_router
-from api.admin  import router as admin_router
-from api.jobs   import router as jobs_router
+from api.verify  import router as verify_router
+from api.admin   import router as admin_router
+from api.jobs    import router as jobs_router
+from api.review  import router as review_router
 from services.file_manager import cleanup_scheduler
 from core.config import get_logger, CLAUDE_ENABLED, CLAUDE_MODEL, _load_saved_jobs
 
@@ -88,9 +89,10 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
-app.include_router(verify_router, prefix="/api/verify", tags=["검증"])
-app.include_router(admin_router,  prefix="/api/admin",  tags=["관리자"])
-app.include_router(jobs_router,   prefix="/api/jobs",   tags=["대시보드"])
+app.include_router(verify_router,  prefix="/api/verify",  tags=["검증"])
+app.include_router(admin_router,   prefix="/api/admin",   tags=["관리자"])
+app.include_router(jobs_router,    prefix="/api/jobs",    tags=["대시보드"])
+app.include_router(review_router,  prefix="/api/review",  tags=["제안서검수"])
 
 
 # ── 정적 파일 & SPA 폴백 ──────────────────────────────────────

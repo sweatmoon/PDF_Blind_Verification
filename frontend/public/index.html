@@ -52,6 +52,28 @@
     .logo-upload-zone { border: 2px dashed #cbd5e1; border-radius: 10px; padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s; }
     .logo-upload-zone:hover { border-color: #a5b4fc; background: #eef2ff; }
     .logo-preview { width: 80px; height: 48px; object-fit: contain; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; }
+    /* 제안서 검수 전용 */
+    .rv-drop-zone.has-file { border-color: #8b5cf6; background: #f5f3ff; }
+    .rv-drop-zone.has-file p { color: #6d28d9; font-weight: 600; }
+    .rv-drop-zone.drag-over { border-color: #7c3aed !important; background: #ede9fe !important; }
+    .rv-count-crit { background:#fee2e2; color:#dc2626; border:1px solid #fca5a5; }
+    .rv-count-major { background:#fff7ed; color:#ea580c; border:1px solid #fdba74; }
+    .rv-count-minor { background:#fefce8; color:#ca8a04; border:1px solid #fde047; }
+    .rv-count-check { background:#eff6ff; color:#2563eb; border:1px solid #93c5fd; }
+    .rv-issue-crit  { border-left: 4px solid #dc2626; }
+    .rv-issue-major { border-left: 4px solid #ea580c; }
+    .rv-issue-minor { border-left: 4px solid #ca8a04; }
+    .rv-issue-check { border-left: 4px solid #2563eb; }
+    .rv-badge-crit  { background:#fee2e2; color:#dc2626; }
+    .rv-badge-major { background:#fff7ed; color:#ea580c; }
+    .rv-badge-minor { background:#fefce8; color:#ca8a04; }
+    .rv-badge-check { background:#eff6ff; color:#2563eb; }
+    .rv-verdict-ok  { background:#f0fdf4; color:#166534; border:1px solid #86efac; }
+    .tab-main-active { background:#6366f1 !important; color:#fff !important; }
+    .rv-ok  { background:#d1fae5; color:#065f46; }
+    .rv-major-cell { background:#fff7ed; color:#9a3412; }
+    .rv-check-cell { background:#eff6ff; color:#1e3a8a; }
+    .rv-crit-cell  { background:#fee2e2; color:#7f1d1d; }
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
@@ -59,15 +81,28 @@
 <!-- 헤더 -->
 <header class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
   <div class="max-w-6xl mx-auto px-3 py-2.5 flex items-center justify-between gap-2">
-    <button onclick="showPage('upload')" class="flex items-center gap-2 min-w-0 hover:opacity-80 transition text-left">
-      <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
-        <i class="fas fa-shield-halved text-white text-sm"></i>
-      </div>
-      <div class="min-w-0">
-        <h1 class="font-bold text-slate-800 text-sm leading-tight truncate">입찰 제안서 블라인드 검증</h1>
-        <p class="text-xs text-slate-400 hidden sm:block">Claude Vision AI · Blind Verification</p>
-      </div>
-    </button>
+    <div class="flex items-center gap-3 min-w-0">
+      <button onclick="showPage('upload')" class="flex items-center gap-2 min-w-0 hover:opacity-80 transition text-left">
+        <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+          <i class="fas fa-shield-halved text-white text-sm"></i>
+        </div>
+        <div class="min-w-0 hidden sm:block">
+          <h1 class="font-bold text-slate-800 text-sm leading-tight truncate">입찰 제안서 검증</h1>
+          <p class="text-xs text-slate-400">Claude AI · Verification</p>
+        </div>
+      </button>
+      <!-- 메인 탭 -->
+      <nav class="flex items-center border border-slate-200 rounded-lg overflow-hidden text-xs font-medium">
+        <button id="tab-blind" onclick="switchMainTab('blind')"
+          class="px-3 py-1.5 transition tab-main-active bg-indigo-600 text-white">
+          <i class="fas fa-shield-halved mr-1"></i>블라인드 검증
+        </button>
+        <button id="tab-review" onclick="switchMainTab('review')"
+          class="px-3 py-1.5 transition text-slate-600 hover:bg-slate-50">
+          <i class="fas fa-file-magnifying-glass mr-1"></i>제안서 검수
+        </button>
+      </nav>
+    </div>
     <div class="flex items-center gap-1.5 flex-shrink-0">
       <!-- PC에서만 표시되는 배지들 -->
       <span id="claudeStatusBadge" class="hidden sm:inline-flex text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full font-medium items-center">
@@ -771,6 +806,216 @@
     </div>
   </div>
 
+  <!-- ═══════════════ 제안서 검수 업로드 ═══════════════ -->
+  <div id="page-review-upload" class="hidden fade-in">
+    <div class="bg-violet-50 border border-violet-200 rounded-xl p-4 mb-5 flex gap-3">
+      <i class="fas fa-file-magnifying-glass text-violet-500 mt-0.5 flex-shrink-0"></i>
+      <div class="text-sm text-violet-800">
+        <strong>제안서 검수</strong> — 4개 파일을 업로드하면 Claude Sonnet이 RFP·포털 작업표와 대조하여
+        오류·일정·인력·오타를 자동으로 검수합니다.
+      </div>
+    </div>
+
+    <div class="max-w-3xl mx-auto space-y-4">
+      <!-- 파일 업로드 카드 -->
+      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <h2 class="font-semibold text-slate-700 mb-4 flex items-center gap-2">
+          <i class="fas fa-upload text-violet-500"></i> 4개 파일 업로드
+        </h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- 감리사업 RFP -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <i class="fas fa-file-pdf text-red-400 mr-1"></i>감리사업 RFP
+            </label>
+            <div id="rv-drop-audit" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
+              ondragover="rvDragOver(event,'audit')" ondragleave="rvDragLeave('audit')" ondrop="rvDrop(event,'audit')" onclick="document.getElementById('rv-file-audit').click()">
+              <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
+              <p id="rv-name-audit" class="text-xs text-slate-400">PDF / DOCX 드롭 또는 클릭</p>
+            </div>
+            <input id="rv-file-audit" type="file" accept=".pdf,.docx,.txt" class="hidden" onchange="rvFileSelect(event,'audit')">
+          </div>
+          <!-- 대상사업 RFP -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <i class="fas fa-file-pdf text-orange-400 mr-1"></i>대상사업 RFP
+            </label>
+            <div id="rv-drop-target" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
+              ondragover="rvDragOver(event,'target')" ondragleave="rvDragLeave('target')" ondrop="rvDrop(event,'target')" onclick="document.getElementById('rv-file-target').click()">
+              <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
+              <p id="rv-name-target" class="text-xs text-slate-400">PDF / DOCX 드롭 또는 클릭</p>
+            </div>
+            <input id="rv-file-target" type="file" accept=".pdf,.docx,.txt" class="hidden" onchange="rvFileSelect(event,'target')">
+          </div>
+          <!-- 포털 제안작업표 -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <i class="fas fa-file-code text-blue-400 mr-1"></i>포털 제안작업표 HTML
+            </label>
+            <div id="rv-drop-portal" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
+              ondragover="rvDragOver(event,'portal')" ondragleave="rvDragLeave('portal')" ondrop="rvDrop(event,'portal')" onclick="document.getElementById('rv-file-portal').click()">
+              <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
+              <p id="rv-name-portal" class="text-xs text-slate-400">HTML / HTM 드롭 또는 클릭</p>
+            </div>
+            <input id="rv-file-portal" type="file" accept=".html,.htm,.txt" class="hidden" onchange="rvFileSelect(event,'portal')">
+          </div>
+          <!-- 제안서 PPT -->
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1.5 uppercase tracking-wide">
+              <i class="fas fa-file-powerpoint text-green-500 mr-1"></i>제안서 PPT
+            </label>
+            <div id="rv-drop-ppt" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
+              ondragover="rvDragOver(event,'ppt')" ondragleave="rvDragLeave('ppt')" ondrop="rvDrop(event,'ppt')" onclick="document.getElementById('rv-file-ppt').click()">
+              <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
+              <p id="rv-name-ppt" class="text-xs text-slate-400">PPTX / PDF 드롭 또는 클릭</p>
+            </div>
+            <input id="rv-file-ppt" type="file" accept=".pptx,.ppt,.pdf" class="hidden" onchange="rvFileSelect(event,'ppt')">
+          </div>
+        </div>
+
+        <!-- 업로드 버튼 -->
+        <div class="mt-5">
+          <button id="rv-start-btn" onclick="rvStartReview()" disabled
+            class="w-full py-3 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2
+              bg-violet-200 text-violet-400 cursor-not-allowed"
+            id="rv-start-btn">
+            <i class="fas fa-magnifying-glass"></i>
+            <span id="rv-start-text">4개 파일을 모두 선택해주세요</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 제안서 검수 처리중 ═══════════════ -->
+  <div id="page-review-processing" class="hidden fade-in">
+    <div class="max-w-xl mx-auto text-center py-16">
+      <div class="w-20 h-20 bg-violet-100 rounded-full flex items-center justify-center mx-auto mb-6">
+        <i class="fas fa-magnifying-glass text-violet-500 text-3xl spinner"></i>
+      </div>
+      <h2 class="text-xl font-bold text-slate-800 mb-2">제안서 검수 중</h2>
+      <p class="text-slate-500 text-sm mb-6" id="rv-proc-msg">문서 분석 중… 1~3분 소요될 수 있습니다.</p>
+      <div class="bg-slate-100 rounded-full h-2 mx-auto max-w-xs mb-4">
+        <div id="rv-proc-bar" class="bg-violet-500 h-2 rounded-full progress-bar transition-all" style="width:5%"></div>
+      </div>
+      <p class="text-xs text-slate-400">Claude Sonnet이 RFP·포털 작업표와 제안서를 대조하고 있습니다</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 제안서 검수 결과 ═══════════════ -->
+  <div id="page-review-result" class="hidden fade-in">
+    <!-- 헤더 바 -->
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <div>
+        <h2 class="font-bold text-slate-800 text-lg" id="rv-res-title">검수 결과</h2>
+        <p class="text-xs text-slate-400" id="rv-res-sub"></p>
+      </div>
+      <button onclick="rvReset()" class="text-xs text-slate-500 hover:text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition">
+        <i class="fas fa-arrow-left mr-1"></i>다시 검수
+      </button>
+    </div>
+
+    <!-- 요약 카운트 -->
+    <div class="grid grid-cols-4 gap-3 mb-5" id="rv-counts"></div>
+
+    <!-- 총평 -->
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 mb-4" id="rv-verdict-card"></div>
+
+    <!-- 기준 항목 (baseline) -->
+    <div id="rv-baseline-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-list-check text-slate-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">검수 기준 항목</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-4 py-2 font-medium">항목</th>
+            <th class="text-left px-4 py-2 font-medium">기준값</th>
+            <th class="text-left px-4 py-2 font-medium">출처</th>
+          </tr></thead>
+          <tbody id="rv-baseline-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 이슈 섹션들 -->
+    <div id="rv-issues"></div>
+
+    <!-- 일정 대조 -->
+    <div id="rv-schedule-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-calendar-days text-blue-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">일정·공수 대조</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-3 py-2 font-medium">단계</th>
+            <th class="text-left px-3 py-2 font-medium">HTML 일정</th>
+            <th class="text-left px-3 py-2 font-medium">PPT 일정</th>
+            <th class="text-left px-3 py-2 font-medium">HTML MD</th>
+            <th class="text-left px-3 py-2 font-medium">PPT MD</th>
+            <th class="text-center px-3 py-2 font-medium">판정</th>
+          </tr></thead>
+          <tbody id="rv-schedule-body"></tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-500 px-5 py-3" id="rv-schedule-note"></p>
+    </div>
+
+    <!-- 인력 대조 -->
+    <div id="rv-personnel-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-users text-green-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">투입 인력 대조</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="text-left px-3 py-2 font-medium">구분</th>
+            <th class="text-left px-3 py-2 font-medium">HTML 기준</th>
+            <th class="text-left px-3 py-2 font-medium">PPT 표기</th>
+            <th class="text-center px-3 py-2 font-medium">판정</th>
+          </tr></thead>
+          <tbody id="rv-personnel-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 오타 검수 -->
+    <div id="rv-typo-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-spell-check text-orange-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">오타·일관성 체크리스트</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead><tr class="bg-slate-50 text-slate-500">
+            <th class="px-3 py-2 font-medium text-center">#</th>
+            <th class="px-3 py-2 font-medium text-left">슬라이드</th>
+            <th class="px-3 py-2 font-medium text-left">유형</th>
+            <th class="px-3 py-2 font-medium text-center">중요도</th>
+            <th class="px-3 py-2 font-medium text-left">원문</th>
+            <th class="px-3 py-2 font-medium text-left">수정안</th>
+            <th class="px-3 py-2 font-medium text-left">비고</th>
+          </tr></thead>
+          <tbody id="rv-typo-body"></tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-500 px-5 py-3" id="rv-typo-note"></p>
+    </div>
+
+    <!-- 우선순위 액션 -->
+    <div id="rv-priority-card" class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4 hidden">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <i class="fas fa-flag text-red-500"></i>
+        <span class="font-semibold text-slate-700 text-sm">수정 우선순위</span>
+      </div>
+      <div class="p-5 space-y-3" id="rv-priority-body"></div>
+    </div>
+  </div>
+
 </main>
 
 <!-- 토스트 알림 -->
@@ -832,7 +1077,8 @@ let state = {
 // 페이지 라우팅
 // ─────────────────────────────────────────────────────────────
 function showPage(page) {
-  ['upload','processing','result','admin','dashboard'].forEach(p => {
+  ['upload','processing','result','admin','dashboard',
+   'review-upload','review-processing','review-result'].forEach(p => {
     document.getElementById(`page-${p}`).classList.add('hidden');
   });
   document.getElementById(`page-${page}`).classList.remove('hidden');
@@ -4139,6 +4385,368 @@ async function _autoReapplyKey(key) {
   } catch(e) {
     console.warn('키 자동 재적용 실패:', e);
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// 제안서 검수 (Review) 기능
+// ══════════════════════════════════════════════════════════════════
+
+// 현재 선택된 메인 탭 ('blind' | 'review')
+let _mainTab = 'blind';
+
+// 검수용 파일 상태
+const rvFiles = { audit: null, target: null, portal: null, ppt: null };
+let rvJobId = null;
+let rvPollTimer = null;
+
+// ── 탭 전환 ──────────────────────────────────────────────────────
+function switchMainTab(tab) {
+  _mainTab = tab;
+  const blindPages = ['upload','processing','result'];
+  const reviewPages = ['review-upload','review-processing','review-result'];
+
+  const tabBlind  = document.getElementById('tab-blind');
+  const tabReview = document.getElementById('tab-review');
+
+  if (tab === 'blind') {
+    tabBlind.classList.add('tab-main-active');
+    tabBlind.classList.remove('text-slate-600','hover:bg-slate-50');
+    tabReview.classList.remove('tab-main-active');
+    tabReview.classList.add('text-slate-600','hover:bg-slate-50');
+    // 블라인드 측 현재 표시 페이지 복원
+    showPage('upload');
+  } else {
+    tabReview.classList.add('tab-main-active');
+    tabReview.classList.remove('text-slate-600','hover:bg-slate-50');
+    tabBlind.classList.remove('tab-main-active');
+    tabBlind.classList.add('text-slate-600','hover:bg-slate-50');
+    // 검수 중인 job 있으면 결과로, 없으면 업로드로
+    if (rvJobId) {
+      const job = null; // 서버 체크 없이 처리중이면 processing으로
+      showPage(rvPollTimer ? 'review-processing' : 'review-result');
+    } else {
+      showPage('review-upload');
+    }
+  }
+}
+
+// ── 드래그&드롭 핸들러 ────────────────────────────────────────────
+function rvDragOver(e, key) {
+  e.preventDefault();
+  document.getElementById(`rv-drop-${_rvKeyToId(key)}`).classList.add('drag-over');
+}
+function rvDragLeave(key) {
+  document.getElementById(`rv-drop-${_rvKeyToId(key)}`).classList.remove('drag-over');
+}
+function rvDrop(e, key) {
+  e.preventDefault();
+  rvDragLeave(key);
+  const file = e.dataTransfer.files[0];
+  if (file) rvSetFile(key, file);
+}
+function rvFileSelect(e, key) {
+  const file = e.target.files[0];
+  if (file) rvSetFile(key, file);
+}
+
+function _rvKeyToId(key) {
+  return { audit: 'audit', target: 'target', portal: 'portal', ppt: 'ppt' }[key] || key;
+}
+
+function rvSetFile(key, file) {
+  const idMap = { audit:'audit', target:'target', portal:'portal', ppt:'ppt' };
+  const id = idMap[key];
+  rvFiles[key] = file;
+  const zone = document.getElementById(`rv-drop-${id}`);
+  const name = document.getElementById(`rv-name-${id}`);
+  zone.classList.add('has-file');
+  name.textContent = `✓ ${file.name}`;
+  rvCheckReady();
+}
+
+function rvCheckReady() {
+  const ready = rvFiles.audit && rvFiles.target && rvFiles.portal && rvFiles.ppt;
+  const btn  = document.getElementById('rv-start-btn');
+  const text = document.getElementById('rv-start-text');
+  if (ready) {
+    btn.disabled = false;
+    btn.className = 'w-full py-3 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2 bg-violet-600 text-white hover:bg-violet-700 cursor-pointer';
+    text.textContent = '제안서 검수 시작';
+  } else {
+    btn.disabled = true;
+    btn.className = 'w-full py-3 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2 bg-violet-200 text-violet-400 cursor-not-allowed';
+    const missing = [];
+    if (!rvFiles.audit)  missing.push('감리RFP');
+    if (!rvFiles.target) missing.push('대상RFP');
+    if (!rvFiles.portal) missing.push('포털HTML');
+    if (!rvFiles.ppt)    missing.push('제안서PPT');
+    text.textContent = `필요 파일: ${missing.join(', ')}`;
+  }
+}
+
+// ── 검수 시작 ────────────────────────────────────────────────────
+async function rvStartReview() {
+  const btn = document.getElementById('rv-start-btn');
+  if (btn.disabled) return;
+  if (!rvFiles.audit || !rvFiles.target || !rvFiles.portal || !rvFiles.ppt) {
+    showToast('4개 파일을 모두 선택해주세요.', 'error'); return;
+  }
+
+  const fd = new FormData();
+  fd.append('audit_rfp',    rvFiles.audit);
+  fd.append('target_rfp',   rvFiles.target);
+  fd.append('portal_html',  rvFiles.portal);
+  fd.append('proposal_ppt', rvFiles.ppt);
+
+  showPage('review-processing');
+  rvSetProcMsg('파일 업로드 중…', 10);
+
+  try {
+    const res = await fetch('/api/review/upload', { method:'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '업로드 실패');
+    rvJobId = data.job_id;
+    rvSetProcMsg('Claude Sonnet이 분석 중… (1~3분 소요)', 20);
+    rvPollStatus();
+  } catch(e) {
+    showToast(`검수 시작 실패: ${e.message}`, 'error');
+    showPage('review-upload');
+  }
+}
+
+function rvSetProcMsg(msg, pct) {
+  const el = document.getElementById('rv-proc-msg');
+  const bar = document.getElementById('rv-proc-bar');
+  if (el)  el.textContent = msg;
+  if (bar) bar.style.width = pct + '%';
+}
+
+// ── 상태 폴링 ─────────────────────────────────────────────────────
+function rvPollStatus() {
+  if (rvPollTimer) clearInterval(rvPollTimer);
+  let pct = 20;
+  rvPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/review/status/${rvJobId}`);
+      const data = await res.json();
+      if (data.status === 'completed') {
+        clearInterval(rvPollTimer); rvPollTimer = null;
+        rvSetProcMsg('검수 완료!', 100);
+        setTimeout(() => { rvRenderResult(data.report); showPage('review-result'); }, 400);
+      } else if (data.status === 'failed') {
+        clearInterval(rvPollTimer); rvPollTimer = null;
+        showToast(`검수 실패: ${data.message}`, 'error');
+        showPage('review-upload');
+      } else {
+        // processing
+        pct = Math.min(pct + 5, 85);
+        rvSetProcMsg(data.message || '분석 중…', pct);
+      }
+    } catch(e) { /* 네트워크 일시 오류 — 재시도 */ }
+  }, 3000);
+}
+
+// ── 결과 렌더링 ──────────────────────────────────────────────────
+function rvReset() {
+  rvJobId = null;
+  if (rvPollTimer) { clearInterval(rvPollTimer); rvPollTimer = null; }
+  // 파일 초기화
+  ['audit','target','portal','ppt'].forEach(k => {
+    rvFiles[k] = null;
+    const id = _rvKeyToId(k);
+    const zone = document.getElementById(`rv-drop-${id}`);
+    const name = document.getElementById(`rv-name-${id}`);
+    if (zone) zone.classList.remove('has-file');
+    if (name) {
+      const hints = {audit:'PDF / DOCX 드롭 또는 클릭', target:'PDF / DOCX 드롭 또는 클릭',
+                     portal:'HTML / HTM 드롭 또는 클릭', ppt:'PPTX / PDF 드롭 또는 클릭'};
+      name.textContent = hints[k];
+    }
+    const inp = document.getElementById(`rv-file-${id}`);
+    if (inp) inp.value = '';
+  });
+  rvCheckReady();
+  showPage('review-upload');
+}
+
+function rvRenderResult(r) {
+  if (!r) return;
+
+  // 제목
+  const title = document.getElementById('rv-res-title');
+  const sub   = document.getElementById('rv-res-sub');
+  if (title) title.textContent = r.name || '검수 결과';
+  if (sub)   sub.textContent   = `${r.org || ''}${r.org && r.date ? ' · ' : ''}${r.date || ''}`;
+
+  // 카운트 배지
+  const counts = r.counts || {};
+  const cntEl = document.getElementById('rv-counts');
+  if (cntEl) {
+    const items = [
+      { key:'crit',  label:'치명',  icon:'fa-circle-exclamation', cls:'rv-count-crit'  },
+      { key:'major', label:'중대',  icon:'fa-triangle-exclamation', cls:'rv-count-major' },
+      { key:'minor', label:'경미',  icon:'fa-circle-info', cls:'rv-count-minor' },
+      { key:'check', label:'확인필요', icon:'fa-question-circle', cls:'rv-count-check' },
+    ];
+    cntEl.innerHTML = items.map(it => `
+      <div class="rounded-2xl border shadow-sm p-4 text-center ${it.cls}">
+        <i class="fas ${it.icon} text-2xl mb-1"></i>
+        <div class="text-3xl font-bold">${counts[it.key] || 0}</div>
+        <div class="text-xs font-medium mt-0.5">${it.label}</div>
+      </div>`).join('');
+  }
+
+  // 총평
+  const verdictCard = document.getElementById('rv-verdict-card');
+  if (verdictCard && r.verdict) {
+    verdictCard.innerHTML = `
+      <div class="flex items-center gap-2 mb-3">
+        <i class="fas fa-comment-dots text-violet-500"></i>
+        <span class="font-semibold text-slate-700">총평</span>
+      </div>
+      <div class="text-sm text-slate-700 leading-relaxed">${r.verdict}</div>`;
+  }
+
+  // 기준 항목
+  const baseCard = document.getElementById('rv-baseline-card');
+  const baseBody = document.getElementById('rv-baseline-body');
+  if (baseBody && r.baseline && r.baseline.length) {
+    baseCard.classList.remove('hidden');
+    baseBody.innerHTML = r.baseline.map(row => `
+      <tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-4 py-2 font-medium text-slate-700">${_esc(row[0]||'')}</td>
+        <td class="px-4 py-2 text-slate-600">${_esc(row[1]||'')}</td>
+        <td class="px-4 py-2 text-slate-400">${_esc(row[2]||'')}</td>
+      </tr>`).join('');
+  }
+
+  // 이슈 섹션
+  const issuesEl = document.getElementById('rv-issues');
+  if (issuesEl) {
+    issuesEl.innerHTML = '';
+    const sections = [
+      { key:'critical',    label:'치명 오류',   cls:'rv-issue-crit',  badge:'rv-badge-crit',  icon:'fa-circle-exclamation text-red-500'    },
+      { key:'major',       label:'중대 오류',   cls:'rv-issue-major', badge:'rv-badge-major', icon:'fa-triangle-exclamation text-orange-500'},
+      { key:'minor',       label:'경미 오류',   cls:'rv-issue-minor', badge:'rv-badge-minor', icon:'fa-circle-info text-yellow-500'         },
+      { key:'checkNeeded', label:'확인 필요',   cls:'rv-issue-check', badge:'rv-badge-check', icon:'fa-question-circle text-blue-500'       },
+    ];
+    sections.forEach(sec => {
+      const items = r[sec.key] || [];
+      if (!items.length) return;
+      const html = `
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm mb-4">
+          <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+            <i class="fas ${sec.icon}"></i>
+            <span class="font-semibold text-slate-700 text-sm">${sec.label}</span>
+            <span class="text-xs px-2 py-0.5 rounded-full font-bold ${sec.badge}">${items.length}</span>
+          </div>
+          <div class="divide-y divide-slate-100">
+            ${items.map(it => `
+              <div class="p-5 ${sec.cls}">
+                <div class="flex items-start justify-between gap-3 mb-2">
+                  <span class="font-semibold text-slate-800 text-sm">${_esc(it.title||'')}</span>
+                  <span class="text-xs text-slate-400 flex-shrink-0">${_esc(it.slide||'')}</span>
+                </div>
+                ${it.fix ? `<div class="text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-2"><span class="font-medium text-slate-500">수정:</span> ${_esc(it.fix)}</div>` : ''}
+                ${it.body ? `<div class="text-sm text-slate-600 leading-relaxed rv-body-html">${it.body}</div>` : ''}
+              </div>`).join('')}
+          </div>
+        </div>`;
+      issuesEl.insertAdjacentHTML('beforeend', html);
+    });
+  }
+
+  // 일정 대조
+  const schCard = document.getElementById('rv-schedule-card');
+  const schBody = document.getElementById('rv-schedule-body');
+  const schNote = document.getElementById('rv-schedule-note');
+  if (schBody && r.schedule && r.schedule.length) {
+    schCard.classList.remove('hidden');
+    schBody.innerHTML = r.schedule.map(row => {
+      const verdict = (row[5] || 'ok').toLowerCase();
+      const cls = verdict==='ok' ? 'rv-ok' : verdict.includes('crit') ? 'rv-crit-cell' : verdict.includes('major') ? 'rv-major-cell' : 'rv-check-cell';
+      const label = { ok:'✓', major:'중대', check:'확인', crit:'치명' }[verdict] || verdict;
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50 text-xs">
+        <td class="px-3 py-2 font-medium text-slate-700">${_esc(row[0]||'')}</td>
+        <td class="px-3 py-2 text-slate-500">${_esc(row[1]||'')}</td>
+        <td class="px-3 py-2 text-slate-700">${_esc(row[2]||'')}</td>
+        <td class="px-3 py-2 text-slate-500">${_esc(row[3]||'')}</td>
+        <td class="px-3 py-2 text-slate-700">${_esc(row[4]||'')}</td>
+        <td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${label}</span></td>
+      </tr>`;
+    }).join('');
+    if (schNote) schNote.textContent = r.scheduleNote || '';
+  }
+
+  // 인력 대조
+  const perCard = document.getElementById('rv-personnel-card');
+  const perBody = document.getElementById('rv-personnel-body');
+  if (perBody && r.personnel && r.personnel.length) {
+    perCard.classList.remove('hidden');
+    perBody.innerHTML = r.personnel.map(row => {
+      const verdict = (row[3] || 'ok').toLowerCase();
+      const cls = verdict==='ok' ? 'rv-ok' : verdict.includes('crit') ? 'rv-crit-cell' : verdict.includes('major') ? 'rv-major-cell' : 'rv-check-cell';
+      const label = { ok:'✓', major:'중대', check:'확인', crit:'치명' }[verdict] || verdict;
+      return `<tr class="border-t border-slate-100 hover:bg-slate-50 text-xs">
+        <td class="px-3 py-2 font-medium text-slate-700">${_esc(row[0]||'')}</td>
+        <td class="px-3 py-2 text-slate-500">${_esc(row[1]||'')}</td>
+        <td class="px-3 py-2 text-slate-700">${_esc(row[2]||'')}</td>
+        <td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${label}</span></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // 오타 체크리스트
+  const typoCard = document.getElementById('rv-typo-card');
+  const typoBody = document.getElementById('rv-typo-body');
+  const typoNote = document.getElementById('rv-typo-note');
+  if (typoBody && r.typoChecklist && r.typoChecklist.length) {
+    typoCard.classList.remove('hidden');
+    const priorityCls = { '높음':'text-red-600 font-bold', '중간':'text-orange-500 font-semibold', '낮음':'text-slate-400' };
+    typoBody.innerHTML = r.typoChecklist.map(it => `
+      <tr class="border-t border-slate-100 hover:bg-slate-50">
+        <td class="px-3 py-2 text-center text-slate-400">${it.no||''}</td>
+        <td class="px-3 py-2 text-slate-600">${_esc(it.slide||'')}</td>
+        <td class="px-3 py-2 text-slate-600">${_esc(it.type||'')}</td>
+        <td class="px-3 py-2 text-center text-xs ${priorityCls[it.priority]||''}">${_esc(it.priority||'')}</td>
+        <td class="px-3 py-2 text-slate-500 max-w-xs truncate" title="${_esc(it.original||'')}">${_esc((it.original||'').substring(0,60))}</td>
+        <td class="px-3 py-2 text-violet-700 font-medium">${_esc(it.fix||'')}</td>
+        <td class="px-3 py-2 text-slate-400 text-xs">${_esc(it.note||'')}</td>
+      </tr>`).join('');
+    if (typoNote) typoNote.textContent = r.typoNote || '';
+  }
+
+  // 우선순위 액션
+  const prioCard = document.getElementById('rv-priority-card');
+  const prioBody = document.getElementById('rv-priority-body');
+  if (prioBody && r.priority) {
+    const p = r.priority;
+    const has = (p.crit&&p.crit.length) || (p.major&&p.major.length) || (p.check&&p.check.length);
+    if (has) {
+      prioCard.classList.remove('hidden');
+      let html = '';
+      if (p.crit && p.crit.length) {
+        html += `<div class="mb-3"><div class="text-xs font-bold text-red-600 mb-1.5 uppercase tracking-wide">치명 수정 지시</div>
+          <ul class="space-y-1">${p.crit.map(t=>`<li class="flex gap-2 text-sm text-slate-700"><span class="text-red-500 mt-0.5 flex-shrink-0">•</span>${_esc(t)}</li>`).join('')}</ul></div>`;
+      }
+      if (p.major && p.major.length) {
+        html += `<div class="mb-3"><div class="text-xs font-bold text-orange-600 mb-1.5 uppercase tracking-wide">중대 수정 지시</div>
+          <ul class="space-y-1">${p.major.map(t=>`<li class="flex gap-2 text-sm text-slate-700"><span class="text-orange-500 mt-0.5 flex-shrink-0">•</span>${_esc(t)}</li>`).join('')}</ul></div>`;
+      }
+      if (p.check && p.check.length) {
+        html += `<div><div class="text-xs font-bold text-blue-600 mb-1.5 uppercase tracking-wide">확인 요청</div>
+          <ul class="space-y-1">${p.check.map(t=>`<li class="flex gap-2 text-sm text-slate-700"><span class="text-blue-500 mt-0.5 flex-shrink-0">•</span>${_esc(t)}</li>`).join('')}</ul></div>`;
+      }
+      prioBody.innerHTML = html;
+    }
+  }
+}
+
+// HTML 이스케이프 (이미 있으면 덮어쓰지 않도록 이름 구분)
+function _esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 </script>
 </body>
