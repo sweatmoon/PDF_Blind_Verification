@@ -150,9 +150,10 @@ async def _run_review(job_id: str, file_data: dict, api_key: str):
                 proposal_ppt_data=file_data["proposal_ppt"][0],
                 proposal_ppt_name=file_data["proposal_ppt"][1],
                 api_key=api_key,
+                job_id=job_id,
             )
 
-        update_job(job_id, progress=20, message="Claude AI 분석 중… (1~3분 소요)")
+        update_job(job_id, progress=20, message="Claude AI 분석 중… (Tool Use 다중 턴, 수 분 소요)")
 
         with ThreadPoolExecutor(max_workers=1) as ex:
             result = await loop.run_in_executor(ex, _blocking)
