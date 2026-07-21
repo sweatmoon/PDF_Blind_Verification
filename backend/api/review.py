@@ -25,8 +25,8 @@ MAX_FILE_MB = 50
 MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 
 ALLOWED_EXTS = {
-    "audit_rfp":    {".pdf", ".docx", ".txt"},
-    "target_rfp":   {".pdf", ".docx", ".txt"},
+    "audit_rfp":    {".pdf", ".hwp", ".hwpx", ".docx", ".txt"},
+    "target_rfp":   {".pdf", ".hwp", ".hwpx", ".docx", ".txt"},
     "portal_html":  {".html", ".htm", ".txt"},
     "proposal_ppt": {".pptx", ".ppt", ".pdf"},
 }
@@ -46,8 +46,8 @@ def _check_ext(field: str, filename: str):
 @router.post("/upload")
 async def upload_and_review(
     bg: BackgroundTasks,
-    audit_rfp:    UploadFile = File(..., description="감리사업 RFP (PDF/DOCX)"),
-    target_rfp:   UploadFile = File(..., description="대상사업 RFP (PDF/DOCX)"),
+    audit_rfp:    UploadFile = File(..., description="감리사업 RFP (PDF/HWP/HWPX/DOCX)"),
+    target_rfp:   UploadFile = File(..., description="대상사업 RFP (PDF/HWP/HWPX/DOCX)"),
     portal_html:  UploadFile = File(..., description="포털 제안작업표 HTML"),
     proposal_ppt: UploadFile = File(..., description="제안서 PPT (PPTX/PDF)"),
 ):

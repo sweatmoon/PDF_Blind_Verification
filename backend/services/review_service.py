@@ -37,6 +37,104 @@ def set_review_model(model: str):
         logger.warning(f"review model 저장 실패: {e}")
 
 
+def _extract_text_from_hwp(data: bytes) -> str:
+    """HWP 5.x (OLE 컨테이너) → 텍스트 추출"""
+    try:
+        import olefile
+        import zlib
+        import struct
+
+        ole = olefile.OleFileIO(io.BytesIO(data))
+
+        # FileHeader에서 압축 여부 플래그 확인 (offset 36, bit0)
+        try:
+            hdr = ole.openstream("FileHeader").read()
+            is_compressed = bool(struct.unpack_from("<I", hdr, 36)[0] & 1)
+        except Exception:
+            is_compressed = True
+
+        texts: list[str] = []
+        for i in range(1, 300):
+            stream_name = f"BodyText/Section{i:04d}"
+            if not ole.exists(stream_name):
+                break
+            raw = ole.openstream(stream_name).read()
+            if is_compressed:
+                try:
+                    raw = zlib.decompress(raw, -15)
+                except Exception:
+                    pass
+
+            # HWP 레코드 스트림 파싱 — PARA_TEXT (type=67) 레코드만 추출
+            pos = 0
+            while pos + 4 <= len(raw):
+                hword = struct.unpack_from("<I", raw, pos)[0]
+                rec_type = hword & 0x3FF
+                rec_size = (hword >> 20) & 0xFFF
+                if rec_size == 0xFFF:
+                    if pos + 8 > len(raw):
+                        break
+                    rec_size = struct.unpack_from("<I", raw, pos + 4)[0]
+                    pos += 8
+                else:
+                    pos += 4
+                payload = raw[pos: pos + rec_size]
+                pos += rec_size
+
+                if rec_type == 67:  # PARA_TEXT
+                    try:
+                        chars: list[str] = []
+                        for j in range(0, len(payload) - 1, 2):
+                            code = struct.unpack_from("<H", payload, j)[0]
+                            if code in (0x000D, 0x0000):
+                                chars.append("\n")
+                            elif code >= 0x0020:
+                                chars.append(chr(code))
+                        line = "".join(chars).strip()
+                        if line:
+                            texts.append(line)
+                    except Exception:
+                        pass
+        ole.close()
+        result = "\n".join(texts)
+        logger.debug(f"[review] HWP 추출: {len(result):,}자")
+        return result
+    except Exception as e:
+        logger.warning(f"[review] HWP 텍스트 추출 실패: {e}")
+        return ""
+
+
+def _extract_text_from_hwpx(data: bytes) -> str:
+    """HWPX (ZIP+XML 컨테이너) → 텍스트 추출"""
+    try:
+        import zipfile
+        from lxml import etree
+
+        texts: list[str] = []
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            # Contents/section0.xml, section1.xml, ...
+            section_files = sorted(
+                n for n in zf.namelist()
+                if n.startswith("Contents/section") and n.endswith(".xml")
+            )
+            for fname in section_files:
+                xml_bytes = zf.read(fname)
+                try:
+                    root = etree.fromstring(xml_bytes)
+                    for elem in root.iter():
+                        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                        if tag == "t" and elem.text and elem.text.strip():
+                            texts.append(elem.text.strip())
+                except Exception:
+                    pass
+        result = "\n".join(texts)
+        logger.debug(f"[review] HWPX 추출: {len(result):,}자")
+        return result
+    except Exception as e:
+        logger.warning(f"[review] HWPX 텍스트 추출 실패: {e}")
+        return ""
+
+
 def _extract_text_from_pdf(data: bytes) -> str:
     """PDF → 텍스트 추출 (pdfplumber 우선, 실패 시 PyPDF2)"""
     try:
@@ -253,8 +351,12 @@ def run_review(
             return _extract_text_from_pptx(data)
         elif ext in (".html", ".htm"):
             return _extract_text_from_html(data)
+        elif ext == ".hwpx":
+            return _extract_text_from_hwpx(data)
+        elif ext == ".hwp":
+            return _extract_text_from_hwp(data)
         else:
-            # 텍스트/마크다운 등
+            # 텍스트/마크다운/docx 등
             return data.decode("utf-8", errors="ignore")
 
     audit_rfp_text   = extract(audit_rfp_data,   audit_rfp_name)
