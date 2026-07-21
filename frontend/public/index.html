@@ -902,8 +902,7 @@
         <div class="mt-5">
           <button id="rv-start-btn" onclick="rvStartReview()" disabled
             class="w-full py-3 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2
-              bg-violet-200 text-violet-400 cursor-not-allowed"
-            id="rv-start-btn">
+              bg-violet-200 text-violet-400 cursor-not-allowed">
             <i class="fas fa-magnifying-glass"></i>
             <span id="rv-start-text">4개 파일을 모두 선택해주세요</span>
           </button>
@@ -4602,11 +4601,12 @@ function switchMainTab(tab) {
     tabReview.classList.remove('text-slate-600', 'hover:bg-slate-50');
     // 이력 배지 갱신
     rvHistoryUpdateBadge();
-    // 검수 진행 중(폴링 중)이면 처리중 화면 유지, 그 외엔 항상 새 검수 업로드 화면
+    // 검수 진행 중(폴링 중)이면 처리중 화면 유지
     if (rvJobId && rvPollTimer) {
       showPage('review-processing');
     } else {
-      showPage('review-upload');
+      // 폴링 중이 아니면 항상 깨끗한 업로드 화면 (파일·버튼 상태 완전 초기화)
+      rvReset();
     }
   } else if (tab === 'rdb') {
     tabRdb.classList.add('tab-main-active');
