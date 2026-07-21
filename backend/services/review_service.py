@@ -250,7 +250,7 @@ _SYSTEM_PROMPT = """\
   "checkNeeded": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "schedule": [["단계명","HTML기준일정","PPT일정","HTML공수(MD)","PPT공수(MD)","ok|major|check|crit"], ...],
   "scheduleNote": "string",
-  "personnel": [["구분","HTML기준인력","PPT표기인력","ok|major|check|crit"], ...],
+  "personnel": [["구분","HTML기준인력","PPT표기인력","ok|major|check|crit","슬라이드번호","불일치내용(ok이면 빈 문자열)"], ...],
   "irrelevant": {"summary":"string","items":[{"text":"string","slide":"string","sourceGuess":"string","severity":"high|low"}]},
   "typoChecklist": [{"no":1,"slide":"string","type":"string","priority":"높음|중간|낮음","original":"string","fix":"string","note":"string"}, ...],
   "typoNote": "string",
