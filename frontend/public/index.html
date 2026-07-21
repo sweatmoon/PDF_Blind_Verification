@@ -4602,9 +4602,9 @@ function switchMainTab(tab) {
     tabReview.classList.remove('text-slate-600', 'hover:bg-slate-50');
     // 이력 배지 갱신
     rvHistoryUpdateBadge();
-    // 검수 중인 job 있으면 결과로, 없으면 업로드로
-    if (rvJobId) {
-      showPage(rvPollTimer ? 'review-processing' : 'review-result');
+    // 검수 진행 중(폴링 중)이면 처리중 화면 유지, 그 외엔 항상 새 검수 업로드 화면
+    if (rvJobId && rvPollTimer) {
+      showPage('review-processing');
     } else {
       showPage('review-upload');
     }
