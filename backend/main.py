@@ -97,12 +97,36 @@ app.include_router(review_router,  prefix="/api/review",  tags=["제안서검수
 
 # ── 정적 파일 & SPA 폴백 ──────────────────────────────────────
 MIME = {
-    ".html": "text/html", ".js": "application/javascript",
+    ".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
     ".css": "text/css",   ".json": "application/json",
     ".png": "image/png",  ".jpg": "image/jpeg",
     ".ico": "image/x-icon", ".svg": "image/svg+xml",
     ".woff2": "font/woff2",
 }
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """루트 경로 — index.html을 UTF-8로 서빙"""
+    index = FRONTEND / "index.html"
+    if index.exists():
+        content = index.read_bytes()
+        import hashlib as _hl
+        etag = _hl.md5(content).hexdigest()
+        return Response(
+            content=content,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+                "Pragma":        "no-cache",
+                "Expires":       "0",
+                "ETag":          f'"{etag}"',
+                "Vary":          "*",
+                "X-Content-Ver": etag[:8],
+                "Clear-Site-Data": '"cache"',
+            },
+        )
+    return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
+
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa(full_path: str, request: Request):
@@ -139,7 +163,7 @@ async def spa(full_path: str, request: Request):
         etag = hashlib.md5(content).hexdigest()
         return Response(
             content=content,
-            media_type="text/html",
+            media_type="text/html; charset=utf-8",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
                 "Pragma":        "no-cache",
