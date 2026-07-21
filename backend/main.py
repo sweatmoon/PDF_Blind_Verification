@@ -75,6 +75,27 @@ async def lifespan(app: FastAPI):
     logger.info("서버 종료")
 
 
+# ── Starlette multipart 파싱 한도 상향 (기본 1MB → 300MB) ──────────
+# FastAPI/Starlette 기본 MultiPartParser 한도가 1MB로 매우 작음.
+# 대용량 PPT(~300MB) 업로드 시 파싱 오류로 연결이 끊겨 "Failed to fetch" 발생.
+# Starlette 0.21+ 에서는 multipart 파라미터로 max_file_size를 직접 지정할 수 있으나,
+# 버전 무관하게 동작하는 가장 안전한 방법은 아래와 같이 환경 변수를 통한 설정이다.
+import os as _os
+_MAX_BODY = 300 * 1024 * 1024   # 300 MB
+_os.environ.setdefault("STARLETTE_MAX_UPLOAD_SIZE", str(_MAX_BODY))
+
+# Starlette 내부 MultiPartParser.max_file_size 직접 패치 (버전 안전)
+try:
+    from starlette.formparsers import MultiPartParser as _MPP
+    if hasattr(_MPP, "max_file_size"):
+        _MPP.max_file_size = _MAX_BODY
+    if hasattr(_MPP, "max_fields"):
+        _MPP.max_fields = 20
+    if hasattr(_MPP, "max_files"):
+        _MPP.max_files = 20
+except Exception as _e:
+    logger.warning(f"MultiPartParser 패치 실패 (무시): {_e}")
+
 app = FastAPI(
     title="입찰 제안서 블라인드 검증 서비스",
     version="1.0.0",

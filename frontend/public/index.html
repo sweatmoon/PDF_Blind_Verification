@@ -4689,12 +4689,14 @@ async function rvStartReview() {
 
   try {
     const res = await fetch('/api/review/upload', { method:'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || '업로드 실패');
+    let data;
+    try { data = await res.json(); } catch(_) { data = {}; }
+    if (!res.ok) throw new Error(`[HTTP ${res.status}] ${data.detail || data.message || res.statusText || '업로드 실패'}`);
     rvJobId = data.job_id;
-    rvSetProcMsg('Claude Sonnet이 분석 중… (1~3분 소요)', 20);
+    rvSetProcMsg('Claude AI 분석 중… (Tool Use 다중 턴, 수 분 소요)', 20);
     rvPollStatus();
   } catch(e) {
+    console.error('[rvStartReview]', e);
     showToast(`검수 시작 실패: ${e.message}`, 'error');
     showPage('review-upload');
   }

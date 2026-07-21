@@ -9,8 +9,18 @@ from pathlib import Path
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Form, Request
 from fastapi.responses import JSONResponse
+
+# ── Starlette multipart 한도 런타임 패치 (main.py 패치 실패 시 fallback) ──
+_MAX_UPLOAD_BYTES = 300 * 1024 * 1024
+try:
+    from starlette.formparsers import MultiPartParser as _MPP
+    for _attr in ("max_file_size", "max_part_size"):
+        if hasattr(_MPP, _attr):
+            setattr(_MPP, _attr, _MAX_UPLOAD_BYTES)
+except Exception:
+    pass
 
 from core.config import (
     get_logger, generate_job_id, now_kst_iso,
