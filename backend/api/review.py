@@ -21,7 +21,7 @@ from core.config import (
 router = APIRouter()
 logger = get_logger("review_api")
 
-MAX_FILE_MB = 50
+MAX_FILE_MB = 300
 MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024
 
 ALLOWED_EXTS = {
