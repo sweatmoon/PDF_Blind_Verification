@@ -250,7 +250,7 @@ def _truncate(text: str, max_chars: int = 40000) -> str:
 
 # ── 경량 재시도 프롬프트 (max_tokens 잘림 시 핵심 필드만 요청) ───────────────
 _SYSTEM_PROMPT_COMPACT = """\
-당신은 입찰 제안서 전문 검수 AI입니다.
+당신은 정보시스템 감리사업 제안서 전문 검수 AI입니다.
 ## 절대 규칙
 1. 응답은 반드시 유효한 JSON 객체 **하나만** 출력한다. 코드블록, 설명 문구 일절 금지.
 2. JSON 문자열 값 안에 실제 줄바꿈(0x0A/0x0D) 절대 금지. \\n 이스케이프만 사용.
@@ -265,9 +265,7 @@ _SYSTEM_PROMPT_COMPACT = """\
   "date": "검수일",
   "counts": {"crit":0,"major":0,"minor":0,"check":0},
   "verdict": "총평(HTML <b>태그 가능, \\n 줄바꿈)",
-  "overview": [["항목","감리RFP기준값","포털기준값","PPT표기값","ok|major|crit"]],
   "baseline": [["항목","기준값","출처"]],
-  "scopeCoverage": [{"requirement":"","coveredInPPT":true,"ppSlide":"","note":""}],
   "critical": [{"title":"","slide":"","fix":"","body":""}],
   "major":    [{"title":"","slide":"","fix":"","body":""}],
   "minor":    [{"title":"","slide":"","fix":"","body":""}],
@@ -275,9 +273,6 @@ _SYSTEM_PROMPT_COMPACT = """\
   "schedule": [["단계","HTML일정","PPT일정","HTML MD","PPT MD","ok|major|check|crit"]],
   "scheduleNote": "",
   "personnel": [["구분","HTML기준","PPT표기","ok|major|check|crit"]],
-  "qualificationCheck": [{"person":"","requirement":"","actual":"","meets":true,"note":""}],
-  "costCheck": [["항목","RFP/포털기준","PPT표기","ok|major|check"]],
-  "deliverableCheck": [["산출물명","RFP기한","PPT기한","ok|major|check"]],
   "irrelevant": {"summary":"","items":[{"text":"","slide":"","sourceGuess":"","severity":"high|low"}]},
   "typoChecklist": [{"no":1,"slide":"","type":"","priority":"높음|중간|낮음","original":"","fix":"","note":""}],
   "typoNote": "",
@@ -286,8 +281,12 @@ _SYSTEM_PROMPT_COMPACT = """\
 
 
 _SYSTEM_PROMPT = """\
-당신은 입찰 제안서 전문 검수 AI입니다.
+당신은 정보시스템 감리사업 제안서 전문 검수 AI입니다.
 사용자가 제공하는 4개 문서를 분석하여 정해진 JSON 스키마를 정확히 출력합니다.
+
+검수 대상: 정보시스템 감리사업 정성제안서 (PPT)
+검수 목적: 감리사업 RFP·포털 확정값과 제안서의 정합성 확인
+검수 범위: 일정·공수·인력·잔존문구·오타 — 그 이상은 다루지 않는다
 
 ## 절대 규칙
 1. 응답은 반드시 유효한 JSON 객체 **하나만** 출력한다. 코드블록(```), 설명 문구, 마크다운 일절 금지.
@@ -295,17 +294,15 @@ _SYSTEM_PROMPT = """\
 3. 모든 문자열 내 이중인용부호(")는 반드시 \\" 로 이스케이프한다.
 4. 배열·객체 값이 없을 때는 null 대신 빈 배열 [] 또는 빈 문자열 ""을 사용한다.
 
-## 출력 JSON 스키마 (키와 타입을 정확히 지킬 것)
+## 출력 JSON 스키마 (키와 타입을 정확히 지킬 것 — 스키마에 없는 키는 출력하지 않는다)
 {
   "id": "string — 영문소문자-숫자-하이픈 슬러그",
-  "name": "string — 사업명(감리사업 RFP 기준)",
+  "name": "string — 감리사업명(감리사업 RFP 기준)",
   "org": "string — 발주기관명(감리사업 RFP 기준)",
   "date": "string — 검수일",
   "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
   "verdict": "string — 총평. <b>강조</b> HTML 태그 사용 가능. 줄바꿈은 \\n",
-  "overview": [["항목","감리RFP기준값","포털기준값","PPT표기값","ok|major|crit"], ...],
   "baseline": [["항목명","기준값","출처"], ...],
-  "scopeCoverage": [{"requirement":"string","coveredInPPT":true,"ppSlide":"string","note":"string"}, ...],
   "critical": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "major":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "minor":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
@@ -313,9 +310,6 @@ _SYSTEM_PROMPT = """\
   "schedule": [["단계명","HTML일정","PPT일정","HTML MD","PPT MD","ok|major|check|crit"], ...],
   "scheduleNote": "string",
   "personnel": [["구분","HTML기준인력","PPT표기인력","ok|major|check|crit"], ...],
-  "qualificationCheck": [{"person":"string","requirement":"string","actual":"string","meets":true,"note":"string"}, ...],
-  "costCheck": [["항목","RFP/포털기준","PPT표기","ok|major|check"], ...],
-  "deliverableCheck": [["산출물명","RFP기한","PPT기한","ok|major|check"], ...],
   "irrelevant": {"summary":"string","items":[{"text":"string","slide":"string","sourceGuess":"string","severity":"high|low"}]},
   "typoChecklist": [{"no":1,"slide":"string","type":"string","priority":"높음|중간|낮음","original":"string","fix":"string","note":"string"}, ...],
   "typoNote": "string",
@@ -324,10 +318,13 @@ _SYSTEM_PROMPT = """\
 
 ## 검수 규율 (반드시 지킬 것 — 위반 시 그 항목은 아예 출력하지 않는다)
 
-너는 지금까지 이 회사의 제안서 10건을 검수한 적이 있는 다른 AI의 결과와 반드시 같은
-수준으로 나와야 한다. 그 AI는 10건을 검수하면서 프로젝트당 평균 1~3개의 진짜 오류만
-찾았다(치명+중대+경미 합쳐서 10개를 넘긴 경우가 거의 없었다). 네 결과가 그보다 훨씬
-많다면(예: 20개 이상), 너는 근거 없는 항목을 만들어내고 있는 것이다.
+이 서비스는 정보시스템 감리사업 제안서를 10건 이상 실전 검수한 경험을 바탕으로
+구축되었다. 실전 결과: 프로젝트당 진짜 오류는 평균 1~3개(치명+중대+경미 합계 10개 이하).
+네 결과가 그보다 훨씬 많다면(20개 이상), 근거 없는 항목을 만들어내고 있는 것이다.
+
+검수 범위를 벗어난 항목은 출력하지 않는다:
+- 범위 내: 일정·공수 대조, 인력명 대조, 잔존문구 검출, 오타·표기 오류
+- 범위 밖(출력 금지): 예산·기성금·비용 계산, 과업 범위 커버리지, 자격 요건 세부 검토
 
 ### 규칙 A — 숫자/비율 관련 지적은 계산 없이는 절대 쓰지 않는다
 숫자 불일치를 지적하려면:
@@ -352,19 +349,24 @@ body나 fix에 추측성 표현이 포함된 항목은 출력하지 않는다.
 - checkNeeded: 최대 3개 (절대 초과 불가)
 상한을 초과하는 항목이 있다면, 그중 가장 근거가 약한 것부터 삭제하여 상한에 맞춘다.
 
-### 규칙 E — 예산/일정 관련 자주 틀리는 포인트를 미리 걸러낸다
+### 규칙 E — 일정 관련 오탐을 미리 걸러낸다
 다음 항목들은 오탐(false positive)이 잦으므로 특히 주의한다:
 - 일정 표기 차이: PPT의 "YYYY.MM" vs HTML의 "YYYY-MM-DD"는 형식 차이일 뿐, 날짜 불일치로 보지 않는다.
 - 공수(MD) 합산: 구성원별 공수를 직접 더해서 총합과 비교하지 않으면 지적하지 않는다.
-- 예산 부가세: RFP에 부가세 포함/제외 기준이 명시되지 않으면 "가격 정보 미확인"으로 checkNeeded에만 넣는다.
 - 인력 직함/등급 차이: RFP에 정확한 직함이 명시된 경우에만 지적하고, 그렇지 않으면 무시한다.
 
-### 규칙 F — 대상사업 RFP의 역할을 정확히 이해한다
-[대상사업 RFP]는 overview(사업 개요 정합성) 비교에 **사용하지 않는다**.
-overview는 오직 [감리사업 RFP] ↔ 포털 HTML ↔ PPT 3자 비교만 한다.
-[대상사업 RFP]는 **오직 irrelevant(잔존문구 검출)에서만** 활용한다:
-- PPT 내용이 대상사업(AI 전환사업 등)과 무관한 타사업 내용(과거 수행 사업의 업무 범위·산출물·조직도 등)을 그대로 복붙한 경우를 검출한다.
-- 대상사업 RFP에 없는 업무 항목이 PPT에 마치 이번 사업 내용인 것처럼 기술된 경우를 검출한다.
+### 규칙 F — 대상사업 RFP는 irrelevant 전용이다
+[대상사업 RFP]는 감리 대상인 SI사업의 발주 문서다.
+이 문서는 **오직 irrelevant(잔존문구 검출)에서만** 참조한다:
+- PPT 내용 중 대상사업과 무관한 **타 사업**의 업무범위·산출물·조직도가 복붙된 경우를 검출
+- 단, 제안사의 수행실적·회사소개에 타사업명이 등장하는 것은 정상 — 잔존문구로 보지 않는다
+- 발견이 없어도 irrelevant.summary는 반드시 작성한다
+
+### 규칙 G — 예산·비용·기성금·과업범위·자격요건은 검수하지 않는다
+이 항목들은 검수 범위 밖이다. 관련 내용이 보여도 critical/major/minor/checkNeeded에 넣지 않는다:
+- 예산 총액, 기성금 비율(30/20/30/20 등), 부가세 포함 여부
+- 과업 범위 커버리지(RFP 항목이 PPT에 반영되었는지)
+- 감리원 자격 요건 세부 충족 여부
 
 ### 최종 자기점검 — 출력 직전 반드시 수행
 JSON을 완성한 뒤, 출력하기 전에 다음을 점검한다:
@@ -385,51 +387,50 @@ def _build_messages(
 
 아래 4개 문서를 바탕으로 정성제안서 PPT를 검수하여 JSON을 출력하라.
 
-## 각 문서의 역할 (반드시 숙지)
-- [감리사업 RFP]: 이번 입찰의 발주 문서. 사업명·발주기관·감리원 자격·일정·납품물 기준은 모두 여기서 확인.
-- [대상사업 RFP]: 감리 대상인 SI사업의 발주 문서. **overview 비교에 사용하지 않는다.** 오직 PPT가 대상사업과 무관한 타사업 내용을 복붙했는지(irrelevant) 판단할 때만 참조.
-- [포털 제안작업표 HTML]: 발주기관 포털의 확정 데이터. 일정·공수·인력 기준값.
-- [정성제안서 PPT]: 검수 대상. 위 3개 문서와 대조한다.
+## 각 문서의 역할
+- [감리사업 RFP]: 이번 입찰 발주 문서. 사업명·발주기관·일정·인력 기준은 여기서 확인.
+- [대상사업 RFP]: 감리 대상 SI사업 발주 문서. **irrelevant 검출에만** 사용. 다른 검수 항목에 끌어들이지 않는다.
+- [포털 제안작업표 HTML]: 발주기관 포털 확정 데이터. 일정·공수·인력 기준값.
+- [정성제안서 PPT]: 검수 대상.
 
-## 검수 지침
+## 검수 항목 (9개, 이 외는 다루지 않는다)
 
-### [1] 사업 개요 정합성 → overview
-- **감리사업 RFP** ↔ 포털 HTML ↔ PPT 3자 비교만 한다. 대상사업 RFP는 사용하지 않는다.
-- 비교 항목: 감리사업명 / 발주기관 / 감리 형태 / 사업기간 / 요구 공수
-- 각 항목을 개별 행으로 출력. 글자 단위 차이, 괄호·부제 포함 여부까지 확인.
-- 형식: ["항목명", "감리RFP기준값", "포털기준값", "PPT표기값", "ok|major|crit"]
+### [1] 기준 정보 요약 → baseline
+- 감리사업 RFP + 포털 HTML에서 추출한 확정 기준값 목록
+- 형식: ["항목명", "기준값", "출처"]
+- 예시 항목: 감리사업명, 발주기관, 감리 형태, 사업기간, 총 투입공수, 공동수급 여부, 감리원 편성 요건
 
-### [2] 제안 범위 커버리지 → scopeCoverage
-- **감리사업 RFP** 과업범위 항목을 하나씩 추출 후 PPT 반영 여부 대조
-- 미커버(coveredInPPT:false) → major 이상 등재
+### [2] 치명 오류 → critical
+- 제출 즉시 탈락 수준의 결정적 불일치
+- 반드시 포털 HTML 또는 감리사업 RFP의 수치를 직접 인용하여 근거 제시
 
-### [3] 가격·비용 대조 → costCheck
-- 제안 총액, 부가세 포함/제외 기준, MD 단가×총MD 재계산
-- 가격 정보 미확보 시 [] 로 두고 checkNeeded에 "가격 정보 미확인" 등재
+### [3] 중대 오류 → major
+- 수정이 필요한 명확한 불일치
+- 추측 표현 금지, 근거 수치 직접 인용
 
-### [4] 기술 자격 요건 → qualificationCheck
-- **감리사업 RFP** 감리원 자격 기준을 인원별로 대조
-- meets:false → critical 즉시 등재
+### [4] 경미 오류·오타 → minor
+- 사소하지만 수정 권장 사항
 
-### [5] 잔존 문구 검출 → irrelevant
-- [대상사업 RFP]를 참조하여: PPT 내용 중 대상사업(AI 전환사업 등)과 무관한 **타사업** 내용이 그대로 복붙된 경우를 검출
-- 예: 다른 사업의 업무 범위·조직도·산출물 항목이 이번 사업 내용인 것처럼 기술된 경우
-- 단, 제안사의 수행 실적·회사 소개는 타사업명이 등장해도 정상 — 잔존 문구로 보지 않는다
-- 발견 없어도 summary는 반드시 작성
+### [5] 확인 필요 → checkNeeded
+- 검수자가 확인해야 할 모호한 항목
 
-### [6] 납기·납품물 대조 → deliverableCheck
-- **감리사업 RFP** 요구 산출물과 제출기한을 PPT와 대조
+### [6] 일정·공수 대조 → schedule + scheduleNote
+- 포털 HTML 확정 일정·공수 ↔ PPT 대조
+- 형식: ["단계명", "HTML일정", "PPT일정", "HTML MD", "PPT MD", "ok|major|check|crit"]
+- scheduleNote: 대조 결과 총평 한 줄
 
-### [7] 일정·공수 대조 → schedule + scheduleNote
-- 포털 HTML의 확정 일정·공수와 PPT를 대조
+### [7] 인력명 대조 → personnel
+- 포털 HTML 확정 인력 ↔ PPT 기재 인력 대조
+- 형식: ["구분", "HTML기준인력", "PPT표기인력", "ok|major|check|crit"]
 
-### [8] 인력명 대조 → personnel
-- 포털 HTML 확정 인력과 PPT 기재 인력을 대조
+### [8] 본사업 무관 내용 검출 → irrelevant
+- [대상사업 RFP]를 참조하여 PPT에 타사업 내용이 복붙된 경우 검출
+- 제안사 수행실적·회사소개의 타사업명은 정상 — 잔존문구 아님
+- 발견이 없어도 irrelevant.summary는 반드시 작성
 
 ### [9] 오타·표기 일관성 → typoChecklist + typoNote
-
-### [10] 기준 정보 요약 → baseline
-- 감리사업 RFP와 포털 HTML에서 추출한 확정 기준값 목록
+- PPT 전체의 오타, 용어 혼용, 표기 불일치 검출
+- 형식: {"no", "slide", "type", "priority", "original", "fix", "note"}
 
 counts는 critical/major/minor/checkNeeded 배열의 실제 길이로 계산.
 verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
@@ -473,10 +474,13 @@ def _build_messages_compact(
 4개 문서를 분석하여 간략 JSON을 출력하라. 각 배열 항목은 핵심만 간단히 기재할 것.
 
 문서 역할:
-- [감리사업 RFP]: 발주 기준. overview·scopeCoverage·qualificationCheck·deliverableCheck에 사용.
-- [대상사업 RFP]: irrelevant(타사업 복붙 검출)에만 사용. overview 비교 금지.
+- [감리사업 RFP]: 사업명·발주기관·일정·인력 기준.
+- [대상사업 RFP]: irrelevant(타사업 복붙 검출)에만 사용. 다른 항목에 사용 금지.
 - [포털 HTML]: 일정·공수·인력 확정값.
 - [PPT]: 검수 대상.
+
+검수 항목(9개만): baseline, critical, major, minor, checkNeeded, schedule+scheduleNote, personnel, irrelevant, typoChecklist+typoNote
+범위 밖 항목(출력 금지): 예산·기성금·과업범위 커버리지·자격요건 세부검토
 
 [감리사업 RFP]
 {_truncate(audit_rfp, 15000)}
@@ -711,12 +715,10 @@ def run_review(
             "_retry_used": retry_used,
         }
 
-    # ── 신규 필드 기본값 보정 ─────────────────────────────────────
-    result.setdefault("overview", [])
-    result.setdefault("scopeCoverage", [])
-    result.setdefault("qualificationCheck", [])
-    result.setdefault("costCheck", [])
-    result.setdefault("deliverableCheck", [])
+    # ── 필드 기본값 보정 ──────────────────────────────────────────
+    # 혹시 Claude가 5개 제거 필드를 출력했으면 삭제
+    for _removed in ("overview", "scopeCoverage", "qualificationCheck", "costCheck", "deliverableCheck"):
+        result.pop(_removed, None)
     # irrelevant: 문자열이면 신규 구조로 변환
     irr = result.get("irrelevant", "")
     if isinstance(irr, str):
