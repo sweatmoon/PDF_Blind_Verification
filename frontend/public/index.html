@@ -474,7 +474,7 @@
       <div class="w-full md:w-64 md:flex-shrink-0 space-y-2" id="db-panel-list">
         <div class="flex items-center justify-between mb-1">
           <h2 class="font-semibold text-slate-700 text-sm flex items-center gap-2">
-            <i class="fas fa-folder-open text-indigo-500"></i> 검증 작업 목록
+            <i class="fas fa-shield-halved text-indigo-500"></i> 블라인드 검증 이력
           </h2>
           <button onclick="clearAllSavedReports()"
                   id="db-clearAllBtn"
@@ -491,13 +491,13 @@
 
         <!-- 완료 섹션 -->
         <div id="db-doneSection">
-          <p id="db-doneLabel" class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5 px-1">완료된 검증</p>
+          <p id="db-doneLabel" class="text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5 px-1">완료된 블라인드 검증</p>
           <div id="db-doneList" class="space-y-2">
             <div id="db-empty" class="bg-white rounded-xl border border-slate-100 p-8 text-center text-slate-400">
               <i class="fas fa-inbox text-3xl mb-2 block text-slate-300"></i>
-              <p class="text-xs">아직 검증 결과가 없습니다</p>
-              <button onclick="showPage('upload')"
-                      class="mt-2 text-xs text-indigo-500 hover:underline">새 검증 시작</button>
+              <p class="text-xs">블라인드 검증 결과가 없습니다</p>
+              <button onclick="switchMainTab('blind')"
+                      class="mt-2 text-xs text-indigo-500 hover:underline">블라인드 검증 시작</button>
             </div>
           </div>
         </div>
@@ -5285,7 +5285,7 @@ async function rvHistorySelectJob(entry) {
 
   // 총평
   const hdVerdict = document.getElementById('rvHdVerdict');
-  if (hdVerdict) hdVerdict.textContent = report.verdict || '—';
+  if (hdVerdict) hdVerdict.innerHTML = report.verdict || '—';
 
   // 결과 바디 — 임시 DOM에 rvRenderResult 실행 후 hdBody로 이동
   const hdBody = document.getElementById('rvHdBody');

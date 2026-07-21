@@ -223,170 +223,113 @@ def _truncate(text: str, max_chars: int = 40000) -> str:
     return text[:half] + f"\n\n... [중간 {len(text)-max_chars:,}자 생략] ...\n\n" + text[-half:]
 
 
-def _build_prompt(
+_SYSTEM_PROMPT = """\
+당신은 입찰 제안서 전문 검수 AI입니다.
+사용자가 제공하는 4개 문서를 분석하여 정해진 JSON 스키마를 정확히 출력합니다.
+
+## 절대 규칙
+1. 응답은 반드시 유효한 JSON 객체 **하나만** 출력한다. 코드블록(```), 설명 문구, 마크다운 일절 금지.
+2. JSON 문자열 값 안에 실제 줄바꿈 문자(0x0A/0x0D)를 절대 사용하지 않는다. 줄바꿈이 필요하면 반드시 \\n 이스케이프 시퀀스를 사용한다.
+3. 모든 문자열 내 이중인용부호(")는 반드시 \\" 로 이스케이프한다.
+4. 배열·객체 값이 없을 때는 null 대신 빈 배열 [] 또는 빈 문자열 ""을 사용한다.
+
+## 출력 JSON 스키마 (키와 타입을 정확히 지킬 것)
+{
+  "id": "string — 영문소문자-숫자-하이픈 슬러그",
+  "name": "string — 사업명(PPT 표지 기준)",
+  "org": "string — 발주기관명",
+  "date": "string — 검수일",
+  "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
+  "verdict": "string — 총평. <b>강조</b> HTML 태그 사용 가능. 줄바꿈은 \\n",
+  "overview": [["사업명","RFP기준","포털기준","PPT표기","ok|major|crit"], ...],
+  "baseline": [["항목명","기준값","출처"], ...],
+  "scopeCoverage": [{"requirement":"string","coveredInPPT":true,"ppSlide":"string","note":"string"}, ...],
+  "critical": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
+  "major":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
+  "minor":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
+  "checkNeeded": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
+  "schedule": [["단계명","HTML일정","PPT일정","HTML MD","PPT MD","ok|major|check|crit"], ...],
+  "scheduleNote": "string",
+  "personnel": [["구분","HTML기준인력","PPT표기인력","ok|major|check|crit"], ...],
+  "qualificationCheck": [{"person":"string","requirement":"string","actual":"string","meets":true,"note":"string"}, ...],
+  "costCheck": [["항목","RFP/포털기준","PPT표기","ok|major|check"], ...],
+  "deliverableCheck": [["산출물명","RFP기한","PPT기한","ok|major|check"], ...],
+  "irrelevant": {"summary":"string","items":[{"text":"string","slide":"string","sourceGuess":"string","severity":"high|low"}]},
+  "typoChecklist": [{"no":1,"slide":"string","type":"string","priority":"높음|중간|낮음","original":"string","fix":"string","note":"string"}, ...],
+  "typoNote": "string",
+  "priority": {"crit":["string"],"major":["string"],"check":["string"]}
+}"""
+
+
+def _build_messages(
     audit_rfp: str,
     target_rfp: str,
     portal_html: str,
     proposal_ppt: str,
     today: str,
-) -> str:
-    return f"""아래 4개 문서를 첨부합니다.
+) -> list[dict]:
+    """system/user/assistant 메시지 배열 반환 (prefill 포함)"""
+    user_content = f"""오늘 날짜: {today}
 
-첨부 파일:
-- 감리사업 제안요청서 (RFP)  ← 감리원 자격·과업범위·산출물 등 규범 문서
-- 대상사업 제안요청서 (RFP)  ← 감리 대상 사업 요구사항·일정·예산 등
-- 포털 제안작업표 HTML       ← 확정 인력표·일정·공수·금액 기준
-- 정성제안서 최종본 PPT       ← 검수 대상
+아래 4개 문서를 바탕으로 정성제안서 PPT를 검수하여 JSON을 출력하라.
 
----
+## 검수 지침
 
-## 지시
+### [1] 사업 개요 정합성 → overview
+- 사업명 / 발주기관 / 사업기간을 각각 개별 행으로 3개 문서와 비교
+- 글자 단위 차이, 괄호·부제 포함 여부까지 확인
 
-정성제안서 PPT를 나머지 3개 문서와 **아래 6개 카테고리를 빠짐없이** 대조·검수하라.
-아래 JSON 스키마를 **완전히** 준수하는 JSON 객체 하나를 출력하라.
-JSON 외에 다른 텍스트는 절대 출력하지 않는다. 코드블록(```json ... ```)으로 감싸서 출력한다.
-문자열 값 안에 줄바꿈이 필요하면 반드시 이스케이프 시퀀스 \\n 을 사용하고 실제 줄바꿈 문자를 넣지 않는다.
+### [2] 제안 범위 커버리지 → scopeCoverage
+- RFP 과업범위 항목을 하나씩 추출 후 PPT 반영 여부 대조
+- 미커버(coveredInPPT:false) → major 이상 등재
 
-오늘 날짜: {today}
+### [3] 가격·비용 대조 → costCheck
+- 제안 총액, 부가세 포함/제외 기준, MD 단가×총MD 재계산
+- 가격 정보 미확보 시 [] 로 두고 checkNeeded에 "가격 정보 미확인" 등재
 
----
+### [4] 기술 자격 요건 → qualificationCheck
+- RFP 감리원 자격 기준을 인원별로 대조
+- meets:false → critical 즉시 등재
 
-## 검수 카테고리별 수행 지침
+### [5] 잔존 문구 검출 → irrelevant
+- 다른 사업 복붙 의심 문구를 슬라이드별로 열거
+- 발견 없어도 summary는 반드시 작성
 
-### [4.1] 사업 개요 정합성 → `overview` 필드
-다음 3개 항목을 **개별 행**으로 각각 비교한다. 절대 묶어서 "대체로 일치" 식으로 넘기지 않는다.
-- 사업명: 감리사업 RFP 표지·본문 vs 포털 vs PPT 표지·본문. 괄호·부제·버전 표기까지 글자 단위로 비교.
-- 발주/주관기관명: RFP 수신처(귀하) vs 포털 vs PPT. 상위기관과 산하기관을 혼동하지 않았는지 확인.
-- 사업기간: RFP 계약기간 vs 포털 감리 전체 일정 vs PPT 전체 사업기간. 시작일>종료일인 날짜 오기 별도 확인.
+### [6] 납기·납품물 대조 → deliverableCheck
+- RFP 요구 산출물과 제출기한을 PPT와 대조
 
-### [4.2] 제안 범위 커버리지 → `scopeCoverage` 필드
-RFP의 과업범위·요구사항 목록에서 개별 기능·점검 영역을 항목 단위로 추출한 뒤,
-PPT에서 각 항목이 실제로 다뤄지는지 하나씩 대조한다.
-coveredInPPT: false 항목이 하나라도 있으면 major 또는 critical 로 별도 등재한다.
+### [7] 일정·공수 대조 → schedule + scheduleNote
+### [8] 인력명 대조 → personnel
+### [9] 오타·표기 일관성 → typoChecklist + typoNote
+### [10] 기준 정보 요약 → baseline
 
-### [4.3] 가격·비용 대조 → `costCheck` 필드
-- 제안 총액과 RFP/공고서 추정가격의 부가세 포함·제외 기준 일치 여부
-- MD 단가 × 총 MD = 총액 재계산
-- 포털 투찰금액 시뮬레이션 값과 PPT 총액 비교
-※ 가격 정보 미확보 시 빈 배열로 두고 checkNeeded에 "가격 정보 미확인" 등재. 절대 추정하지 않는다.
-
-### [4.4] 기술 자격 요건 대조 → `qualificationCheck` 필드
-RFP 감리원 자격 기준(등급·자격증·경력 연수·상근 여부 등)을 항목화하고,
-포털 확정 인력표의 각 인원이 조건을 만족하는지 **인원별**로 대조한다.
-meets: false 가 하나라도 있으면 즉시 critical 로 등재한다.
-
-### [4.5] 잔존 문구 검출 → `irrelevant` 필드
-다른 사업에서 복붙된 것으로 의심되는 문구, 본사업과 무관한 조직명·사업명·날짜 등을
-슬라이드별로 열거한다. 발견 여부와 무관하게 summary는 항상 채운다.
-
-### [4.6] 납기·납품물 대조 → `deliverableCheck` 필드
-RFP 과업내용에서 요구 산출물 목록과 제출기한을 추출하고,
-PPT가 동일한 산출물과 기한을 제시하는지 대조한다.
+counts는 critical/major/minor/checkNeeded 배열의 실제 길이로 계산.
+verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
 
 ---
 
-## 출력 JSON 스키마
-
-```json
-{{
-  "id": "영문소문자-숫자-하이픈 슬러그 (예: kostat-bigdata-2026)",
-  "name": "사업명 (PPT 표지 기준)",
-  "org": "발주기관명",
-  "date": "{today} 검수",
-  "counts": {{ "crit": 0, "major": 0, "minor": 0, "check": 0 }},
-  "verdict": "총평. 중요 표현은 <b>굵게</b>. 줄바꿈은 \\n 사용.",
-  "overview": [
-    ["사업명", "RFP 기준값", "포털 기준값", "PPT 표기값", "ok|major|crit"],
-    ["발주기관", "...", "...", "...", "ok|major|crit"],
-    ["사업기간", "...", "...", "...", "ok|major|crit"]
-  ],
-  "baseline": [
-    ["항목명", "기준값 (RFP/포털 확정값)", "출처"]
-  ],
-  "scopeCoverage": [
-    {{ "requirement": "RFP 요구 항목", "coveredInPPT": true, "ppSlide": "슬라이드 번호 또는 없음", "note": "" }}
-  ],
-  "critical": [
-    {{
-      "title": "오류 제목 (한 줄)",
-      "slide": "Slide N",
-      "fix": "수정 필요값",
-      "body": "상세 설명. <p>, <table> 등 HTML 사용 가능."
-    }}
-  ],
-  "major": [],
-  "minor": [],
-  "checkNeeded": [],
-  "schedule": [
-    ["단계명", "HTML 기준 일정", "PPT 표기 일정", "HTML MD", "PPT MD", "ok|major|check|crit"]
-  ],
-  "scheduleNote": "일정·공수 대조 전체 요약",
-  "personnel": [
-    ["구분", "HTML 기준 인력", "PPT 표기 인력", "ok|major|check|crit"]
-  ],
-  "qualificationCheck": [
-    {{ "person": "성명 또는 직책", "requirement": "RFP 요구 조건", "actual": "포털 기준 실제값", "meets": true, "note": "" }}
-  ],
-  "costCheck": [
-    ["항목", "RFP/포털 기준", "PPT 표기", "ok|major|check"]
-  ],
-  "deliverableCheck": [
-    ["산출물명", "RFP 요구 제출기한", "PPT 제시 제출기한", "ok|major|check"]
-  ],
-  "irrelevant": {{
-    "summary": "발견 여부와 총 건수 한 문장 (예: '2건 발견' 또는 '발견되지 않음')",
-    "items": [
-      {{ "text": "잔존 문구 원문", "slide": "슬라이드 번호", "sourceGuess": "추정 출처 또는 불명", "severity": "high|low" }}
-    ]
-  }},
-  "typoChecklist": [
-    {{
-      "no": 1,
-      "slide": "슬라이드 번호",
-      "type": "오타|일관성|수치|맥락(잔존문구)",
-      "priority": "높음|중간|낮음",
-      "original": "원문 발췌",
-      "fix": "수정안",
-      "note": "설명·근거"
-    }}
-  ],
-  "typoNote": "오타 검수 전체 요약",
-  "priority": {{
-    "crit": ["치명 항목별 한 줄 수정 지시"],
-    "major": ["중대 항목별 한 줄 수정 지시"],
-    "check": ["확인 필요 항목별 한 줄 확인 지시"]
-  }}
-}}
-```
-
-### 등급 판정 추가 기준
-- scopeCoverage 에서 PPT 미커버 항목 → major 이상
-- qualificationCheck 에서 자격 미달 → critical
-- costCheck 에서 부가세 포함/제외 혼동으로 금액 불일치 → major
-- deliverableCheck 에서 산출물 자체 누락 → major, 기한만 다르면 minor
+[감리사업 RFP]
+{_truncate(audit_rfp, 30000)}
 
 ---
 
-## 문서 내용
-
-### [감리사업 RFP]
-{_truncate(audit_rfp, 35000)}
+[대상사업 RFP]
+{_truncate(target_rfp, 30000)}
 
 ---
 
-### [대상사업 RFP]
-{_truncate(target_rfp, 35000)}
-
----
-
-### [포털 제안작업표 HTML]
+[포털 제안작업표 HTML]
 {_truncate(portal_html, 25000)}
 
 ---
 
-### [정성제안서 PPT]
+[정성제안서 PPT]
 {_truncate(proposal_ppt, 50000)}
 """
+    return [
+        {"role": "user",      "content": user_content},
+        {"role": "assistant", "content": "{"},   # prefill — JSON { 로 시작 강제
+    ]
 
 
 def run_review(
@@ -438,8 +381,8 @@ def run_review(
     from core.config import now_kst
     today = now_kst().strftime("%Y.%m.%d")
 
-    # ── 프롬프트 구성 ─────────────────────────────────────────────
-    prompt = _build_prompt(
+    # ── 메시지 구성 ───────────────────────────────────────────────
+    messages = _build_messages(
         audit_rfp_text, target_rfp_text,
         portal_html_text, proposal_ppt_text,
         today,
@@ -447,7 +390,8 @@ def run_review(
 
     # ── Claude API 호출 ──────────────────────────────────────────
     model = get_review_model()
-    logger.info(f"[review] Claude 호출: model={model}, prompt_len={len(prompt):,}자")
+    total_chars = sum(len(m["content"]) for m in messages)
+    logger.info(f"[review] Claude 호출: model={model}, 총 입력={total_chars:,}자")
 
     import anthropic
     client = anthropic.Anthropic(api_key=key)
@@ -455,16 +399,22 @@ def run_review(
     message = client.messages.create(
         model=model,
         max_tokens=8192,
-        messages=[{"role": "user", "content": prompt}],
+        system=_SYSTEM_PROMPT,
+        messages=messages,
     )
 
-    raw = message.content[0].text if message.content else ""
-    logger.info(f"[review] Claude 응답: {len(raw):,}자")
+    # prefill "{" 포함해서 전체 JSON 복원
+    raw_text = message.content[0].text if message.content else ""
+    raw = "{" + raw_text          # prefill의 "{" 를 앞에 붙임
+    logger.info(f"[review] Claude 응답: {len(raw_text):,}자 (prefill 포함 {len(raw):,}자)")
 
     # ── JSON 파싱 ────────────────────────────────────────────────
-    # ```json ... ``` 블록 추출
-    m = re.search(r"```json\s*([\s\S]+?)\s*```", raw)
-    json_str = m.group(1) if m else raw.strip()
+    # 혹시 코드블록으로 감싸진 경우 제거 후 파싱
+    json_str = raw.strip()
+    # ```json ... ``` 혹은 ``` ... ``` 제거
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", json_str)
+    if m:
+        json_str = "{" + m.group(1) if not m.group(1).startswith("{") else m.group(1)
 
     def _sanitize_json_strings(s: str) -> str:
         """JSON 문자열 값 안에 들어간 실제 제어문자(줄바꿈 등)를 이스케이프 시퀀스로 변환.
@@ -499,31 +449,50 @@ def run_review(
                 result.append(ch)
         return "".join(result)
 
-    try:
-        result = json.loads(json_str)
-    except json.JSONDecodeError:
-        # 1차 실패 → 문자열 내 제어문자 이스케이프 후 재시도
+    def _try_parse(s: str) -> dict | None:
+        """JSON 파싱 시도. 실패 시 None 반환."""
         try:
-            result = json.loads(_sanitize_json_strings(json_str))
+            return json.loads(s)
+        except json.JSONDecodeError:
+            return None
+
+    # 1차: 원본 파싱
+    result = _try_parse(json_str)
+
+    # 2차: 제어문자 이스케이프 후 파싱
+    if result is None:
+        sanitized = _sanitize_json_strings(json_str)
+        result = _try_parse(sanitized)
+        if result is not None:
             logger.info("[review] JSON sanitize 후 파싱 성공")
-        except json.JSONDecodeError as e:
-            logger.warning(f"[review] JSON 파싱 최종 실패: {e}. raw[:300]={raw[:300]}")
-            result = {
-                "id": "parse-error",
-                "name": "파싱 오류",
-                "org": "",
-                "date": f"{today} 검수",
-                "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
-                "verdict": f"<p>JSON 파싱 오류가 발생했습니다. Claude 응답 원문:</p>"
-                           f"<pre style='font-size:11px;white-space:pre-wrap'>{raw[:3000]}</pre>",
-                "baseline": [],
-                "critical": [], "major": [], "minor": [], "checkNeeded": [],
-                "schedule": [], "scheduleNote": "",
-                "personnel": [],
-                "irrelevant": "",
-                "typoChecklist": [], "typoNote": "",
-                "priority": {"crit": [], "major": [], "check": []},
-            }
+
+    # 3차: 마지막 완결 `}` 까지 잘라서 파싱 (truncation 대비)
+    if result is None:
+        last_brace = json_str.rfind("}")
+        if last_brace > 0:
+            result = _try_parse(json_str[:last_brace + 1])
+            if result is None:
+                result = _try_parse(_sanitize_json_strings(json_str[:last_brace + 1]))
+            if result is not None:
+                logger.info("[review] 말미 잘라내기 후 파싱 성공")
+
+    if result is None:
+        logger.warning(f"[review] JSON 파싱 최종 실패. 응답 앞부분: {raw[:500]}")
+        result = {
+            "id": "parse-error",
+            "name": "파싱 오류",
+            "org": "",
+            "date": f"{today} 검수",
+            "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
+            "verdict": "JSON 파싱에 실패했습니다. 파일을 다시 업로드하거나 관리자에게 문의하세요.",
+            "baseline": [],
+            "critical": [], "major": [], "minor": [], "checkNeeded": [],
+            "schedule": [], "scheduleNote": "",
+            "personnel": [],
+            "irrelevant": {"summary": "파싱 오류로 분석 불가", "items": []},
+            "typoChecklist": [], "typoNote": "",
+            "priority": {"crit": [], "major": [], "check": []},
+        }
 
     # ── 신규 필드 기본값 보정 ─────────────────────────────────────
     result.setdefault("overview", [])
