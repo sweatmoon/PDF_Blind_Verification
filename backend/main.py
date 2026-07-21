@@ -75,26 +75,10 @@ async def lifespan(app: FastAPI):
     logger.info("서버 종료")
 
 
-# ── Starlette multipart 파싱 한도 상향 (기본 1MB → 300MB) ──────────
-# FastAPI/Starlette 기본 MultiPartParser 한도가 1MB로 매우 작음.
-# 대용량 PPT(~300MB) 업로드 시 파싱 오류로 연결이 끊겨 "Failed to fetch" 발생.
-# Starlette 0.21+ 에서는 multipart 파라미터로 max_file_size를 직접 지정할 수 있으나,
-# 버전 무관하게 동작하는 가장 안전한 방법은 아래와 같이 환경 변수를 통한 설정이다.
-import os as _os
-_MAX_BODY = 300 * 1024 * 1024   # 300 MB
-_os.environ.setdefault("STARLETTE_MAX_UPLOAD_SIZE", str(_MAX_BODY))
-
-# Starlette 내부 MultiPartParser.max_file_size 직접 패치 (버전 안전)
-try:
-    from starlette.formparsers import MultiPartParser as _MPP
-    if hasattr(_MPP, "max_file_size"):
-        _MPP.max_file_size = _MAX_BODY
-    if hasattr(_MPP, "max_fields"):
-        _MPP.max_fields = 20
-    if hasattr(_MPP, "max_files"):
-        _MPP.max_files = 20
-except Exception as _e:
-    logger.warning(f"MultiPartParser 패치 실패 (무시): {_e}")
+# ── multipart 한도 상향: 클래스 패치 방식은 효과 없음 ───────────────
+# MultiPartParser.__init__이 max_part_size를 파라미터로 받아 self에 저장하므로
+# 클래스 변수 패치는 덮어써져 무효. 대신 /api/review/upload 엔드포인트에서
+# Request를 직접 받아 form(max_part_size=300MB)로 호출하는 방식으로 해결됨.
 
 app = FastAPI(
     title="입찰 제안서 블라인드 검증 서비스",
@@ -114,6 +98,11 @@ app.include_router(verify_router,  prefix="/api/verify",  tags=["검증"])
 app.include_router(admin_router,   prefix="/api/admin",   tags=["관리자"])
 app.include_router(jobs_router,    prefix="/api/jobs",    tags=["대시보드"])
 app.include_router(review_router,  prefix="/api/review",  tags=["제안서검수"])
+
+@app.get("/api/version", include_in_schema=False)
+async def version():
+    return JSONResponse({"commit": "fix-multipart", "review_upload": "/api/review/upload",
+                         "max_part_size_mb": 300})
 
 
 # ── 정적 파일 & SPA 폴백 ──────────────────────────────────────

@@ -11,16 +11,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Form, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
-# ── Starlette multipart 한도 런타임 패치 (main.py 패치 실패 시 fallback) ──
+# multipart 한도: 300MB (클래스 패치 방식은 __init__ 파라미터로 덮어써져 무효)
+# → /upload 엔드포인트에서 Request를 직접 받아 form(max_part_size=...)로 호출
 _MAX_UPLOAD_BYTES = 300 * 1024 * 1024
-try:
-    from starlette.formparsers import MultiPartParser as _MPP
-    for _attr in ("max_file_size", "max_part_size"):
-        if hasattr(_MPP, _attr):
-            setattr(_MPP, _attr, _MAX_UPLOAD_BYTES)
-except Exception:
-    pass
 
 from core.config import (
     get_logger, generate_job_id, now_kst_iso,
@@ -53,15 +48,29 @@ def _check_ext(field: str, filename: str):
 
 
 # ── 업로드 & 검수 시작 ──────────────────────────────────────────
+# UploadFile = File(...) 방식은 Starlette가 내부적으로
+# MultiPartParser(max_part_size=1MB 기본값)로 파싱 → 300MB 파일에서 연결 끊김.
+# Request를 직접 받아 form(max_part_size=300MB)로 호출하는 것이 유일한 정확한 해결책.
 @router.post("/upload")
 async def upload_and_review(
+    request: Request,
     bg: BackgroundTasks,
-    audit_rfp:    UploadFile = File(..., description="감리사업 RFP (PDF/HWP/HWPX/DOCX)"),
-    target_rfp:   UploadFile = File(..., description="대상사업 RFP (PDF/HWP/HWPX/DOCX)"),
-    portal_html:  UploadFile = File(..., description="포털 제안작업표 HTML"),
-    proposal_ppt: UploadFile = File(..., description="제안서 PPT (PPTX/PDF)"),
 ):
     """4개 파일을 받아 Claude Sonnet으로 제안서 검수를 시작합니다."""
+
+    # ── multipart 파싱 (300MB 한도로 직접 지정) ─────────────────
+    try:
+        form = await request.form(max_part_size=_MAX_UPLOAD_BYTES)
+    except Exception as e:
+        raise HTTPException(400, f"파일 업로드 파싱 오류: {e}")
+
+    FIELD_NAMES = ("audit_rfp", "target_rfp", "portal_html", "proposal_ppt")
+    raw_files: dict[str, StarletteUploadFile] = {}
+    for field in FIELD_NAMES:
+        f = form.get(field)
+        if f is None or not hasattr(f, "filename"):
+            raise HTTPException(400, f"'{field}' 필드가 누락되었습니다.")
+        raw_files[field] = f  # type: ignore[assignment]
 
     # API 키 체크 — 환경변수 → 파일 → DB 순으로 런타임마다 재조회
     import os
@@ -84,14 +93,8 @@ async def upload_and_review(
     if not key:
         raise HTTPException(503, "Claude API 키가 설정되지 않았습니다. 관리자 페이지에서 설정해주세요.")
 
-    # 파일명 확인
-    files = {
-        "audit_rfp":    audit_rfp,
-        "target_rfp":   target_rfp,
-        "portal_html":  portal_html,
-        "proposal_ppt": proposal_ppt,
-    }
-    for field, f in files.items():
+    # 파일명 / 확장자 확인
+    for field, f in raw_files.items():
         fname = f.filename or ""
         if not fname:
             raise HTTPException(400, f"'{field}' 파일이 비어 있습니다.")
@@ -99,7 +102,7 @@ async def upload_and_review(
 
     # 파일 읽기
     file_data: dict[str, tuple[bytes, str]] = {}
-    for field, f in files.items():
+    for field, f in raw_files.items():
         try:
             data = await f.read()
         except Exception as e:
