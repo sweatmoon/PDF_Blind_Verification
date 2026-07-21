@@ -4854,7 +4854,7 @@ function rvRenderResult(r) {
   if (verdictCard && r.verdict) {
     // \n 기준으로 문단 분리, 빈 줄은 간격으로
     const verdictHtml = _safeHtml(r.verdict)
-      .split(/\\n/)
+      .split(/\n|\\n/)
       .map(line => line.trim())
       .filter(line => line.length > 0)
       .map(line => `<p class="mb-2 last:mb-0">${line}</p>`)
@@ -5410,7 +5410,7 @@ function rdbRenderTable(items) {
     // 상세 row — 총평 전체 텍스트를 여기서만 표시
     var rawVerdict = verdict || result.summary || result.overall_summary || result.verdict_reason || '총평 없음';
     var summaryHtml = _safeHtml(rawVerdict)
-      .split(/\\n/)
+      .split(/\n|\\n/)
       .map(function(l){ return l.trim(); })
       .filter(function(l){ return l.length > 0; })
       .map(function(l){ return '<p class="mb-1.5 last:mb-0">' + l + '</p>'; })

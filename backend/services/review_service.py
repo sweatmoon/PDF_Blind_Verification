@@ -439,8 +439,11 @@ def _build_messages(
 - 검수자가 확인해야 할 모호한 항목
 
 ### [6] 일정·공수 대조 → schedule + scheduleNote
-- 포털 HTML 확정 일정·공수 ↔ PPT 대조
+- 포털 HTML에서 감리 단계별 일정과 공수(MD)를 **빠짐없이** 추출하여 PPT와 대조
+- HTML에 등장하는 모든 단계(요구정의·설계·구현·종료·검수지원 등)를 각각 별도 행으로 출력
+- 합계 행도 반드시 포함 (단계명: "합계")
 - 형식: ["단계명", "HTML일정", "PPT일정", "HTML MD", "PPT MD", "ok|major|check|crit"]
+- HTML에 해당 단계 데이터가 있는데 PPT에 없으면 PPT 칸은 "-"로 표기하고 판정은 "check" 또는 "major"
 - scheduleNote: 대조 결과 총평 한 줄
 
 ### [7] 인력명 대조 → personnel
