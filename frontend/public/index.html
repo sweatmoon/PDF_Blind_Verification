@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- BUILD: 20260721-v14-dashboard-api -->
+<!-- BUILD: 20260721-v14b-junk-removed -->
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
@@ -5701,39 +5701,7 @@ function renderDetail(r){
   `;
 }
 
-function renderList(){
-  const el = document.getElementById('reportList');
-  el.innerHTML = REPORTS.map(r=>`
-    <div class="report-row" id="row-${r.id}">
-      <div class="rhead" onclick="toggleRow('${r.id}')">
-        <div class="rtitle">
-          <div class="name">${r.name}</div>
-          <div class="sub">${r.org} · ${r.date}</div>
-        </div>
-        <div class="counts">
-          <span class="minicount crit">치명 ${r.counts.crit}</span>
-          <span class="minicount major">중대 ${r.counts.major}</span>
-          <span class="minicount minor">경미 ${r.counts.minor}</span>
-          <span class="minicount check">확인 ${r.counts.check}</span>
-        </div>
-        <button class="xlsx-btn" onclick="event.stopPropagation(); exportExcel('${r.id}')" title="엑셀 다운로드">⬇ 엑셀</button>
-        <span class="chev">▸</span>
-      </div>
-      <div class="rdetail" id="detail-${r.id}"></div>
-    </div>
-  `).join('');
-}
 
-function toggleRow(id){
-  const row = document.getElementById('row-'+id);
-  const wasOpen = row.classList.contains('open');
-  row.classList.toggle('open');
-  if(!wasOpen){
-    const r = REPORTS.find(x=>x.id===id);
-    document.getElementById('detail-'+id).innerHTML = renderDetail(r);
-  }
-}
-];
 
 /* ─── 렌더링 함수 (rdb 네임스페이스) ─── */
 /* ================= 렌더링 ================= */
@@ -5838,7 +5806,7 @@ function rdbRenderList(items){
     el.innerHTML = '<div style="padding:32px;text-align:center;color:#888;">검수 완료된 결과가 없습니다.</div>';
     return;
   }
-  el.innerHTML = items.map(item => {
+  el.innerHTML = items.map(function(item) {
     const r = item.report || item;
     const id = item.job_id || r.id;
     const name = r.name || id;
@@ -5846,32 +5814,29 @@ function rdbRenderList(items){
     const dateStr = r.date || item.created_at || '';
     const counts = r.counts || { crit:0, major:0, minor:0, check:0 };
     const legacyBadge = item.legacy
-      ? '<span style="background:#f59e0b;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px;margin-left:6px;">⚠️ 규율 적용 전</span>'
+      ? '<span style="background:#f59e0b;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px;margin-left:6px;">&#x26A0;&#xFE0F; 규율 적용 전</span>'
       : '';
     const manualBadge = (item.source === 'manual')
       ? '<span style="background:#6b7280;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px;margin-left:4px;">참고 예시</span>'
       : '';
-    return \`
-    <div class="rdb-report-row" id="rdb-row-\${id}">
-      <div class="rdb-rhead" onclick="rdbToggleRow('\${id}')">
-        <div class="rtitle">
-          <div class="name">\${name}\${legacyBadge}\${manualBadge}</div>
-          <div class="sub">\${org} · \${dateStr}</div>
-        </div>
-        <div class="counts">
-          <span class="rdb-minicount crit">치명 \${counts.crit}</span>
-          <span class="rdb-minicount major">중대 \${counts.major}</span>
-          <span class="rdb-minicount minor">경미 \${counts.minor}</span>
-          <span class="rdb-minicount check">확인 \${counts.check}</span>
-        </div>
-        <button class="rdb-xlsx-btn" onclick="event.stopPropagation(); rdbExportExcel('\${id}')" title="엑셀 다운로드">⬇ 엑셀</button>
-        <span class="rdb-chev">▸</span>
-      </div>
-      <div class="rdb-detail" id="rdb-detail-\${id}"></div>
-    </div>
-  \`;
-  }).join('');
-}
+    return '<div class="rdb-report-row" id="rdb-row-' + id + '">'
+      + '<div class="rdb-rhead" onclick="rdbToggleRow(\'' + id + '\')">'
+      + '<div class="rtitle">'
+      + '<div class="name">' + name + legacyBadge + manualBadge + '</div>'
+      + '<div class="sub">' + org + ' &middot; ' + dateStr + '</div>'
+      + '</div>'
+      + '<div class="counts">'
+      + '<span class="rdb-minicount crit">치명 ' + counts.crit + '</span>'
+      + '<span class="rdb-minicount major">중대 ' + counts.major + '</span>'
+      + '<span class="rdb-minicount minor">경미 ' + counts.minor + '</span>'
+      + '<span class="rdb-minicount check">확인 ' + counts.check + '</span>'
+      + '</div>'
+      + '<button class="rdb-xlsx-btn" onclick="event.stopPropagation(); rdbExportExcel(\'' + id + '\')" title="엑셀 다운로드">&#x2B07; 엑셀</button>'
+      + '<span class="rdb-chev">&#x25B8;</span>'
+      + '</div>'
+      + '<div class="rdb-detail" id="rdb-detail-' + id + '"></div>'
+      + '</div>';
+  }).join('');\n}
 
 function rdbToggleRow(id){
   const row = document.getElementById('rdb-row-'+id);
