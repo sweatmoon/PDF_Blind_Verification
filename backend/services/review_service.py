@@ -265,7 +265,7 @@ _SYSTEM_PROMPT_COMPACT = """\
   "date": "검수일",
   "counts": {"crit":0,"major":0,"minor":0,"check":0},
   "verdict": "총평(HTML <b>태그 가능, \\n 줄바꿈)",
-  "overview": [["사업명","RFP기준","포털기준","PPT표기","ok|major|crit"]],
+  "overview": [["항목","감리RFP기준값","포털기준값","PPT표기값","ok|major|crit"]],
   "baseline": [["항목","기준값","출처"]],
   "scopeCoverage": [{"requirement":"","coveredInPPT":true,"ppSlide":"","note":""}],
   "critical": [{"title":"","slide":"","fix":"","body":""}],
@@ -298,12 +298,12 @@ _SYSTEM_PROMPT = """\
 ## 출력 JSON 스키마 (키와 타입을 정확히 지킬 것)
 {
   "id": "string — 영문소문자-숫자-하이픈 슬러그",
-  "name": "string — 사업명(PPT 표지 기준)",
-  "org": "string — 발주기관명",
+  "name": "string — 사업명(감리사업 RFP 기준)",
+  "org": "string — 발주기관명(감리사업 RFP 기준)",
   "date": "string — 검수일",
   "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
   "verdict": "string — 총평. <b>강조</b> HTML 태그 사용 가능. 줄바꿈은 \\n",
-  "overview": [["사업명","RFP기준","포털기준","PPT표기","ok|major|crit"], ...],
+  "overview": [["항목","감리RFP기준값","포털기준값","PPT표기값","ok|major|crit"], ...],
   "baseline": [["항목명","기준값","출처"], ...],
   "scopeCoverage": [{"requirement":"string","coveredInPPT":true,"ppSlide":"string","note":"string"}, ...],
   "critical": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
@@ -359,6 +359,13 @@ body나 fix에 추측성 표현이 포함된 항목은 출력하지 않는다.
 - 예산 부가세: RFP에 부가세 포함/제외 기준이 명시되지 않으면 "가격 정보 미확인"으로 checkNeeded에만 넣는다.
 - 인력 직함/등급 차이: RFP에 정확한 직함이 명시된 경우에만 지적하고, 그렇지 않으면 무시한다.
 
+### 규칙 F — 대상사업 RFP의 역할을 정확히 이해한다
+[대상사업 RFP]는 overview(사업 개요 정합성) 비교에 **사용하지 않는다**.
+overview는 오직 [감리사업 RFP] ↔ 포털 HTML ↔ PPT 3자 비교만 한다.
+[대상사업 RFP]는 **오직 irrelevant(잔존문구 검출)에서만** 활용한다:
+- PPT 내용이 대상사업(AI 전환사업 등)과 무관한 타사업 내용(과거 수행 사업의 업무 범위·산출물·조직도 등)을 그대로 복붙한 경우를 검출한다.
+- 대상사업 RFP에 없는 업무 항목이 PPT에 마치 이번 사업 내용인 것처럼 기술된 경우를 검출한다.
+
 ### 최종 자기점검 — 출력 직전 반드시 수행
 JSON을 완성한 뒤, 출력하기 전에 다음을 점검한다:
 1. critical + major + minor의 합계가 10을 초과하면, 근거가 가장 약한 항목부터 삭제하여 10 이하로 맞춘다.
@@ -378,14 +385,22 @@ def _build_messages(
 
 아래 4개 문서를 바탕으로 정성제안서 PPT를 검수하여 JSON을 출력하라.
 
+## 각 문서의 역할 (반드시 숙지)
+- [감리사업 RFP]: 이번 입찰의 발주 문서. 사업명·발주기관·감리원 자격·일정·납품물 기준은 모두 여기서 확인.
+- [대상사업 RFP]: 감리 대상인 SI사업의 발주 문서. **overview 비교에 사용하지 않는다.** 오직 PPT가 대상사업과 무관한 타사업 내용을 복붙했는지(irrelevant) 판단할 때만 참조.
+- [포털 제안작업표 HTML]: 발주기관 포털의 확정 데이터. 일정·공수·인력 기준값.
+- [정성제안서 PPT]: 검수 대상. 위 3개 문서와 대조한다.
+
 ## 검수 지침
 
 ### [1] 사업 개요 정합성 → overview
-- 사업명 / 발주기관 / 사업기간을 각각 개별 행으로 3개 문서와 비교
-- 글자 단위 차이, 괄호·부제 포함 여부까지 확인
+- **감리사업 RFP** ↔ 포털 HTML ↔ PPT 3자 비교만 한다. 대상사업 RFP는 사용하지 않는다.
+- 비교 항목: 감리사업명 / 발주기관 / 감리 형태 / 사업기간 / 요구 공수
+- 각 항목을 개별 행으로 출력. 글자 단위 차이, 괄호·부제 포함 여부까지 확인.
+- 형식: ["항목명", "감리RFP기준값", "포털기준값", "PPT표기값", "ok|major|crit"]
 
 ### [2] 제안 범위 커버리지 → scopeCoverage
-- RFP 과업범위 항목을 하나씩 추출 후 PPT 반영 여부 대조
+- **감리사업 RFP** 과업범위 항목을 하나씩 추출 후 PPT 반영 여부 대조
 - 미커버(coveredInPPT:false) → major 이상 등재
 
 ### [3] 가격·비용 대조 → costCheck
@@ -393,20 +408,28 @@ def _build_messages(
 - 가격 정보 미확보 시 [] 로 두고 checkNeeded에 "가격 정보 미확인" 등재
 
 ### [4] 기술 자격 요건 → qualificationCheck
-- RFP 감리원 자격 기준을 인원별로 대조
+- **감리사업 RFP** 감리원 자격 기준을 인원별로 대조
 - meets:false → critical 즉시 등재
 
 ### [5] 잔존 문구 검출 → irrelevant
-- 다른 사업 복붙 의심 문구를 슬라이드별로 열거
+- [대상사업 RFP]를 참조하여: PPT 내용 중 대상사업(AI 전환사업 등)과 무관한 **타사업** 내용이 그대로 복붙된 경우를 검출
+- 예: 다른 사업의 업무 범위·조직도·산출물 항목이 이번 사업 내용인 것처럼 기술된 경우
+- 단, 제안사의 수행 실적·회사 소개는 타사업명이 등장해도 정상 — 잔존 문구로 보지 않는다
 - 발견 없어도 summary는 반드시 작성
 
 ### [6] 납기·납품물 대조 → deliverableCheck
-- RFP 요구 산출물과 제출기한을 PPT와 대조
+- **감리사업 RFP** 요구 산출물과 제출기한을 PPT와 대조
 
 ### [7] 일정·공수 대조 → schedule + scheduleNote
+- 포털 HTML의 확정 일정·공수와 PPT를 대조
+
 ### [8] 인력명 대조 → personnel
+- 포털 HTML 확정 인력과 PPT 기재 인력을 대조
+
 ### [9] 오타·표기 일관성 → typoChecklist + typoNote
+
 ### [10] 기준 정보 요약 → baseline
+- 감리사업 RFP와 포털 HTML에서 추출한 확정 기준값 목록
 
 counts는 critical/major/minor/checkNeeded 배열의 실제 길이로 계산.
 verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
@@ -448,6 +471,12 @@ def _build_messages_compact(
     user_content = f"""오늘 날짜: {today}
 
 4개 문서를 분석하여 간략 JSON을 출력하라. 각 배열 항목은 핵심만 간단히 기재할 것.
+
+문서 역할:
+- [감리사업 RFP]: 발주 기준. overview·scopeCoverage·qualificationCheck·deliverableCheck에 사용.
+- [대상사업 RFP]: irrelevant(타사업 복붙 검출)에만 사용. overview 비교 금지.
+- [포털 HTML]: 일정·공수·인력 확정값.
+- [PPT]: 검수 대상.
 
 [감리사업 RFP]
 {_truncate(audit_rfp, 15000)}
