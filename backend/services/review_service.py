@@ -16,7 +16,7 @@ logger = get_logger("review_service")
 
 # 검수 전용 모델 (관리자에서 변경 가능)
 _REVIEW_MODEL_FILE = DATA_DIR / "review_model.txt"
-DEFAULT_REVIEW_MODEL = "claude-sonnet-4-5-20250514"
+DEFAULT_REVIEW_MODEL = "claude-sonnet-4-5"
 
 
 def get_review_model() -> str:
@@ -24,6 +24,11 @@ def get_review_model() -> str:
         if _REVIEW_MODEL_FILE.exists():
             m = _REVIEW_MODEL_FILE.read_text("utf-8").strip()
             if m:
+                # 잘못된 날짜 suffix 자동 보정 (예: claude-sonnet-4-5-20250514 → claude-sonnet-4-5)
+                if m == "claude-sonnet-4-5-20250514":
+                    m = "claude-sonnet-4-5"
+                    _REVIEW_MODEL_FILE.write_text(m, "utf-8")
+                    logger.info(f"[review] 잘못된 모델 ID 자동 보정: {m}")
                 return m
     except Exception:
         pass
