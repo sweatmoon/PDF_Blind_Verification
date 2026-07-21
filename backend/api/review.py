@@ -53,8 +53,17 @@ async def upload_and_review(
 ):
     """4개 파일을 받아 Claude Sonnet으로 제안서 검수를 시작합니다."""
 
-    # API 키 체크
-    key = ANTHROPIC_API_KEY
+    # API 키 체크 — 환경변수 → 파일 → DB 순으로 런타임마다 재조회
+    import os
+    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not key:
+        # 파일 fallback
+        try:
+            _key_file = DATA_DIR / "claude_api_key.txt"
+            if _key_file.exists():
+                key = _key_file.read_text("utf-8").strip()
+        except Exception:
+            pass
     if not key:
         # DB fallback
         try:
@@ -127,7 +136,8 @@ async def _run_review(job_id: str, file_data: dict, api_key: str):
     try:
         from services.review_service import run_review
 
-        loop = asyncio.get_event_loop()
+        # Python 3.10+에서 get_event_loop() deprecated → get_running_loop() 사용
+        loop = asyncio.get_running_loop()
 
         def _blocking():
             return run_review(
