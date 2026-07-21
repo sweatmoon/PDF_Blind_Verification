@@ -408,26 +408,64 @@ def run_review(
     m = re.search(r"```json\s*([\s\S]+?)\s*```", raw)
     json_str = m.group(1) if m else raw.strip()
 
+    def _sanitize_json_strings(s: str) -> str:
+        """JSON 문자열 값 안에 들어간 실제 제어문자(줄바꿈 등)를 이스케이프 시퀀스로 변환.
+        Claude가 verdict/body 등 긴 문자열 안에 raw newline을 넣어
+        JSONDecodeError: Invalid control character 가 발생하는 문제 수정."""
+        result: list[str] = []
+        in_string = False
+        escaped = False
+        for ch in s:
+            if escaped:
+                result.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                result.append(ch)
+                continue
+            if ch == '"':
+                in_string = not in_string
+                result.append(ch)
+                continue
+            if in_string:
+                if ch == "\n":
+                    result.append("\\n")
+                elif ch == "\r":
+                    result.append("\\r")
+                elif ch == "\t":
+                    result.append("\\t")
+                else:
+                    result.append(ch)
+            else:
+                result.append(ch)
+        return "".join(result)
+
     try:
         result = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.warning(f"[review] JSON 파싱 실패: {e}. raw[:500]={raw[:500]}")
-        # 부분 복구 시도
-        result = {
-            "id": "parse-error",
-            "name": "파싱 오류",
-            "org": "",
-            "date": f"{today} 검수",
-            "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
-            "verdict": f"<p>JSON 파싱 오류가 발생했습니다. Claude 응답 원문:</p><pre style='font-size:11px;white-space:pre-wrap'>{raw[:3000]}</pre>",
-            "baseline": [],
-            "critical": [], "major": [], "minor": [], "checkNeeded": [],
-            "schedule": [], "scheduleNote": "",
-            "personnel": [],
-            "irrelevant": "",
-            "typoChecklist": [], "typoNote": "",
-            "priority": {"crit": [], "major": [], "check": []},
-        }
+    except json.JSONDecodeError:
+        # 1차 실패 → 문자열 내 제어문자 이스케이프 후 재시도
+        try:
+            result = json.loads(_sanitize_json_strings(json_str))
+            logger.info("[review] JSON sanitize 후 파싱 성공")
+        except json.JSONDecodeError as e:
+            logger.warning(f"[review] JSON 파싱 최종 실패: {e}. raw[:300]={raw[:300]}")
+            result = {
+                "id": "parse-error",
+                "name": "파싱 오류",
+                "org": "",
+                "date": f"{today} 검수",
+                "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
+                "verdict": f"<p>JSON 파싱 오류가 발생했습니다. Claude 응답 원문:</p>"
+                           f"<pre style='font-size:11px;white-space:pre-wrap'>{raw[:3000]}</pre>",
+                "baseline": [],
+                "critical": [], "major": [], "minor": [], "checkNeeded": [],
+                "schedule": [], "scheduleNote": "",
+                "personnel": [],
+                "irrelevant": "",
+                "typoChecklist": [], "typoNote": "",
+                "priority": {"crit": [], "major": [], "check": []},
+            }
 
     # counts 자동 계산 (Claude가 빠뜨린 경우 보정)
     result.setdefault("counts", {})
