@@ -398,15 +398,20 @@ def run_review(
 
     message = client.messages.create(
         model=model,
-        max_tokens=8192,
+        max_tokens=16000,          # 검수 JSON 전체 출력에 충분한 크기
         system=_SYSTEM_PROMPT,
         messages=messages,
     )
 
+    # stop_reason 확인 — max_tokens로 잘린 경우 경고
+    stop_reason = message.stop_reason
+    if stop_reason == "max_tokens":
+        logger.warning(f"[review] Claude 응답이 max_tokens에 의해 잘림! 일부 결과 누락 가능")
+
     # prefill "{" 포함해서 전체 JSON 복원
     raw_text = message.content[0].text if message.content else ""
     raw = "{" + raw_text          # prefill의 "{" 를 앞에 붙임
-    logger.info(f"[review] Claude 응답: {len(raw_text):,}자 (prefill 포함 {len(raw):,}자)")
+    logger.info(f"[review] Claude 응답: {len(raw_text):,}자 (stop={stop_reason}, prefill 포함 {len(raw):,}자)")
 
     # ── JSON 파싱 ────────────────────────────────────────────────
     # 혹시 코드블록으로 감싸진 경우 제거 후 파싱
@@ -477,14 +482,22 @@ def run_review(
                 logger.info("[review] 말미 잘라내기 후 파싱 성공")
 
     if result is None:
-        logger.warning(f"[review] JSON 파싱 최종 실패. 응답 앞부분: {raw[:500]}")
+        logger.warning(
+            f"[review] JSON 파싱 최종 실패 (stop={stop_reason}).\n"
+            f"  응답 처음 1000자: {raw[:1000]}\n"
+            f"  응답 끝  500자: {raw[-500:]}"
+        )
         result = {
             "id": "parse-error",
             "name": "파싱 오류",
             "org": "",
             "date": f"{today} 검수",
             "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
-            "verdict": "JSON 파싱에 실패했습니다. 파일을 다시 업로드하거나 관리자에게 문의하세요.",
+            "verdict": (
+                "JSON 파싱에 실패했습니다. "
+                + ("응답이 너무 길어 잘렸습니다(max_tokens 초과). " if stop_reason == 'max_tokens' else "")
+                + "파일을 다시 업로드하거나 관리자에게 문의하세요."
+            ),
             "baseline": [],
             "critical": [], "major": [], "minor": [], "checkNeeded": [],
             "schedule": [], "scheduleNote": "",
@@ -492,6 +505,9 @@ def run_review(
             "irrelevant": {"summary": "파싱 오류로 분석 불가", "items": []},
             "typoChecklist": [], "typoNote": "",
             "priority": {"crit": [], "major": [], "check": []},
+            "_debug_raw": raw[:3000],   # 개발자 디버깅용 (첫 3000자)
+            "_debug_tail": raw[-1000:], # 개발자 디버깅용 (마지막 1000자)
+            "_stop_reason": stop_reason,
         }
 
     # ── 신규 필드 기본값 보정 ─────────────────────────────────────

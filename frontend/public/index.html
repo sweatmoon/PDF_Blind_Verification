@@ -4761,6 +4761,32 @@ function rvReset() {
 function rvRenderResult(r) {
   if (!r) return;
 
+  // ── 파싱 실패 감지 ──────────────────────────────────────────────
+  if (r.id === 'parse-error') {
+    const verdictCard = document.getElementById('rv-verdict-card');
+    if (verdictCard) {
+      verdictCard.innerHTML = `
+        <div class="flex items-center gap-2 mb-3">
+          <i class="fas fa-triangle-exclamation text-red-500"></i>
+          <span class="font-semibold text-red-700">JSON 파싱 실패</span>
+          ${r._stop_reason === 'max_tokens' ? '<span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">응답 잘림(max_tokens)</span>' : ''}
+        </div>
+        <p class="text-sm text-slate-700 mb-3">${_esc(r.verdict || '')}</p>
+        ${r._debug_raw ? `
+          <details class="mt-2">
+            <summary class="text-xs text-slate-400 cursor-pointer hover:text-slate-600">Claude 응답 원문 (디버그)</summary>
+            <pre class="mt-2 text-xs bg-slate-50 border border-slate-200 rounded p-3 overflow-x-auto whitespace-pre-wrap max-h-64">${_esc(r._debug_raw)}</pre>
+            ${r._debug_tail ? `<pre class="mt-1 text-xs bg-slate-50 border border-slate-200 rounded p-3 overflow-x-auto whitespace-pre-wrap max-h-32">… 말미: ${_esc(r._debug_tail)}</pre>` : ''}
+          </details>` : ''}`;
+    }
+    // 제목도 업데이트
+    const title = document.getElementById('rv-res-title');
+    const sub   = document.getElementById('rv-res-sub');
+    if (title) title.textContent = '검수 실패';
+    if (sub)   sub.textContent   = r.date || '';
+    return;
+  }
+
   // 제목
   const title = document.getElementById('rv-res-title');
   const sub   = document.getElementById('rv-res-sub');

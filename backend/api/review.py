@@ -199,6 +199,25 @@ def get_review_report(job_id: str):
     return JSONResponse(report)
 
 
+# ── 디버그: 파싱 실패 원인 조회 ──────────────────────────────────
+@router.get("/debug/{job_id}")
+def get_review_debug(job_id: str):
+    """파싱 실패 시 Claude 원본 응답을 확인하는 개발용 엔드포인트."""
+    job = get_job(job_id)
+    if not job or job.get("type") != "review":
+        raise HTTPException(404, "검수 작업을 찾을 수 없습니다.")
+    report = job.get("report") or {}
+    return JSONResponse({
+        "job_id":       job_id,
+        "status":       job.get("status"),
+        "stop_reason":  report.get("_stop_reason", "N/A"),
+        "parse_failed": report.get("id") == "parse-error",
+        "debug_raw_head": report.get("_debug_raw", "")[:2000],
+        "debug_raw_tail": report.get("_debug_tail", ""),
+        "error":        job.get("error"),
+    })
+
+
 # ── 검수 모델 조회/변경 ──────────────────────────────────────────
 @router.get("/model")
 def get_model():
