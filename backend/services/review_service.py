@@ -462,22 +462,22 @@ verdict는 검수 총평 (중요 표현 <b>굵게</b>, 줄바꿈 \\n).
 ---
 
 [감리사업 RFP]
-{_truncate(audit_rfp, 200000)}
+{_truncate(audit_rfp, 25000)}
 
 ---
 
 [대상사업 RFP]
-{_truncate(target_rfp, 200000)}
+{_truncate(target_rfp, 20000)}
 
 ---
 
 [포털 제안작업표 HTML]
-{_truncate(portal_html, 100000)}
+{_truncate(portal_html, 20000)}
 
 ---
 
 [정성제안서 PPT]
-{_truncate(proposal_ppt, 500000)}
+{_truncate(proposal_ppt, 80000)}
 """
     return [
         {"role": "user",      "content": user_content},
@@ -507,16 +507,16 @@ def _build_messages_compact(
 범위 밖 항목(출력 금지): 예산·기성금·과업범위 커버리지·자격요건 세부검토
 
 [감리사업 RFP]
-{_truncate(audit_rfp, 100000)}
+{_truncate(audit_rfp, 15000)}
 
 [대상사업 RFP]
-{_truncate(target_rfp, 100000)}
+{_truncate(target_rfp, 12000)}
 
 [포털 제안작업표 HTML]
-{_truncate(portal_html, 50000)}
+{_truncate(portal_html, 12000)}
 
 [정성제안서 PPT]
-{_truncate(proposal_ppt, 300000)}
+{_truncate(proposal_ppt, 50000)}
 """
     return [
         {"role": "user",      "content": user_content},
