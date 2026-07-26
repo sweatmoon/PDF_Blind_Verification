@@ -202,16 +202,48 @@ def _extract_text_from_pptx(data: bytes) -> str:
 
 
 def _extract_text_from_html(data: bytes) -> str:
-    """HTML → 텍스트 추출"""
+    """HTML → 텍스트 추출 (테이블은 마크다운으로 변환하여 컬럼 구조 보존)
+
+    ⚠️ 핵심: get_text()만 쓰면 테이블 셀이 모두 줄바꿈으로 나열됨.
+    예) 예비조사(MD)=2, 감리(MD)=12, 조치확인(MD)=3, 제안(MD)=19 가 모두
+        "2 12 3 19" 처럼 뭉쳐서 Claude가 어느 컬럼인지 판별 불가.
+    → 테이블을 마크다운 | col | col | 형태로 변환하면 열 위치가 명확해짐.
+    """
     try:
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(data, "html.parser")
         # script/style 제거
         for tag in soup(["script", "style"]):
             tag.decompose()
+
+        # ── 테이블 → 마크다운 변환 ─────────────────────────────────
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                table.decompose()
+                continue
+
+            md_lines: list[str] = []
+            for i, tr in enumerate(rows):
+                cells = tr.find_all(["th", "td"])
+                if not cells:
+                    continue
+                values = [c.get_text(separator=" ", strip=True).replace("|", "｜")
+                          for c in cells]
+                md_lines.append("| " + " | ".join(values) + " |")
+                # 헤더 다음 구분선
+                if i == 0 and tr.find("th"):
+                    md_lines.append("| " + " | ".join(["---"] * len(values)) + " |")
+
+            # 테이블 원소를 마크다운 텍스트 노드로 교체
+            from bs4 import NavigableString
+            table.replace_with(NavigableString("\n" + "\n".join(md_lines) + "\n"))
+
         return soup.get_text(separator="\n", strip=True)
+
     except Exception:
-        # fallback: 정규식
+        # fallback: 정규식 (구조 무너지지만 최소한 텍스트는 유지)
         text = data.decode("utf-8", errors="ignore")
         text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL)
         text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
