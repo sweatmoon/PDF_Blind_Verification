@@ -4988,9 +4988,14 @@ function rvRenderResult(r) {
       </tr>`;
     }).join('');
     // 합계 행: HTML MD, PPT MD 숫자 합산
+    // "19 (슬라이드 92)" 같은 값에서 앞의 숫자만 추출 — replace(/[^0-9.]/g,'') 쓰면 "1992"로 파싱됨
+    const _parseMD = v => {
+      const m = String(v||'').match(/^(\d+(\.\d+)?)/);
+      return m ? parseFloat(m[1]) : NaN;
+    };
     const mdNums = r.schedule.reduce((acc, row) => {
-      const h = parseFloat(String(row[3]||'').replace(/[^0-9.]/g,''));
-      const p = parseFloat(String(row[4]||'').replace(/[^0-9.]/g,''));
+      const h = _parseMD(row[3]);
+      const p = _parseMD(row[4]);
       if (!isNaN(h)) acc.html += h;
       if (!isNaN(p)) acc.ppt  += p;
       return acc;
