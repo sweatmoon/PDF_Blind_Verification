@@ -628,6 +628,16 @@ def run_review(
 5. 필요한 만큼 search_document를 반복 호출하여 모든 검수 항목(9개) 확인
 6. 확인이 완료되면 submit_report로 최종 JSON 제출
 
+## 포털 HTML 공수(MD) 읽기 규칙 (반드시 준수)
+포털 제안작업표 HTML의 감리 일정 표에는 단계별로 다음 컬럼이 존재한다:
+  예비조사(MD) / 감리(MD) / 조치확인(MD) / **제안(MD)**
+- **기준값은 반드시 "제안(MD)" 컬럼 합계를 사용한다.**
+- "제안(MD)" = 해당 단계의 감리원+전문가 전체 투입 공수 합계
+- 감리원 공수만 따로 합산하거나, 예비조사/감리/조치확인을 따로 쓰지 않는다.
+- 단계별 "제안(MD)" 값을 모두 더한 값 = 포털 확정 총 공수
+- 예시: 요구정의 19MD, 설계 45MD, 구현 34MD, 종료 35MD, 상시 15MD → 합계 148MD
+- schedule 배열의 "HTML공수(MD)" 컬럼에는 이 "제안(MD)" 값을 기입한다.
+
 ## 검수 항목 (9개)
 baseline / critical / major / minor / checkNeeded /
 schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
