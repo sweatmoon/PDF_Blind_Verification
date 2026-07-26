@@ -281,6 +281,7 @@ _SYSTEM_PROMPT = """\
   "minor":    [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "checkNeeded": [{"title":"string","slide":"string","fix":"string","body":"string"}, ...],
   "schedule": [["단계명","HTML기준일정","PPT일정","HTML공수(MD)","PPT공수(MD)","ok|major|check|crit"], ...],
+  // ⚠️ schedule 배열에는 단계 행만 넣는다. "합계" 행은 절대 포함하지 않는다. 합계는 프론트엔드가 자동 계산한다.
   "scheduleNote": "string",
   "personnel": [["구분","HTML기준인력","PPT표기인력","ok|major|check|crit","슬라이드번호","불일치내용(ok이면 빈 문자열)"], ...],
   "irrelevant": {"summary":"string","items":[{"text":"string","slide":"string","sourceGuess":"string","severity":"high|low"}]},

@@ -4964,8 +4964,9 @@ function rvRenderResult(r) {
   const schNote = document.getElementById('rv-schedule-note');
   if (schBody && r.schedule && r.schedule.length) {
     schCard.classList.remove('hidden');
-    // 데이터 행 렌더링
-    const dataRows = r.schedule.map(row => {
+    // 데이터 행 렌더링 — 단계명이 "합계"인 행은 백엔드가 잘못 포함시킨 합계 행이므로 제외
+    const scheduleRows = r.schedule.filter(row => String(row[0]||'').trim() !== '합계');
+    const dataRows = scheduleRows.map(row => {
       const verdict = (row[5] || 'ok').toLowerCase();
       const isCrit  = verdict.includes('crit');
       const isMajor = verdict.includes('major');
@@ -4993,7 +4994,7 @@ function rvRenderResult(r) {
       const m = String(v||'').match(/^(\d+(\.\d+)?)/);
       return m ? parseFloat(m[1]) : NaN;
     };
-    const mdNums = r.schedule.reduce((acc, row) => {
+    const mdNums = scheduleRows.reduce((acc, row) => {
       const h = _parseMD(row[3]);
       const p = _parseMD(row[4]);
       if (!isNaN(h)) acc.html += h;
