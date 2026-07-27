@@ -251,6 +251,226 @@ def _extract_text_from_html(data: bytes) -> str:
         return re.sub(r"\s+", "\n", text).strip()
 
 
+def _parse_portal_html(data: bytes) -> str:
+    """포털 HTML에서 tblSchedule / tblManList 를 직접 파싱하여
+    Claude가 숫자를 절대 틀리지 않도록 구조화된 텍스트로 반환.
+
+    tblSchedule 구조:
+      - 단계별 2행(감리원 행 + 전문가 행), rowspan으로 단계명·날짜 공유
+      - 컬럼 순서: [단계명] [날짜] [인력구분] [인원수] [예비조사MD] [감리MD] [조치확인MD] [제안MD] [투입인력]
+      - HTML공수(MD) = 같은 단계 감리원 제안MD + 전문가 제안MD
+      - 맨 아래 합계 행으로 검증
+
+    tblManList 구조:
+      - 인력 구분(단계감리팀/전문가팀 등), 성명, 정기/추가/검수지원/소계 MD, 상근 여부, 등급
+    """
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(data, "html.parser")
+        lines: list[str] = []
+
+        # ── 1. tblSchedule 파싱 ────────────────────────────────────
+        tbl_sched = soup.find("table", {"id": "tblSchedule"})
+        if tbl_sched:
+            lines.append("=== 포털 감리 일정 (tblSchedule) ===")
+            lines.append("※ HTML공수(MD) = 각 단계의 [감리원 제안MD + 전문가 제안MD]")
+            lines.append("")
+
+            rows = tbl_sched.find_all("tr")
+
+            # rowspan 처리용: 현재 행에 carryover될 (단계명, 날짜) 추적
+            # {col_index: (value, remaining_rowspan)}
+            carry: dict[int, tuple[str, int]] = {}
+
+            # 헤더 행(th만 있는 행)은 건너뜀
+            data_rows = [r for r in rows if r.find("td")]
+
+            # 합계 행 분리 (th로만 구성된 합계 행이 마지막에 존재)
+            # "합계" 텍스트를 포함하는 마지막 행
+            sum_row = None
+            for r in rows:
+                if "합계" in r.get_text():
+                    sum_row = r
+
+            stage_data: list[dict] = []  # [{단계명, 날짜, 인력구분, 인원수, 예비조사, 감리, 조치확인, 제안MD, 투입인력}]
+
+            for tr in data_rows:
+                if tr == sum_row:
+                    continue
+
+                tds = tr.find_all(["td", "th"])
+                # carry 적용: 빠진 앞 컬럼(rowspan으로 이전 행이 차지) 채워넣기
+                full_cells: list[str] = []
+                cell_iter = iter(tds)
+
+                # 최대 9컬럼 (단계명, 날짜, 인력구분, 인원, 예비조사, 감리, 조치확인, 제안MD, 투입인력)
+                col_idx = 0
+                td_list = list(tds)
+                td_ptr = 0
+
+                result_cols: list[str] = []
+                for col_idx in range(9):
+                    if col_idx in carry:
+                        val, rem = carry[col_idx]
+                        result_cols.append(val)
+                        if rem - 1 > 0:
+                            carry[col_idx] = (val, rem - 1)
+                        else:
+                            del carry[col_idx]
+                    else:
+                        if td_ptr >= len(td_list):
+                            result_cols.append("")
+                            continue
+                        td = td_list[td_ptr]
+                        td_ptr += 1
+                        val = td.get_text(separator=" ", strip=True)
+                        rs = int(td.get("rowspan", 1))
+                        if rs > 1:
+                            carry[col_idx] = (val, rs - 1)
+                        result_cols.append(val)
+
+                # 컬럼 매핑
+                if len(result_cols) >= 8:
+                    stage_data.append({
+                        "단계명":   result_cols[0],
+                        "날짜":     result_cols[1],
+                        "인력구분": result_cols[2],
+                        "인원수":   result_cols[3],
+                        "예비조사": result_cols[4],
+                        "감리MD":   result_cols[5],
+                        "조치확인": result_cols[6],
+                        "제안MD":   result_cols[7],
+                        "투입인력": result_cols[8] if len(result_cols) > 8 else "",
+                    })
+
+            # 단계별로 그룹핑하여 출력
+            stages_seen: list[str] = []
+            stage_groups: dict[str, list[dict]] = {}
+            for row in stage_data:
+                sname = row["단계명"]
+                if sname not in stage_groups:
+                    stages_seen.append(sname)
+                    stage_groups[sname] = []
+                stage_groups[sname].append(row)
+
+            total_html_md = 0
+            for sname in stages_seen:
+                group = stage_groups[sname]
+                감리원_md = 0
+                전문가_md = 0
+                날짜 = ""
+                for row in group:
+                    날짜 = row["날짜"] or 날짜
+                    try:
+                        md_val = int(row["제안MD"])
+                    except (ValueError, TypeError):
+                        md_val = 0
+                    if "감리원" in row["인력구분"]:
+                        감리원_md = md_val
+                    elif "전문가" in row["인력구분"]:
+                        전문가_md = md_val
+                단계_md = 감리원_md + 전문가_md
+                total_html_md += 단계_md
+                lines.append(f"[{sname}]")
+                lines.append(f"  날짜: {날짜}")
+                lines.append(f"  감리원 제안MD: {감리원_md}")
+                lines.append(f"  전문가 제안MD: {전문가_md}")
+                lines.append(f"  단계 합계MD:   {단계_md}  ← HTML공수(MD)")
+                lines.append("")
+
+            # 합계 행 파싱
+            if sum_row:
+                sum_cells = sum_row.find_all(["th", "td"])
+                sum_vals = [c.get_text(strip=True) for c in sum_cells]
+                # 합계 행: 합계 | 인원수 | 예비조사 | 감리 | 조치확인 | 제안MD | ...
+                # 제안MD는 index 5 (0-base: 합계,인원수,예비조사,감리,조치확인,제안MD)
+                portal_total = ""
+                if len(sum_vals) >= 6:
+                    portal_total = sum_vals[5]
+                lines.append(f"[합계]")
+                lines.append(f"  포털 합계 제안MD(합계행): {portal_total}")
+                lines.append(f"  백엔드 직접 계산 합계MD:  {total_html_md}")
+                lines.append(f"  {'✅ 일치' if str(total_html_md) == portal_total else '⚠️ 불일치 — 포털 합계행 값을 우선 사용'}")
+                lines.append("")
+
+        # ── 2. tblManList 파싱 ────────────────────────────────────
+        tbl_man = soup.find("table", {"id": "tblManList"})
+        if tbl_man:
+            lines.append("=== 포털 제안 인력 (tblManList) ===")
+            lines.append("구분 | 성명 | 정기MD | 추가MD | 검수지원MD | 소계MD | 상근여부 | 등급")
+            lines.append("")
+
+            man_rows = tbl_man.find_all("tr")
+            # man_carry: {col_idx: (value, remaining_rowspan)}
+            man_carry: dict[int, tuple[str, int]] = {}
+
+            for tr in man_rows:
+                tds = tr.find_all("td")
+                if not tds:
+                    continue
+
+                # colspan/rowspan을 모두 고려해 13컬럼 배열로 펼치기
+                # 컬럼 레이아웃(헤더 기준):
+                # 0:구분  1:담당분야(colspan=2→1,2)  3:성명  4:정기  5:추가
+                # 6:검수지원  7:소계  8:상근  9:등급  10:감리원증  11:연락처  12:교육시간
+                result_cols: list[str] = []
+                td_ptr = 0
+                for col_idx in range(13):
+                    if col_idx in man_carry:
+                        val, rem = man_carry[col_idx]
+                        result_cols.append(val)
+                        if rem - 1 > 0:
+                            man_carry[col_idx] = (val, rem - 1)
+                        else:
+                            del man_carry[col_idx]
+                    else:
+                        if td_ptr >= len(tds):
+                            result_cols.append("")
+                            continue
+                        td = tds[td_ptr]
+                        td_ptr += 1
+                        val = td.get_text(separator=" ", strip=True)
+                        rs = int(td.get("rowspan", 1))
+                        cs = int(td.get("colspan", 1))
+                        # rowspan: 다음 행들에 이 값 carry
+                        if rs > 1:
+                            man_carry[col_idx] = (val, rs - 1)
+                        result_cols.append(val)
+                        # colspan: 차지하는 나머지 컬럼도 같은 값으로 채움
+                        for extra in range(1, cs):
+                            next_col = col_idx + extra
+                            result_cols.append(val)
+                            if rs > 1:
+                                man_carry[next_col] = (val, rs - 1)
+
+                # 컬럼 인덱스: 0구분 1담당분야 2담당분야(colspan) 3성명 4정기 5추가 6검수지원 7소계 8상근 9등급
+                if len(result_cols) >= 8:
+                    구분    = result_cols[0]
+                    성명    = result_cols[3] if len(result_cols) > 3 else ""
+                    정기    = result_cols[4] if len(result_cols) > 4 else ""
+                    추가    = result_cols[5] if len(result_cols) > 5 else ""
+                    검수지원 = result_cols[6] if len(result_cols) > 6 else ""
+                    소계    = result_cols[7] if len(result_cols) > 7 else ""
+                    상근    = result_cols[8] if len(result_cols) > 8 else ""
+                    등급    = result_cols[9] if len(result_cols) > 9 else ""
+                    # 합계 행(성명 없고 숫자만 있는 행) 등 의미없는 행 건너뜀
+                    if 성명 and not 성명.isdigit():
+                        lines.append(f"  {구분} | {성명} | 정기={정기} 추가={추가} 검수지원={검수지원} 소계={소계} | {상근} | {등급}")
+
+            lines.append("")
+
+        result = "\n".join(lines)
+        if not result.strip():
+            # tblSchedule/tblManList 없으면 기존 방식 fallback
+            return _extract_text_from_html(data)
+        return result
+
+    except Exception as e:
+        logger.warning(f"포털 HTML 직접 파싱 실패, fallback: {e}")
+        return _extract_text_from_html(data)
+
+
 
 
 _SYSTEM_PROMPT = """\
@@ -608,7 +828,8 @@ def run_review(
         elif ext in (".pptx", ".ppt"):
             return _extract_text_from_pptx(data)
         elif ext in (".html", ".htm"):
-            return _extract_text_from_html(data)
+            # portal HTML은 tblSchedule/tblManList 직접 파싱
+            return _parse_portal_html(data)
         elif ext == ".hwpx":
             return _extract_text_from_hwpx(data)
         elif ext == ".hwp":
@@ -674,43 +895,12 @@ def run_review(
 - "투입공수 합계", "총 XXX MD" 같은 합계 셀이 있으면 그 값을 우선 활용한다
 - 단계별 공수가 별도 표로 없고 인력별로만 표기된 경우: 각 인력의 해당 단계 공수를 합산한다
 
-## 포털 HTML 공수(MD) 읽기 규칙 ⚠️ 절대 위반 금지
-
-### 테이블 구조 이해 (필수)
-포털 감리일정 테이블은 단계별로 **감리원 행 + 전문가 행** 2개가 존재한다:
-
-```
-| 설계 | 날짜 | 감리원 | 인원 | 예비조사 | 감리 | 조치확인 | 제안(MD) |
-| 설계 | 날짜 | 전문가 | 인원 | 예비조사 | 감리 | 조치확인 | 제안(MD) |
-```
-
-각 행의 컬럼 구성:
-  [단계명] / [날짜] / [인력구분: 감리원 or 전문가] / [인원수] / [예비조사(MD)] / [감리(MD)] / [조치확인(MD)] / **[제안(MD)]**
-
-### 반드시 지켜야 할 규칙
-1. **HTML공수(MD) = 같은 단계의 "감리원 행 제안(MD)" + "전문가 행 제안(MD)" 합산값**
-2. 감리원 행의 제안(MD) 단독 사용 → ❌ 오류 (전문가 공수 누락됨)
-3. [예비조사], [감리], [조치확인] 컬럼은 절대 사용 안 함
-4. 테이블 맨 아래 **"합계" 행의 제안(MD) 값** = 전체 공수 합계 (최종 검증용)
-
-### 단계별 계산 예시 (이 사업의 경우)
-```
-요구정의: 감리원 19 + 전문가  0 = 19 MD
-설계:     감리원 31 + 전문가 14 = 45 MD  ← 감리원 31만 쓰면 틀림
-구현:     감리원 13 + 전문가 21 = 34 MD  ← 감리원 13만 쓰면 틀림
-종료:     감리원 31 + 전문가  4 = 35 MD  ← 감리원 31만 쓰면 틀림
-상시:     감리원 15 + 전문가  0 = 15 MD
-합계:                             148 MD  ← 합계 행으로 검증
-```
-
-### 금지 패턴
-- ❌ 감리원 행 제안(MD)만 사용: 19+31+13+31+15 = 109 → **오답**
-- ❌ 예비조사/감리/조치확인 컬럼 값 사용 → 오답
-
-### 올바른 방법
-- ✅ 각 단계: 감리원 행 제안(MD) + 전문가 행 제안(MD) = 단계 공수
-- ✅ 또는: 테이블 "합계" 행의 제안(MD) 열 값을 직접 읽는다
-- ✅ schedule 배열의 "HTML공수(MD)" = 단계별 (감리원+전문가) 제안(MD) 합산값
+## 포털 HTML 공수(MD) / 일정 읽기 방법
+- portal 문서는 백엔드가 tblSchedule/tblManList를 직접 파싱하여 구조화한 텍스트로 제공된다
+- 각 단계별로 [단계명] / 날짜 / 감리원 제안MD / 전문가 제안MD / **단계 합계MD** 가 명시되어 있다
+- **HTML공수(MD) = "단계 합계MD" 값을 그대로 사용**
+- 맨 아래 [합계] 섹션에 전체 합계MD가 있으며 이 값으로 검증한다
+- 별도 계산 없이 파싱된 값을 그대로 읽으면 된다
 
 ## 검수 항목 (9개)
 baseline / critical / major / minor / checkNeeded /
