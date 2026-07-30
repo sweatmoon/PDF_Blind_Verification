@@ -1041,6 +1041,12 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     final_report: dict | None = None
     stop_reason = "unknown"
 
+    # ── 오탈자 검출 커버리지 추적 ─────────────────────────────────
+    # get_full_text(ppt) 호출 시 커버된 슬라이드 구간을 추적
+    # submit_report 시 전체 슬라이드 미커버 → 차단하고 재지시
+    _typo_covered: set[int] = set()   # 커버된 슬라이드 번호 집합
+    _total_slides_ref: list[int] = [0]  # mutable wrapper: [0] = 전체 슬라이드 수
+
     logger.info(f"[review] Tool Use 루프 시작: model={model}, max_turns={MAX_TURNS}")
 
     for turn in range(MAX_TURNS):
@@ -1079,15 +1085,70 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
 
             logger.info(f"[review] 도구 호출: {tool_name}({list(tool_input.keys())})")
 
-            # submit_report → 루프 즉시 종료
+            # list_slides → 전체 슬라이드 수 파악
+            if tool_name == "list_slides":
+                result = _dispatch_tool(cache_key, tool_name, tool_input)
+                # 결과에서 전체 슬라이드 수 추출 (예: "전체 138개 슬라이드" 또는 "총 138슬라이드")
+                import re as _re
+                m = _re.search(r'(?:전체|총)\s*(\d+)', result)
+                if m:
+                    _total_slides_ref[0] = int(m.group(1))
+                    logger.info(f"[review] 전체 슬라이드 수 파악: {_total_slides_ref[0]}")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": result,
+                })
+                continue
+
+            # get_full_text(ppt) → 커버 구간 기록
+            if tool_name == "get_full_text" and tool_input.get("source") == "ppt":
+                s = int(tool_input.get("start_slide", 1))
+                e = int(tool_input.get("end_slide", _total_slides_ref[0] or 9999))
+                for n in range(s, e + 1):
+                    _typo_covered.add(n)
+                logger.info(f"[review] 오탈자 커버 구간 추가: {s}~{e}, 총 커버={len(_typo_covered)}/{_total_slides_ref[0]}")
+
+            # submit_report → 오탈자 커버리지 검사 후 차단 or 승인
             if tool_name == "submit_report":
+                uncovered: list[int] = []
+                total = _total_slides_ref[0]
+                if total > 0:
+                    uncovered = [n for n in range(1, total + 1) if n not in _typo_covered]
+
+                if uncovered:
+                    # 미커버 구간이 있으면 차단하고 재지시
+                    missing_ranges: list[str] = []
+                    start = uncovered[0]
+                    prev  = uncovered[0]
+                    for n in uncovered[1:]:
+                        if n != prev + 1:
+                            missing_ranges.append(f"{start}~{prev}")
+                            start = n
+                        prev = n
+                    missing_ranges.append(f"{start}~{prev}")
+                    block_msg = (
+                        f"[오탈자 검출 미완료] submit_report를 차단합니다. "
+                        f"아직 검토하지 않은 슬라이드가 {len(uncovered)}개 있습니다: "
+                        f"{', '.join(missing_ranges)}\n"
+                        f"지금 바로 다음 구간부터 get_full_text를 계속 호출하여 "
+                        f"모든 슬라이드의 오탈자를 검출한 뒤 submit_report를 다시 호출하라."
+                    )
+                    logger.warning(f"[review] submit_report 차단 — 미커버 슬라이드: {missing_ranges}")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": block_msg,
+                    })
+                    continue  # submit_report 차단 → 루프 계속
+
+                # 커버리지 완료 → submit_report 승인
                 final_report = tool_input.get("report", {})
-                logger.info("[review] submit_report 수신 → 루프 종료")
-                # tool_result를 보내지 않고 즉시 종료 (이후 처리는 파싱 단계로)
+                logger.info("[review] submit_report 수신 (커버리지 완료) → 루프 종료")
                 stop_reason = "submit_report"
                 break
 
-            # 나머지 도구 실행
+            # 나머지 도구 실행 (list_slides / get_full_text(ppt) / submit_report는 위에서 처리)
             output = _dispatch_tool(cache_key, tool_name, tool_input)
             tool_results.append({
                 "type": "tool_result",
