@@ -771,7 +771,10 @@ def _tool_search_document(job_id: str, source: str, pattern: str, context_lines:
             hits.append(f"[줄 {i+1}]\n{block}")
     if not hits:
         return "매칭 없음"
-    return "\n---\n".join(hits)
+    result = "\n---\n".join(hits[:50])
+    if len(hits) > 50:
+        result += f"\n\n[안내] 총 {len(hits)}건 매칭. 상위 50건만 표시. 더 좁은 패턴으로 재검색 권장."
+    return result
 
 
 def _tool_get_slide_table(job_id: str, slide_number: int) -> str:
@@ -1098,13 +1101,24 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
                 })
                 continue
 
-            # get_full_text(ppt) → 커버 구간 기록
+            # get_full_text(ppt) → 커버 구간 기록 + 크기 제한 적용
             if tool_name == "get_full_text" and tool_input.get("source") == "ppt":
                 s = int(tool_input.get("start_slide", 1))
                 e = int(tool_input.get("end_slide", _total_slides_ref[0] or 9999))
                 for n in range(s, e + 1):
                     _typo_covered.add(n)
                 logger.info(f"[review] 오탈자 커버 구간 추가: {s}~{e}, 총 커버={len(_typo_covered)}/{_total_slides_ref[0]}")
+                ft_output = _dispatch_tool(cache_key, tool_name, tool_input)
+                MAX_FT_CHARS = 60000  # 30슬라이드 구간 ~20,000 토큰
+                if len(ft_output) > MAX_FT_CHARS:
+                    ft_output = ft_output[:MAX_FT_CHARS] + f"\n\n[잘림] {MAX_FT_CHARS}자 초과로 잘렸습니다. 구간을 더 좁혀서(15슬라이드씩) 재호출하세요."
+                    logger.warning(f"[review] get_full_text 결과 잘림: {s}~{e}")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": ft_output,
+                })
+                continue
 
             # submit_report → 오탈자 커버리지 검사 후 차단 or 승인
             if tool_name == "submit_report":
@@ -1147,6 +1161,11 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
 
             # 나머지 도구 실행 (list_slides / get_full_text(ppt) / submit_report는 위에서 처리)
             output = _dispatch_tool(cache_key, tool_name, tool_input)
+            # tool 결과가 너무 크면 잘라서 전달 (토큰 초과 방지)
+            MAX_TOOL_CHARS = 40000  # ~13,000 토큰
+            if len(output) > MAX_TOOL_CHARS:
+                output = output[:MAX_TOOL_CHARS] + f"\n\n[잘림] 결과가 너무 길어 {MAX_TOOL_CHARS}자로 잘렸습니다. 더 좁은 키워드로 재검색하거나 특정 슬라이드를 get_slide_table로 조회하세요."
+                logger.warning(f"[review] tool 결과 잘림: {tool_name} → {MAX_TOOL_CHARS}자")
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_id,
