@@ -771,7 +771,7 @@ def _tool_search_document(job_id: str, source: str, pattern: str, context_lines:
             hits.append(f"[줄 {i+1}]\n{block}")
     if not hits:
         return "매칭 없음"
-    return "\n---\n".join(hits[:20])  # 상위 20개 제한
+    return "\n---\n".join(hits)
 
 
 def _tool_get_slide_table(job_id: str, slide_number: int) -> str:
