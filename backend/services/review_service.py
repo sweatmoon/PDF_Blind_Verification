@@ -168,34 +168,61 @@ def _extract_text_from_pdf(data: bytes) -> str:
 
 
 def _extract_text_from_pptx(data: bytes) -> str:
-    """PPTX → 텍스트 추출 (슬라이드별)"""
+    """PPTX → 텍스트 추출 (슬라이드별)
+
+    ⚠️ python-pptx shape.text_frame.text 만으로는 두 가지 텍스트가 누락된다:
+      1) GroupShape 내부 shape — slide.shapes 순회로는 접근 불가
+      2) run이 여러 <a:t>로 쪼개진 경우 — paragraph 내 run들이 분리 저장됨
+
+    → slide._element XML을 직접 이터레이트해 <a:p>(paragraph) 단위로
+      모든 <a:t> run을 concat하면 두 문제 모두 해결된다.
+    표(table)는 <a:tc>(cell) 단위로 별도 처리한다.
+    """
     try:
         from pptx import Presentation
+
+        # DrawingML 네임스페이스
+        _A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+        _TAG_P  = f'{{{_A}}}p'   # paragraph
+        _TAG_T  = f'{{{_A}}}t'   # text run
+        _TAG_TC = f'{{{_A}}}tc'  # table cell
+        _TAG_TR = f'{{{_A}}}tr'  # table row
+
         prs = Presentation(io.BytesIO(data))
-        slides = []
+        slide_texts: list[str] = []
+
         for i, slide in enumerate(prs.slides, 1):
-            texts = []
-            for shape in slide.shapes:
-                try:
-                    if shape.has_text_frame:
-                        t = shape.text_frame.text.strip()
-                        if t:
-                            texts.append(t)
-                    # 표 — 빈 셀도 "-"로 유지해 열 번호가 밀리지 않게 함
-                    if shape.has_table:
-                        for row in shape.table.rows:
-                            row_texts = [
-                                cell.text.strip() if cell.text.strip() else "-"
-                                for cell in row.cells
-                            ]
-                            # 전체가 "-"뿐인 행(완전 빈 행)은 생략
-                            if any(t != "-" for t in row_texts):
-                                texts.append(" | ".join(row_texts))
-                except Exception:
-                    pass
+            texts: list[str] = []
+            # 표 cell XML 경로 — 중복 수집 방지용
+            table_cell_elems: set[int] = set()
+
+            # ── 1. 표(table) 먼저 수집 — 행 단위 | 구분으로 ────────
+            for tc_parent in slide._element.iter(_TAG_TR):
+                row_parts: list[str] = []
+                for tc in tc_parent.iter(_TAG_TC):
+                    table_cell_elems.add(id(tc))
+                    cell_text = "".join(
+                        t.text for t in tc.iter(_TAG_T) if t.text
+                    ).strip()
+                    row_parts.append(cell_text if cell_text else "-")
+                if any(v != "-" for v in row_parts):
+                    texts.append(" | ".join(row_parts))
+
+            # ── 2. 표 외 나머지 paragraph 수집 ──────────────────────
+            for p in slide._element.iter(_TAG_P):
+                # 표 cell 안에 있는 paragraph는 이미 처리했으므로 건너뜀
+                parent = p.getparent()
+                if parent is not None and id(parent) in table_cell_elems:
+                    continue
+                # 같은 paragraph 안의 모든 run을 concat
+                line = "".join(t.text for t in p.iter(_TAG_T) if t.text).strip()
+                if line:
+                    texts.append(line)
+
             if texts:
-                slides.append(f"[슬라이드 {i}]\n" + "\n".join(texts))
-        return "\n\n".join(slides)
+                slide_texts.append(f"[슬라이드 {i}]\n" + "\n".join(texts))
+
+        return "\n\n".join(slide_texts)
     except Exception as e:
         logger.warning(f"PPTX 텍스트 추출 실패: {e}")
         return ""
@@ -644,6 +671,25 @@ TOOLS = [
         }
     },
     {
+        "name": "get_full_text",
+        "description": (
+            "지정한 문서의 전체 텍스트를 슬라이드(또는 페이지) 구분자 포함 그대로 반환한다. "
+            "오탈자·표기 오류 검출처럼 전체 내용을 처음부터 끝까지 읽으면서 직접 판단해야 할 때 사용한다. "
+            "ppt는 [슬라이드 N] 구분자가 포함되어 있어 발견된 오탈자의 슬라이드 번호를 정확히 알 수 있다."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["audit_rfp", "target_rfp", "portal", "ppt"],
+                    "description": "전체 텍스트를 가져올 문서 종류"
+                }
+            },
+            "required": ["source"]
+        }
+    },
+    {
         "name": "submit_report",
         "description": (
             "검수를 완료하고 최종 JSON 보고서를 제출한다. "
@@ -784,6 +830,15 @@ def _tool_list_slides(job_id: str) -> str:
     return f"전체 {total}개 슬라이드\n" + "\n".join(lines_out)
 
 
+def _tool_get_full_text(job_id: str, source: str) -> str:
+    """문서 전체 텍스트 반환 — 오탈자 검출 등 전체 훑기가 필요할 때 사용"""
+    cache = _DOC_CACHE.get(job_id, {})
+    text = cache.get(source, "")
+    if not text:
+        return f"[오류] 문서 '{source}'를 찾을 수 없습니다."
+    return text
+
+
 def _dispatch_tool(job_id: str, tool_name: str, tool_input: dict) -> str:
     """Claude의 tool_use 요청을 실제 함수로 라우팅"""
     if tool_name == "search_document":
@@ -797,6 +852,8 @@ def _dispatch_tool(job_id: str, tool_name: str, tool_input: dict) -> str:
         return _tool_get_slide_table(job_id, tool_input.get("slide_number", 1))
     elif tool_name == "list_slides":
         return _tool_list_slides(job_id)
+    elif tool_name == "get_full_text":
+        return _tool_get_full_text(job_id, tool_input.get("source", "ppt"))
     else:
         return f"[오류] 알 수 없는 도구: {tool_name}"
 
@@ -885,8 +942,17 @@ def run_review(
    - 단계 감리팀 소계만 읽으면 틀린다 — 전문가팀·테스트팀 등 추가 인력이 있으면 반드시 합산한다
    - 단계별 공수가 명시된 표가 없으면 search_document(ppt, "요구정의|설계|구현|종료")로 재탐색한다
 6. 의심 슬라이드는 get_slide_table로 추가 확인
-7. 필요한 만큼 search_document를 반복 호출하여 모든 검수 항목(9개) 확인
-8. 확인이 완료되면 submit_report로 최종 JSON 제출
+7. **get_full_text(source="ppt") → PPT 전체 텍스트를 처음부터 끝까지 읽으면서 오탈자·표기 오류를 직접 찾아낸다**
+   - [슬라이드 N] 구분자가 포함되어 있으므로 발견 즉시 슬라이드 번호를 기록한다
+   - 찾아야 할 오탈자 유형 (패턴 지정이 아니라 **문맥과 맞춤법을 보고 직접 판단**):
+     · 명백한 오타: 글자 하나 잘못 입력 (예: 젋고→젊고, 재방방지→재발방지)
+     · 단어 잘림: 문장 중간에 단어가 잘린 것 (예: "효과성 극대" → "극대화" 누락)
+     · 표기 혼용: 같은 단어를 여러 표기로 쓴 것 (예: 어플리케이션↔애플리케이션, 워크샵↔워크숍)
+     · 외래어 오표기: 국립국어원 기준과 다른 표기 (예: 콘트롤러→컨트롤러)
+     · 띄어쓰기·붙여쓰기 오류 중 의미가 달라지는 것
+   - 발견한 항목은 typoChecklist에 기록한다 (슬라이드 번호, 원문, 수정안)
+8. 필요한 만큼 search_document를 반복 호출하여 모든 검수 항목(9개) 확인
+9. 확인이 완료되면 submit_report로 최종 JSON 제출
 
 ## PPT 공수(MD) 읽기 규칙
 - PPT마다 공수 표기 구조가 다르므로 표를 직접 읽고 판단한다
