@@ -1158,7 +1158,7 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
         messages = _trim_messages(messages)
         response = cl.messages.create(
             model=model,
-            max_tokens=8000,
+            max_tokens=16000,
             system=_SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
@@ -1181,7 +1181,12 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
                 assistant_content.append({"type": getattr(blk, "type", "unknown"), "text": str(blk)})
         messages.append({"role": "assistant", "content": assistant_content})
 
-        # ── 도구 호출이 없으면 루프 종료 ────────────────────────────
+        # ── stop_reason 처리 ────────────────────────────────────
+        if stop_reason == "max_tokens":
+            # 출력 토큰 한도 초과 → 중단된 지점부터 계속 작성하도록 재촉
+            logger.warning(f"[review] 턴 {turn+1} max_tokens 초과 → 계속 요청")
+            messages.append({"role": "user", "content": "계속 작성하라. 중단된 부분부터 이어서 작성하고, 반드시 submit_report 도구로 최종 JSON을 제출하라."})
+            continue
         if stop_reason != "tool_use":
             logger.info(f"[review] stop_reason={stop_reason} → 루프 종료")
             break
