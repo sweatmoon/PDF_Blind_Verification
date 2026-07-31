@@ -968,6 +968,7 @@ def run_review(
     key = api_key or ANTHROPIC_API_KEY
     if not key:
         raise ValueError("Claude API 키가 설정되지 않았습니다.")
+    model = get_review_model()
 
     # ── 텍스트 추출 ──────────────────────────────────────────────
     logger.info(f"[review] 텍스트 추출 시작: {audit_rfp_name}, {target_rfp_name}, {portal_html_name}, {proposal_ppt_name}")
