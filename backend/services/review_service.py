@@ -1047,10 +1047,47 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     _typo_covered: set[int] = set()   # 커버된 슬라이드 번호 집합
     _total_slides_ref: list[int] = [0]  # mutable wrapper: [0] = 전체 슬라이드 수
 
+    def _trim_messages(msgs: list[dict], max_chars: int = 400000) -> list[dict]:
+        """메시지 히스토리 총 문자 수가 max_chars 초과 시
+        오래된 tool_result 내용을 '[생략]'으로 교체하여 크기를 줄인다.
+        첫 번째 user 메시지(초기 지시)와 가장 최근 4개 메시지는 항상 보존한다."""
+        import json as _json
+
+        def _msg_size(m: dict) -> int:
+            return len(_json.dumps(m, ensure_ascii=False))
+
+        total = sum(_msg_size(m) for m in msgs)
+        if total <= max_chars:
+            return msgs
+
+        # 압축 대상: index 1 ~ len-4 사이의 tool_result content
+        trimmed = [m.copy() for m in msgs]
+        for i in range(1, max(1, len(trimmed) - 4)):
+            if total <= max_chars:
+                break
+            msg = trimmed[i]
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                new_content = []
+                for block in msg["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        old_size = len(_json.dumps(block, ensure_ascii=False))
+                        trimmed_block = dict(block)
+                        trimmed_block["content"] = "[이전 tool 결과 생략 — 토큰 절약]"
+                        new_size = len(_json.dumps(trimmed_block, ensure_ascii=False))
+                        total -= (old_size - new_size)
+                        new_content.append(trimmed_block)
+                    else:
+                        new_content.append(block)
+                trimmed[i] = {**msg, "content": new_content}
+        logger.info(f"[review] 히스토리 압축: {sum(_msg_size(m) for m in msgs)}자 → {sum(_msg_size(m) for m in trimmed)}자")
+        return trimmed
+
     logger.info(f"[review] Tool Use 루프 시작: model={model}, max_turns={MAX_TURNS}")
 
     for turn in range(MAX_TURNS):
         logger.info(f"[review] 턴 {turn+1}/{MAX_TURNS} — Claude 호출")
+        # 히스토리 크기 초과 방지
+        messages = _trim_messages(messages)
         response = cl.messages.create(
             model=model,
             max_tokens=8000,
