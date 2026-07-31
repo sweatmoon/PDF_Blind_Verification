@@ -612,6 +612,89 @@ JSON을 완성한 뒤, 출력하기 전에 다음을 점검한다:
 # {job_id: {"audit_rfp": str, "target_rfp": str, "portal": str, "ppt": str, "ppt_data": bytes}}
 _DOC_CACHE: dict[str, dict] = {}
 
+
+# ── 오탈자 전용 독립 검출 함수 ────────────────────────────────────────────────
+_TYPO_CHUNK_SIZE = 20  # 한 번에 처리할 슬라이드 수
+
+def _detect_typos_standalone(ppt_text: str, api_key: str, model: str) -> list[dict]:
+    """PPT 텍스트를 청크로 나눠 각각 독립 Claude 호출로 오탈자를 검출한다.
+    메인 Tool Use 루프와 완전히 분리되어 히스토리 누적이 없다.
+    반환: typoChecklist 형식의 dict 리스트
+    """
+    import re as _re
+    import anthropic as _anthropic
+
+    if not ppt_text.strip():
+        return []
+
+    # [슬라이드 N] 구분자 기준으로 분할
+    parts = _re.split(r'(\[슬라이드 \d+\])', ppt_text)
+    slides: list[tuple[int, str]] = []  # (슬라이드번호, 텍스트)
+    i = 0
+    while i < len(parts):
+        m = _re.match(r'\[슬라이드 (\d+)\]', parts[i])
+        if m:
+            num = int(m.group(1))
+            content = parts[i + 1] if i + 1 < len(parts) else ""
+            slides.append((num, parts[i] + content))
+            i += 2
+        else:
+            i += 1
+
+    if not slides:
+        return []
+
+    total = slides[-1][0]
+    cl = _anthropic.Anthropic(api_key=api_key)
+    all_typos: list[dict] = []
+    no_counter = [0]  # 전체 번호 누적용
+
+    # 청크 단위로 독립 호출
+    for chunk_start in range(0, len(slides), _TYPO_CHUNK_SIZE):
+        chunk = slides[chunk_start: chunk_start + _TYPO_CHUNK_SIZE]
+        chunk_text = "\n".join(c for _, c in chunk)
+        slide_nums = [n for n, _ in chunk]
+        s_from, s_to = slide_nums[0], slide_nums[-1]
+
+        prompt = f"""다음은 정성제안서 PPT의 [슬라이드 {s_from}] ~ [슬라이드 {s_to}] 텍스트입니다 (전체 {total}슬라이드 중).
+오탈자·표기 오류를 찾아 JSON 배열로만 반환하라. 설명·마크다운 일절 금지.
+
+검출 대상:
+- 명백한 오타: 글자 오입력 (예: 젋고→젊고, 재방방지→재발방지, 미관정보→민간정보)
+- 단어 잘림: 문장 중간 단어 누락 (예: "효과성 극대"→"효과성 극대화")
+- 표기 혼용: 같은 단어 다른 표기 (예: 어플리케이션↔애플리케이션, 워크샵↔워크숍)
+- 외래어 오표기: 국립국어원 기준 위반 (예: 콘트롤러→컨트롤러)
+- 맞춤법: 완전률→완전율, 률/율 구분 등
+- 붙여쓰기: 고유명사·시스템명 공백 누락
+
+반환 형식 (오탈자 없으면 빈 배열 [] 반환):
+[{{"slide":"슬라이드번호","type":"오타|단어잘림|표기혼용|외래어|맞춤법|붙여쓰기","priority":"높음|중간|낮음","original":"원문","fix":"수정안","note":"설명"}}]
+
+텍스트:
+{chunk_text}"""
+
+        try:
+            resp = cl.messages.create(
+                model=model,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = resp.content[0].text.strip() if resp.content else "[]"
+            # JSON 배열 추출
+            m2 = _re.search(r'\[.*\]', raw, _re.DOTALL)
+            if m2:
+                import json as _json
+                chunk_typos = _json.loads(m2.group())
+                for t in chunk_typos:
+                    no_counter[0] += 1
+                    t["no"] = no_counter[0]
+                    all_typos.append(t)
+            logger.info(f"[typo] 슬라이드 {s_from}~{s_to}: {len(chunk_typos) if m2 else 0}건 발견")
+        except Exception as e:
+            logger.warning(f"[typo] 슬라이드 {s_from}~{s_to} 오탈자 검출 실패: {e}")
+
+    return all_typos
+
 TOOLS = [
     {
         "name": "search_document",
@@ -667,35 +750,6 @@ TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {}
-        }
-    },
-    {
-        "name": "get_full_text",
-        "description": (
-            "지정한 문서의 텍스트를 슬라이드(또는 페이지) 구분자 포함 그대로 반환한다. "
-            "start_slide~end_slide 범위를 지정하면 해당 구간만 반환한다(ppt 전용). "
-            "오탈자 검출 시에는 반드시 30슬라이드씩 나눠서 반복 호출하라 "
-            "— 한 번에 전체를 받으면 집중도가 떨어져 오탈자를 놓친다. "
-            "ppt는 [슬라이드 N] 구분자가 포함되어 있어 발견된 오탈자의 슬라이드 번호를 정확히 알 수 있다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "string",
-                    "enum": ["audit_rfp", "target_rfp", "portal", "ppt"],
-                    "description": "전체 텍스트를 가져올 문서 종류"
-                },
-                "start_slide": {
-                    "type": "integer",
-                    "description": "반환 시작 슬라이드 번호 (ppt 전용, 미지정 시 1)"
-                },
-                "end_slide": {
-                    "type": "integer",
-                    "description": "반환 끝 슬라이드 번호 (ppt 전용, 미지정 시 전체)"
-                }
-            },
-            "required": ["source"]
         }
     },
     {
@@ -894,13 +948,6 @@ def _dispatch_tool(job_id: str, tool_name: str, tool_input: dict) -> str:
         return _tool_get_slide_table(job_id, tool_input.get("slide_number", 1))
     elif tool_name == "list_slides":
         return _tool_list_slides(job_id)
-    elif tool_name == "get_full_text":
-        return _tool_get_full_text(
-            job_id,
-            tool_input.get("source", "ppt"),
-            start_slide=int(tool_input.get("start_slide", 0)),
-            end_slide=int(tool_input.get("end_slide", 0)),
-        )
     else:
         return f"[오류] 알 수 없는 도구: {tool_name}"
 
@@ -967,6 +1014,14 @@ def run_review(
     from core.config import now_kst
     today = now_kst().strftime("%Y.%m.%d")
 
+    # ── 오탈자 사전 검출 (메인 루프와 독립) ──────────────────────
+    logger.info("[review] 오탈자 사전 검출 시작")
+    typo_results = _detect_typos_standalone(proposal_ppt_text, key, model)
+    logger.info(f"[review] 오탈자 사전 검출 완료: {len(typo_results)}건")
+
+    import json as _json
+    typo_json_str = _json.dumps(typo_results, ensure_ascii=False, indent=2)
+
     # ── 초기 사용자 메시지 ────────────────────────────────────────
     init_user_content = f"""오늘 날짜: {today}
 
@@ -989,26 +1044,13 @@ def run_review(
    - 단계 감리팀 소계만 읽으면 틀린다 — 전문가팀·테스트팀 등 추가 인력이 있으면 반드시 합산한다
    - 단계별 공수가 명시된 표가 없으면 search_document(ppt, "요구정의|설계|구현|종료")로 재탐색한다
 6. 의심 슬라이드는 get_slide_table로 추가 확인
-7. **오탈자 검출 — get_full_text를 30슬라이드씩 구간 반복 호출하여 PPT 전체를 빠짐없이 읽는다**
-   - list_slides로 전체 슬라이드 수를 먼저 확인한다
-   - 30슬라이드씩 나눠 반복 호출한다 (예: 전체 140슬라이드면 5회 호출):
-     · get_full_text(source="ppt", start_slide=1,   end_slide=30)
-     · get_full_text(source="ppt", start_slide=31,  end_slide=60)
-     · get_full_text(source="ppt", start_slide=61,  end_slide=90)
-     · … 전체 슬라이드를 커버할 때까지 반복
-   - **각 구간을 받을 때마다 즉시 오탈자를 찾아 typoChecklist에 누적 기록한다**
-   - 한 구간이 끝나면 다음 구간을 바로 호출한다 — 전체가 끝날 때까지 멈추지 않는다
-   - 찾아야 할 오탈자 유형 (패턴 지정이 아니라 **문맥과 맞춤법을 보고 직접 판단**):
-     · 명백한 오타: 글자 하나 잘못 입력 (예: 젋고→젊고, 재방방지→재발방지, 미관정보→민간정보)
-     · 단어 잘림: 문장 중간에 단어가 잘린 것 (예: "효과성 극대" → "극대화" 누락)
-     · 표기 혼용: 같은 단어를 여러 표기로 쓴 것 (예: 어플리케이션↔애플리케이션, 워크샵↔워크숍)
-     · 외래어 오표기: 국립국어원 기준과 다른 표기 (예: 콘트롤러→컨트롤러)
-     · 맞춤법 오류: 완전률→완전율, 률/율 구분, 띄어쓰기로 의미가 달라지는 것
-     · 붙여쓰기 오류: 고유명사·시스템명이 분리 없이 붙어있는 것 (예: "e나라도움지능형부정징후탐지")
-   - **의심스러우면 일단 기록한다** — 누락이 과잉보다 훨씬 나쁘다
-   - 발견한 항목은 슬라이드 번호·원문·수정안과 함께 typoChecklist에 기록한다
-8. 필요한 만큼 search_document를 반복 호출하여 모든 검수 항목(9개) 확인
-9. 확인이 완료되면 submit_report로 최종 JSON 제출
+7. 필요한 만큼 search_document를 반복 호출하여 모든 검수 항목(9개) 확인
+8. 확인이 완료되면 submit_report로 최종 JSON 제출
+
+## 오탈자(typoChecklist) — 사전 검출 결과 사용
+오탈자 검출은 별도 프로세스에서 이미 완료되었다.
+아래 [오탈자 사전 검출 결과]를 typoChecklist에 그대로 반영한다.
+추가로 오탈자를 발견하면 목록에 추가해도 된다.
 
 ## PPT 공수(MD) 읽기 규칙
 - PPT마다 공수 표기 구조가 다르므로 표를 직접 읽고 판단한다
@@ -1028,6 +1070,9 @@ def run_review(
 baseline / critical / major / minor / checkNeeded /
 schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
 
+## [오탈자 사전 검출 결과] — typoChecklist에 그대로 반영할 것
+{typo_json_str}
+
 지금 바로 list_slides를 호출하여 시작하라."""
 
     messages: list[dict] = [{"role": "user", "content": init_user_content}]
@@ -1035,17 +1080,10 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     # ── Claude Tool Use 다중 턴 루프 ─────────────────────────────
     import anthropic
 
-    model = get_review_model()
     cl = anthropic.Anthropic(api_key=key)
     MAX_TURNS = 60          # 최대 왕복 횟수
     final_report: dict | None = None
     stop_reason = "unknown"
-
-    # ── 오탈자 검출 커버리지 추적 ─────────────────────────────────
-    # get_full_text(ppt) 호출 시 커버된 슬라이드 구간을 추적
-    # submit_report 시 전체 슬라이드 미커버 → 차단하고 재지시
-    _typo_covered: set[int] = set()   # 커버된 슬라이드 번호 집합
-    _total_slides_ref: list[int] = [0]  # mutable wrapper: [0] = 전체 슬라이드 수
 
     def _trim_messages(msgs: list[dict], max_chars: int = 400000) -> list[dict]:
         """메시지 히스토리 총 문자 수가 max_chars 초과 시
@@ -1159,15 +1197,9 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
 
             logger.info(f"[review] 도구 호출: {tool_name}({list(tool_input.keys())})")
 
-            # list_slides → 전체 슬라이드 수 파악
+            # list_slides → 일반 도구 처리로 진행 (아래 기본 처리로 fall-through)
             if tool_name == "list_slides":
                 result = _dispatch_tool(cache_key, tool_name, tool_input)
-                # 결과에서 전체 슬라이드 수 추출 (예: "전체 138개 슬라이드" 또는 "총 138슬라이드")
-                import re as _re
-                m = _re.search(r'(?:전체|총)\s*(\d+)', result)
-                if m:
-                    _total_slides_ref[0] = int(m.group(1))
-                    logger.info(f"[review] 전체 슬라이드 수 파악: {_total_slides_ref[0]}")
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tool_id,
@@ -1175,65 +1207,15 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
                 })
                 continue
 
-            # get_full_text(ppt) → 커버 구간 기록 + 크기 제한 적용
-            if tool_name == "get_full_text" and tool_input.get("source") == "ppt":
-                s = int(tool_input.get("start_slide", 1))
-                e = int(tool_input.get("end_slide", _total_slides_ref[0] or 9999))
-                for n in range(s, e + 1):
-                    _typo_covered.add(n)
-                logger.info(f"[review] 오탈자 커버 구간 추가: {s}~{e}, 총 커버={len(_typo_covered)}/{_total_slides_ref[0]}")
-                ft_output = _dispatch_tool(cache_key, tool_name, tool_input)
-                MAX_FT_CHARS = 60000  # 30슬라이드 구간 ~20,000 토큰
-                if len(ft_output) > MAX_FT_CHARS:
-                    ft_output = ft_output[:MAX_FT_CHARS] + f"\n\n[잘림] {MAX_FT_CHARS}자 초과로 잘렸습니다. 구간을 더 좁혀서(15슬라이드씩) 재호출하세요."
-                    logger.warning(f"[review] get_full_text 결과 잘림: {s}~{e}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_id,
-                    "content": ft_output,
-                })
-                continue
-
-            # submit_report → 오탈자 커버리지 검사 후 차단 or 승인
+            # submit_report → 단순 승인 (오탈자는 사전 검출로 이미 완료)
             if tool_name == "submit_report":
-                uncovered: list[int] = []
-                total = _total_slides_ref[0]
-                if total > 0:
-                    uncovered = [n for n in range(1, total + 1) if n not in _typo_covered]
-
-                if uncovered:
-                    # 미커버 구간이 있으면 차단하고 재지시
-                    missing_ranges: list[str] = []
-                    start = uncovered[0]
-                    prev  = uncovered[0]
-                    for n in uncovered[1:]:
-                        if n != prev + 1:
-                            missing_ranges.append(f"{start}~{prev}")
-                            start = n
-                        prev = n
-                    missing_ranges.append(f"{start}~{prev}")
-                    block_msg = (
-                        f"[오탈자 검출 미완료] submit_report를 차단합니다. "
-                        f"아직 검토하지 않은 슬라이드가 {len(uncovered)}개 있습니다: "
-                        f"{', '.join(missing_ranges)}\n"
-                        f"지금 바로 다음 구간부터 get_full_text를 계속 호출하여 "
-                        f"모든 슬라이드의 오탈자를 검출한 뒤 submit_report를 다시 호출하라."
-                    )
-                    logger.warning(f"[review] submit_report 차단 — 미커버 슬라이드: {missing_ranges}")
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": block_msg,
-                    })
-                    continue  # submit_report 차단 → 루프 계속
-
-                # 커버리지 완료 → submit_report 승인
+                # 단순 승인: 커버리지 차단 없이 바로 최종 리포트로 확정
                 final_report = tool_input.get("report", {})
-                logger.info("[review] submit_report 수신 (커버리지 완료) → 루프 종료")
+                logger.info("[review] submit_report 수신 → 루프 종료")
                 stop_reason = "submit_report"
                 break
 
-            # 나머지 도구 실행 (list_slides / get_full_text(ppt) / submit_report는 위에서 처리)
+            # 나머지 도구 실행 (list_slides / submit_report는 위에서 처리)
             output = _dispatch_tool(cache_key, tool_name, tool_input)
             # tool 결과가 너무 크면 잘라서 전달 (토큰 초과 방지)
             MAX_TOOL_CHARS = 40000  # ~13,000 토큰
