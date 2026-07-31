@@ -1053,15 +1053,38 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
         첫 번째 user 메시지(초기 지시)와 가장 최근 4개 메시지는 항상 보존한다."""
         import json as _json
 
+        def _block_to_dict(b) -> dict:
+            """Anthropic SDK 블록 객체 → dict 변환"""
+            if isinstance(b, dict):
+                return b
+            # Anthropic SDK 객체: model_dump() 또는 __dict__ 사용
+            if hasattr(b, "model_dump"):
+                return b.model_dump()
+            if hasattr(b, "__dict__"):
+                return {k: v for k, v in b.__dict__.items() if not k.startswith("_")}
+            return {"type": str(type(b)), "content": str(b)}
+
         def _msg_size(m: dict) -> int:
-            return len(_json.dumps(m, ensure_ascii=False))
+            try:
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    content = [_block_to_dict(b) for b in content]
+                return len(_json.dumps({"role": m.get("role"), "content": content}, ensure_ascii=False))
+            except Exception:
+                return len(str(m))
 
         total = sum(_msg_size(m) for m in msgs)
         if total <= max_chars:
             return msgs
 
         # 압축 대상: index 1 ~ len-4 사이의 tool_result content
-        trimmed = [m.copy() for m in msgs]
+        trimmed = []
+        for m in msgs:
+            if isinstance(m.get("content"), list):
+                trimmed.append({**m, "content": [_block_to_dict(b) for b in m["content"]]})
+            else:
+                trimmed.append(m.copy())
+
         for i in range(1, max(1, len(trimmed) - 4)):
             if total <= max_chars:
                 break
@@ -1070,16 +1093,22 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
                 new_content = []
                 for block in msg["content"]:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
-                        old_size = len(_json.dumps(block, ensure_ascii=False))
+                        try:
+                            old_size = len(_json.dumps(block, ensure_ascii=False))
+                        except Exception:
+                            old_size = len(str(block))
                         trimmed_block = dict(block)
                         trimmed_block["content"] = "[이전 tool 결과 생략 — 토큰 절약]"
-                        new_size = len(_json.dumps(trimmed_block, ensure_ascii=False))
+                        try:
+                            new_size = len(_json.dumps(trimmed_block, ensure_ascii=False))
+                        except Exception:
+                            new_size = 50
                         total -= (old_size - new_size)
                         new_content.append(trimmed_block)
                     else:
                         new_content.append(block)
                 trimmed[i] = {**msg, "content": new_content}
-        logger.info(f"[review] 히스토리 압축: {sum(_msg_size(m) for m in msgs)}자 → {sum(_msg_size(m) for m in trimmed)}자")
+        logger.info(f"[review] 히스토리 압축 완료: 총 {sum(_msg_size(m) for m in trimmed)}자")
         return trimmed
 
     logger.info(f"[review] Tool Use 루프 시작: model={model}, max_turns={MAX_TURNS}")
@@ -1102,8 +1131,16 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
             f"출력={response.usage.output_tokens if response.usage else '?'}tok"
         )
 
-        # assistant 응답을 메시지 히스토리에 추가
-        messages.append({"role": "assistant", "content": response.content})
+        # assistant 응답을 메시지 히스토리에 추가 (SDK 객체 → dict 변환)
+        assistant_content = []
+        for blk in response.content:
+            if isinstance(blk, dict):
+                assistant_content.append(blk)
+            elif hasattr(blk, "model_dump"):
+                assistant_content.append(blk.model_dump())
+            else:
+                assistant_content.append({"type": getattr(blk, "type", "unknown"), "text": str(blk)})
+        messages.append({"role": "assistant", "content": assistant_content})
 
         # ── 도구 호출이 없으면 루프 종료 ────────────────────────────
         if stop_reason != "tool_use":
