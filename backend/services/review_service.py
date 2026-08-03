@@ -1082,14 +1082,14 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     import anthropic
 
     cl = anthropic.Anthropic(api_key=key)
-    MAX_TURNS = 30          # 최대 왕복 횟수 (토큰 절감)
+    MAX_TURNS = 40          # 최대 왕복 횟수
     final_report: dict | None = None
     stop_reason = "unknown"
 
     # tool_result 보존 최근 턴 수 (이 범위 내 결과는 원본 유지)
     _KEEP_RECENT_TOOL_RESULTS = 2   # 최근 2개만 원본 보존 (이전은 즉시 생략)
     # tool_result 단일 항목 최대 보존 문자 수 (초과분은 즉시 잘라냄)
-    _MAX_TOOL_RESULT_CHARS = 4000      # 8000 → 4000자로 강화
+    _MAX_TOOL_RESULT_CHARS = 6000      # 너무 짧으면 Claude가 정보 부족으로 루프 낭비
 
     def _block_to_dict(b) -> dict:
         """Anthropic SDK 블록 객체 → dict 변환"""
@@ -1259,6 +1259,36 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
             break
 
     logger.info(f"[review] Tool Use 루프 종료: turns={turn+1}, stop={stop_reason}, report={'있음' if final_report else '없음'}")
+
+    # ── MAX_TURNS 소진 후에도 submit_report 미수신 시 강제 1회 추가 호출 ──
+    if final_report is None and stop_reason == "tool_use":
+        logger.warning("[review] MAX_TURNS 소진 + submit_report 미수신 → 강제 제출 요청")
+        messages = _trim_messages(messages)
+        messages.append({
+            "role": "user",
+            "content": (
+                "지금까지 수집한 정보로 즉시 submit_report를 호출하여 최종 검수 결과를 제출하라. "
+                "추가 도구 호출 없이 바로 submit_report 하나만 호출하라."
+            ),
+        })
+        try:
+            force_resp = cl.messages.create(
+                model=model,
+                max_tokens=16000,
+                system=_SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
+            logger.info(f"[review] 강제 제출 응답: stop={force_resp.stop_reason}, 블록수={len(force_resp.content)}")
+            for blk in force_resp.content:
+                d = _block_to_dict(blk)
+                if d.get("type") == "tool_use" and d.get("name") == "submit_report":
+                    final_report = d.get("input", {}).get("report", {})
+                    stop_reason = "submit_report"
+                    logger.info("[review] 강제 제출 submit_report 수신 완료")
+                    break
+        except Exception as e:
+            logger.error(f"[review] 강제 제출 호출 실패: {e}")
 
     # ── 캐시 정리 ─────────────────────────────────────────────────
     _DOC_CACHE.pop(cache_key, None)
