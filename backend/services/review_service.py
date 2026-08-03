@@ -1236,9 +1236,9 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
             # 나머지 도구 실행 (list_slides / submit_report는 위에서 처리)
             output = _dispatch_tool(cache_key, tool_name, tool_input)
             # tool 결과가 너무 크면 잘라서 전달 (토큰 초과 방지)
-            MAX_TOOL_CHARS = 40000  # ~13,000 토큰
+            MAX_TOOL_CHARS = 6000   # 첫 전송도 즉시 6K자 제한 (압축과 통일)
             if len(output) > MAX_TOOL_CHARS:
-                output = output[:MAX_TOOL_CHARS] + f"\n\n[잘림] 결과가 너무 길어 {MAX_TOOL_CHARS}자로 잘렸습니다. 더 좁은 키워드로 재검색하거나 특정 슬라이드를 get_slide_table로 조회하세요."
+                output = output[:MAX_TOOL_CHARS] + f"\n\n[잘림] {MAX_TOOL_CHARS}자로 잘렸습니다. 더 좁은 키워드로 재검색하거나 get_slide_table로 조회하세요."
                 logger.warning(f"[review] tool 결과 잘림: {tool_name} → {MAX_TOOL_CHARS}자")
             tool_results.append({
                 "type": "tool_result",
