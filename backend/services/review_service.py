@@ -1086,69 +1086,88 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     final_report: dict | None = None
     stop_reason = "unknown"
 
-    def _trim_messages(msgs: list[dict], max_chars: int = 400000) -> list[dict]:
-        """메시지 히스토리 총 문자 수가 max_chars 초과 시
-        오래된 tool_result 내용을 '[생략]'으로 교체하여 크기를 줄인다.
-        첫 번째 user 메시지(초기 지시)와 가장 최근 4개 메시지는 항상 보존한다."""
+    # tool_result 보존 최근 턴 수 (이 범위 내 결과는 원본 유지)
+    _KEEP_RECENT_TOOL_RESULTS = 3
+    # tool_result 단일 항목 최대 보존 문자 수 (초과분은 즉시 잘라냄)
+    _MAX_TOOL_RESULT_CHARS = 8000
+
+    def _block_to_dict(b) -> dict:
+        """Anthropic SDK 블록 객체 → dict 변환"""
+        if isinstance(b, dict):
+            return b
+        if hasattr(b, "model_dump"):
+            return b.model_dump()
+        if hasattr(b, "__dict__"):
+            return {k: v for k, v in b.__dict__.items() if not k.startswith("_")}
+        return {"type": str(type(b)), "content": str(b)}
+
+    def _trim_messages(msgs: list[dict]) -> list[dict]:
+        """매 턴마다 호출: 오래된 tool_result를 무조건 압축.
+        - 최근 _KEEP_RECENT_TOOL_RESULTS 개의 tool_result 블록은 원본 보존
+        - 그 이전 tool_result는 '[생략]'으로 교체
+        - 모든 tool_result는 _MAX_TOOL_RESULT_CHARS 이내로 즉시 잘라냄
+        - 첫 번째 user 메시지(초기 지시)는 항상 원본 보존
+        """
         import json as _json
 
-        def _block_to_dict(b) -> dict:
-            """Anthropic SDK 블록 객체 → dict 변환"""
-            if isinstance(b, dict):
-                return b
-            # Anthropic SDK 객체: model_dump() 또는 __dict__ 사용
-            if hasattr(b, "model_dump"):
-                return b.model_dump()
-            if hasattr(b, "__dict__"):
-                return {k: v for k, v in b.__dict__.items() if not k.startswith("_")}
-            return {"type": str(type(b)), "content": str(b)}
-
-        def _msg_size(m: dict) -> int:
-            try:
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    content = [_block_to_dict(b) for b in content]
-                return len(_json.dumps({"role": m.get("role"), "content": content}, ensure_ascii=False))
-            except Exception:
-                return len(str(m))
-
-        total = sum(_msg_size(m) for m in msgs)
-        if total <= max_chars:
-            return msgs
-
-        # 압축 대상: index 1 ~ len-4 사이의 tool_result content
-        trimmed = []
+        # SDK 객체 → dict 변환 먼저 수행
+        normalized: list[dict] = []
         for m in msgs:
             if isinstance(m.get("content"), list):
-                trimmed.append({**m, "content": [_block_to_dict(b) for b in m["content"]]})
+                normalized.append({**m, "content": [_block_to_dict(b) for b in m["content"]]})
             else:
-                trimmed.append(m.copy())
+                normalized.append(m.copy())
 
-        for i in range(1, max(1, len(trimmed) - 4)):
-            if total <= max_chars:
-                break
-            msg = trimmed[i]
-            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
-                new_content = []
-                for block in msg["content"]:
-                    if isinstance(block, dict) and block.get("type") == "tool_result":
-                        try:
-                            old_size = len(_json.dumps(block, ensure_ascii=False))
-                        except Exception:
-                            old_size = len(str(block))
-                        trimmed_block = dict(block)
-                        trimmed_block["content"] = "[이전 tool 결과 생략 — 토큰 절약]"
-                        try:
-                            new_size = len(_json.dumps(trimmed_block, ensure_ascii=False))
-                        except Exception:
-                            new_size = 50
-                        total -= (old_size - new_size)
-                        new_content.append(trimmed_block)
-                    else:
-                        new_content.append(block)
-                trimmed[i] = {**msg, "content": new_content}
-        logger.info(f"[review] 히스토리 압축 완료: 총 {sum(_msg_size(m) for m in trimmed)}자")
-        return trimmed
+        # 전체 tool_result 블록 위치를 역순으로 수집 (최신 → 오래된 순)
+        # (msg_idx, block_idx) 튜플
+        tr_positions: list[tuple[int, int]] = []
+        for mi, m in enumerate(normalized):
+            if mi == 0:
+                continue  # 초기 지시 메시지는 건드리지 않음
+            if m.get("role") == "user" and isinstance(m.get("content"), list):
+                for bi, blk in enumerate(m["content"]):
+                    if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                        tr_positions.append((mi, bi))
+
+        # 최신 N개는 보존, 나머지는 생략으로 교체
+        keep_set = set(tr_positions[-_KEEP_RECENT_TOOL_RESULTS:])
+
+        for (mi, bi) in tr_positions:
+            blk = normalized[mi]["content"][bi]
+            content = blk.get("content", "")
+            if (mi, bi) not in keep_set:
+                # 오래된 결과 → 완전 생략
+                normalized[mi]["content"][bi] = {
+                    "type": "tool_result",
+                    "tool_use_id": blk.get("tool_use_id", ""),
+                    "content": "[생략]",
+                }
+            else:
+                # 최근 결과라도 너무 크면 잘라냄
+                if isinstance(content, str) and len(content) > _MAX_TOOL_RESULT_CHARS:
+                    normalized[mi]["content"][bi] = {
+                        **blk,
+                        "content": content[:_MAX_TOOL_RESULT_CHARS] + "\n...[잘림]",
+                    }
+
+        # assistant 블록 내 tool_use input도 과도하게 크면 잘라냄
+        for mi, m in enumerate(normalized):
+            if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+                for bi, blk in enumerate(m["content"]):
+                    if isinstance(blk, dict) and blk.get("type") == "tool_use":
+                        inp = blk.get("input", {})
+                        for k, v in inp.items():
+                            if isinstance(v, str) and len(v) > _MAX_TOOL_RESULT_CHARS:
+                                normalized[mi]["content"][bi]["input"][k] = v[:_MAX_TOOL_RESULT_CHARS] + "...[잘림]"
+
+        try:
+            total_chars = sum(
+                len(_json.dumps(m, ensure_ascii=False)) for m in normalized
+            )
+            logger.info(f"[review] 히스토리 압축: {total_chars:,}자 ({len(normalized)}메시지)")
+        except Exception:
+            pass
+        return normalized
 
     logger.info(f"[review] Tool Use 루프 시작: model={model}, max_turns={MAX_TURNS}")
 
@@ -1171,14 +1190,7 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
         )
 
         # assistant 응답을 메시지 히스토리에 추가 (SDK 객체 → dict 변환)
-        assistant_content = []
-        for blk in response.content:
-            if isinstance(blk, dict):
-                assistant_content.append(blk)
-            elif hasattr(blk, "model_dump"):
-                assistant_content.append(blk.model_dump())
-            else:
-                assistant_content.append({"type": getattr(blk, "type", "unknown"), "text": str(blk)})
+        assistant_content = [_block_to_dict(blk) for blk in response.content]
         messages.append({"role": "assistant", "content": assistant_content})
 
         # ── stop_reason 처리 ────────────────────────────────────
