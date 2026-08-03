@@ -1082,14 +1082,14 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     import anthropic
 
     cl = anthropic.Anthropic(api_key=key)
-    MAX_TURNS = 60          # 최대 왕복 횟수
+    MAX_TURNS = 30          # 최대 왕복 횟수 (토큰 절감)
     final_report: dict | None = None
     stop_reason = "unknown"
 
     # tool_result 보존 최근 턴 수 (이 범위 내 결과는 원본 유지)
-    _KEEP_RECENT_TOOL_RESULTS = 3
+    _KEEP_RECENT_TOOL_RESULTS = 2   # 최근 2개만 원본 보존 (이전은 즉시 생략)
     # tool_result 단일 항목 최대 보존 문자 수 (초과분은 즉시 잘라냄)
-    _MAX_TOOL_RESULT_CHARS = 8000
+    _MAX_TOOL_RESULT_CHARS = 4000      # 8000 → 4000자로 강화
 
     def _block_to_dict(b) -> dict:
         """Anthropic SDK 블록 객체 → dict 변환"""
