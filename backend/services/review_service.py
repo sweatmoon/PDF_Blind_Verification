@@ -1,8 +1,10 @@
 """
 제안서 검수 서비스
 - 4개 파일(감리RFP, 대상사업RFP, 포털HTML, 제안서PPT) → Claude 단일 호출 분석 → JSON 리포트
-- 멀티턴 Tool Use 루프 제거: 4개 문서 전체 텍스트를 한 번에 입력하여 1회 호출로 완료
-- 토큰 절감: 멀티턴 히스토리 누적 없음 (~90% 절감)
+- PDF 파일: base64 document 블록으로 직접 전달 (Claude API 네이티브 지원)
+  - 32MB 초과 PDF: 페이지 단위로 분할 → 여러 document 블록으로 한 번에 전달
+- PPTX/HWP/HWPX: 텍스트 추출 후 text 블록으로 전달
+- HTML(포털): 기존 파싱 유지 → text 블록
 """
 from __future__ import annotations
 import io
@@ -140,6 +142,119 @@ def _extract_text_from_hwpx(data: bytes) -> str:
     except Exception as e:
         logger.warning(f"[review] HWPX 텍스트 추출 실패: {e}")
         return ""
+
+
+def _pdf_to_document_blocks(data: bytes, label: str) -> list[dict]:
+    """PDF bytes → Claude API document 블록 리스트.
+
+    32MB(Claude API 제한) 초과 시 페이지 단위로 분할하여
+    여러 document 블록으로 반환한다. 모두 한 번의 messages.stream() 호출에 포함.
+
+    반환 형식:
+      [
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "<b64>"}, "title": "..."},
+        ...
+      ]
+    """
+    _MAX_PDF_BYTES = 32 * 1024 * 1024  # 32MB
+
+    # 32MB 이하 → 분할 없이 바로 반환
+    if len(data) <= _MAX_PDF_BYTES:
+        b64 = base64.standard_b64encode(data).decode("ascii")
+        logger.info(f"[review] PDF document 블록: {label} ({len(data)/1024/1024:.1f}MB, 분할 없음)")
+        return [{
+            "type": "document",
+            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+            "title": label,
+        }]
+
+    # 32MB 초과 → PyPDF2로 페이지 단위 분할
+    logger.info(f"[review] PDF 분할 시작: {label} ({len(data)/1024/1024:.1f}MB > 32MB)")
+    try:
+        import PyPDF2
+        reader = PyPDF2.PdfReader(io.BytesIO(data))
+        total_pages = len(reader.pages)
+        blocks: list[dict] = []
+        chunk_pages: list[int] = []
+        chunk_writer = PyPDF2.PdfWriter()
+
+        def _flush_chunk(pages: list[int], writer: "PyPDF2.PdfWriter", part: int) -> dict:
+            buf = io.BytesIO()
+            writer.write(buf)
+            chunk_data = buf.getvalue()
+            b64 = base64.standard_b64encode(chunk_data).decode("ascii")
+            chunk_label = f"{label} (파트{part}: {pages[0]+1}~{pages[-1]+1}페이지/{total_pages})"
+            logger.info(f"[review] PDF 청크 {part}: {len(pages)}페이지, {len(chunk_data)/1024/1024:.1f}MB")
+            return {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                "title": chunk_label,
+            }
+
+        part = 1
+        for page_idx in range(total_pages):
+            chunk_writer.add_page(reader.pages[page_idx])
+            chunk_pages.append(page_idx)
+
+            # 현재 청크 크기 추정 (실제 write 없이 빠른 체크)
+            # 10페이지마다 실제 크기 측정
+            if len(chunk_pages) % 10 == 0 or page_idx == total_pages - 1:
+                buf = io.BytesIO()
+                chunk_writer.write(buf)
+                chunk_size = len(buf.getvalue())
+
+                if chunk_size > _MAX_PDF_BYTES or page_idx == total_pages - 1:
+                    # 마지막 페이지거나 한도 초과 → flush
+                    if chunk_size > _MAX_PDF_BYTES and len(chunk_pages) > 1:
+                        # 마지막 페이지 제외하고 flush
+                        chunk_pages.pop()
+                        # 마지막 페이지 없이 다시 write
+                        prev_writer = PyPDF2.PdfWriter()
+                        for pi in chunk_pages:
+                            prev_writer.add_page(reader.pages[pi])
+                        blocks.append(_flush_chunk(chunk_pages, prev_writer, part))
+                        part += 1
+                        # 마지막 페이지로 새 청크 시작
+                        chunk_pages = [page_idx]
+                        chunk_writer = PyPDF2.PdfWriter()
+                        chunk_writer.add_page(reader.pages[page_idx])
+                        if page_idx == total_pages - 1:
+                            # 마지막 페이지 단독 flush
+                            blocks.append(_flush_chunk(chunk_pages, chunk_writer, part))
+                    else:
+                        blocks.append(_flush_chunk(chunk_pages, chunk_writer, part))
+                        part += 1
+                        chunk_pages = []
+                        chunk_writer = PyPDF2.PdfWriter()
+
+        logger.info(f"[review] PDF 분할 완료: {label} → {len(blocks)}개 블록")
+        return blocks
+
+    except Exception as e:
+        logger.warning(f"[review] PDF 분할 실패({e}), 텍스트 추출로 fallback: {label}")
+        text = _extract_text_from_pdf(data)
+        return [{"type": "text", "text": f"[{label}]\n{text}"}]
+
+
+def _doc_to_content_blocks(data: bytes, name: str, label: str) -> list[dict]:
+    """파일 확장자에 따라 적절한 content 블록 리스트를 반환한다.
+
+    PDF  → document 블록 (Claude 네이티브, 32MB 초과 시 자동 분할)
+    나머지 → text 블록 (텍스트 추출 후)
+    HTML → 별도 처리이므로 이 함수로 호출하지 않는다.
+    """
+    ext = Path(name).suffix.lower()
+    if ext == ".pdf":
+        return _pdf_to_document_blocks(data, label)
+    elif ext in (".pptx", ".ppt"):
+        text = _extract_text_from_pptx(data)
+    elif ext == ".hwpx":
+        text = _extract_text_from_hwpx(data)
+    elif ext == ".hwp":
+        text = _extract_text_from_hwp(data)
+    else:
+        text = data.decode("utf-8", errors="ignore")
+    return [{"type": "text", "text": f"[{label}]\n{text}"}]
 
 
 def _extract_text_from_pdf(data: bytes) -> str:
@@ -764,62 +879,63 @@ def run_review(
 ) -> dict:
     """
     4개 파일을 Claude 단일 호출로 분석하여 검수 JSON 반환.
-    4개 문서 전체 텍스트를 한 번에 입력하고 submit_report 도구로 결과를 수신한다.
-    멀티턴 히스토리 누적 없음 → 토큰 ~90% 절감.
+
+    - PDF 파일: document 블록으로 직접 전달 (32MB 초과 시 자동 분할)
+    - PPTX/HWP: 텍스트 추출 후 text 블록
+    - HTML(포털): 기존 파싱 후 text 블록
+    - 모든 블록을 하나의 messages.stream() 호출에 묶어서 전달
     """
     key = api_key or ANTHROPIC_API_KEY
     if not key:
         raise ValueError("Claude API 키가 설정되지 않았습니다.")
     model = get_review_model()
 
-    # ── 텍스트 추출 ──────────────────────────────────────────────
-    logger.info(f"[review] 텍스트 추출 시작: {audit_rfp_name}, {target_rfp_name}, {portal_html_name}, {proposal_ppt_name}")
+    logger.info(f"[review] 시작: {audit_rfp_name}, {target_rfp_name}, {portal_html_name}, {proposal_ppt_name}")
 
-    def extract(data: bytes, name: str) -> str:
-        ext = Path(name).suffix.lower()
-        if ext == ".pdf":
-            return _extract_text_from_pdf(data)
-        elif ext in (".pptx", ".ppt"):
-            return _extract_text_from_pptx(data)
-        elif ext in (".html", ".htm"):
-            return _parse_portal_html(data)
-        elif ext == ".hwpx":
-            return _extract_text_from_hwpx(data)
-        elif ext == ".hwp":
-            return _extract_text_from_hwp(data)
-        else:
-            return data.decode("utf-8", errors="ignore")
+    # ── 포털 HTML 파싱 (텍스트 변환 — HTML은 API 미지원) ────────
+    portal_html_text = _parse_portal_html(portal_html_data)
+    logger.info(f"[review] 포털 HTML 파싱 완료: {len(portal_html_text):,}자")
 
-    audit_rfp_text    = extract(audit_rfp_data,    audit_rfp_name)
-    target_rfp_text   = extract(target_rfp_data,   target_rfp_name)
-    portal_html_text  = extract(portal_html_data,  portal_html_name)
-    proposal_ppt_text = extract(proposal_ppt_data, proposal_ppt_name)
+    # ── PDF 여부에 따른 content 블록 생성 ────────────────────────
+    audit_rfp_blocks   = _doc_to_content_blocks(audit_rfp_data,    audit_rfp_name,    "감리사업 RFP")
+    target_rfp_blocks  = _doc_to_content_blocks(target_rfp_data,   target_rfp_name,   "대상사업 RFP")
+    proposal_ppt_blocks = _doc_to_content_blocks(proposal_ppt_data, proposal_ppt_name, "정성제안서 PPT")
 
     logger.info(
-        f"[review] 추출 완료: 감리RFP={len(audit_rfp_text):,}자 "
-        f"대상RFP={len(target_rfp_text):,}자 "
-        f"포털={len(portal_html_text):,}자 "
-        f"PPT={len(proposal_ppt_text):,}자"
+        f"[review] 블록 생성: 감리RFP={len(audit_rfp_blocks)}블록 "
+        f"대상RFP={len(target_rfp_blocks)}블록 "
+        f"PPT={len(proposal_ppt_blocks)}블록"
     )
 
     # ── 날짜 ─────────────────────────────────────────────────────
     from core.config import now_kst
     today = now_kst().strftime("%Y.%m.%d")
 
-    # ── 오탈자 사전 검출 (메인 호출과 독립) ──────────────────────
+    # ── 오탈자 사전 검출 (PPT 텍스트 필요 → PDF면 추출, 아니면 블록에서 취득) ──
     logger.info("[review] 오탈자 사전 검출 시작")
-    typo_results = _detect_typos_standalone(proposal_ppt_text, key, model)
+    ext_ppt = Path(proposal_ppt_name).suffix.lower()
+    if ext_ppt == ".pdf":
+        ppt_text_for_typo = _extract_text_from_pdf(proposal_ppt_data)
+    elif ext_ppt in (".pptx", ".ppt"):
+        ppt_text_for_typo = _extract_text_from_pptx(proposal_ppt_data)
+    elif ext_ppt == ".hwpx":
+        ppt_text_for_typo = _extract_text_from_hwpx(proposal_ppt_data)
+    elif ext_ppt == ".hwp":
+        ppt_text_for_typo = _extract_text_from_hwp(proposal_ppt_data)
+    else:
+        ppt_text_for_typo = proposal_ppt_data.decode("utf-8", errors="ignore")
+
+    typo_results = _detect_typos_standalone(ppt_text_for_typo, key, model)
     logger.info(f"[review] 오탈자 사전 검출 완료: {len(typo_results)}건")
 
     import json as _json
     typo_json_str = _json.dumps(typo_results, ensure_ascii=False, indent=2)
 
-    # ── 단일 호출용 사용자 메시지 구성 ───────────────────────────
-    # 4개 문서 전체 텍스트를 한 번에 포함하여 1회 Claude 호출로 완료
-    user_content = f"""오늘 날짜: {today}
+    # ── 지시문 텍스트 블록 ────────────────────────────────────────
+    instruction_text = f"""오늘 날짜: {today}
 
-아래 4개 문서를 분석하여 정성제안서 PPT를 검수하고, 즉시 submit_report 도구로 최종 JSON을 제출하라.
-도구 호출은 submit_report 하나만 허용된다. 추가 검색 없이 아래 제공된 문서만으로 검수한다.
+첨부된 4개 문서를 분석하여 정성제안서 PPT를 검수하고, 즉시 submit_report 도구로 최종 JSON을 제출하라.
+도구 호출은 submit_report 하나만 허용된다. 추가 검색 없이 첨부된 문서만으로 검수한다.
 
 ## 포털 HTML 공수(MD) / 일정 읽기 방법
 - portal 문서의 각 단계: [단계명] / 날짜 / 감리원 제안MD / 전문가 제안MD / **단계 합계MD** 순으로 명시
@@ -842,29 +958,35 @@ def run_review(
 baseline / critical / major / minor / checkNeeded /
 schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
 
----
+## 문서 안내
+- 감리사업 RFP: 사업명·발주기관·일정·인력 기준
+- 대상사업 RFP: irrelevant(잔존문구) 검출 전용
+- 포털 제안작업표: 일정·공수·인력 확정값 (아래 텍스트로 첨부)
+- 정성제안서 PPT: 검수 대상
 
-## [감리사업 RFP] — 사업명·발주기관·일정·인력 기준
-{audit_rfp_text}
-
----
-
-## [대상사업 RFP] — irrelevant 검출 전용
-{target_rfp_text}
+위 문서들을 바탕으로 9개 검수 항목을 모두 작성하여 즉시 submit_report로 제출하라.
 
 ---
+[포털 제안작업표 HTML — 일정·공수·인력 확정값]
+{portal_html_text}"""
 
-## [포털 제안작업표 HTML] — 일정·공수·인력 확정값
-{portal_html_text}
+    # ── 메시지 content 배열 구성 ──────────────────────────────────
+    # 순서: 지시문 → 감리RFP → 대상RFP → PPT
+    content_blocks: list[dict] = []
+    content_blocks.append({"type": "text", "text": instruction_text})
+    content_blocks.extend(audit_rfp_blocks)
+    content_blocks.extend(target_rfp_blocks)
+    content_blocks.extend(proposal_ppt_blocks)
 
----
-
-## [정성제안서 PPT] — 검수 대상
-{proposal_ppt_text}
-
----
-
-위 4개 문서를 바탕으로 9개 검수 항목을 모두 작성하여 즉시 submit_report로 제출하라."""
+    total_text_chars = sum(
+        len(b.get("text", "")) for b in content_blocks if b.get("type") == "text"
+    )
+    total_doc_blocks = sum(1 for b in content_blocks if b.get("type") == "document")
+    logger.info(
+        f"[review] 메시지 구성 완료: "
+        f"text={total_text_chars:,}자, document={total_doc_blocks}블록, "
+        f"총 content블록={len(content_blocks)}"
+    )
 
     # ── Claude 단일 호출 ──────────────────────────────────────────
     import anthropic
@@ -873,7 +995,7 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     final_report: dict | None = None
     stop_reason = "unknown"
 
-    logger.info(f"[review] 단일 호출 시작: model={model}, 입력={len(user_content):,}자")
+    logger.info(f"[review] 단일 호출 시작: model={model}")
 
     try:
         # 10분 초과 가능 요청 → 스트리밍 필수 (Anthropic SDK 정책)
@@ -882,8 +1004,8 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
             max_tokens=50000,
             system=_SYSTEM_PROMPT,
             tools=TOOLS,
-            tool_choice={"type": "any"},   # submit_report 반드시 호출하도록 강제
-            messages=[{"role": "user", "content": user_content}],
+            tool_choice={"type": "any"},
+            messages=[{"role": "user", "content": content_blocks}],
         ) as stream:
             response = stream.get_final_message()
 
