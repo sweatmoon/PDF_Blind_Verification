@@ -1,6 +1,8 @@
 """
 제안서 검수 서비스
-- 4개 파일(감리RFP, 대상사업RFP, 포털HTML, 제안서PPT) → Claude Sonnet 분석 → JSON 리포트
+- 4개 파일(감리RFP, 대상사업RFP, 포털HTML, 제안서PPT) → Claude 단일 호출 분석 → JSON 리포트
+- 멀티턴 Tool Use 루프 제거: 4개 문서 전체 텍스트를 한 번에 입력하여 1회 호출로 완료
+- 토큰 절감: 멀티턴 히스토리 누적 없음 (~90% 절감)
 """
 from __future__ import annotations
 import io
@@ -614,10 +616,6 @@ JSON을 완성한 뒤, 출력하기 전에 다음을 점검한다:
 4. verdict는 위 "verdict 작성 규칙"에 따라 슬라이드별 수정 권고사항이 모두 포함되어 있는지 확인한다."""
 
 
-# ── Tool Use 방식 ─────────────────────────────────────────────────────────────
-# {job_id: {"audit_rfp": str, "target_rfp": str, "portal": str, "ppt": str, "ppt_data": bytes}}
-_DOC_CACHE: dict[str, dict] = {}
-
 
 # ── 오탈자 전용 독립 검출 함수 ────────────────────────────────────────────────
 _TYPO_CHUNK_SIZE = 20  # 한 번에 처리할 슬라이드 수
@@ -701,68 +699,13 @@ def _detect_typos_standalone(ppt_text: str, api_key: str, model: str) -> list[di
 
     return all_typos
 
+# ── Tool 정의: submit_report 단독 (단일 호출 방식) ──────────────────────────
 TOOLS = [
-    {
-        "name": "search_document",
-        "description": (
-            "지정한 문서(audit_rfp/target_rfp/portal/ppt)의 전체 텍스트에서 "
-            "키워드 또는 정규식을 검색하여 매칭된 줄과 앞뒤 문맥을 반환한다. "
-            "숫자·날짜·인력명·단계명 등 특정 값을 확인할 때 사용한다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "string",
-                    "enum": ["audit_rfp", "target_rfp", "portal", "ppt"],
-                    "description": "검색할 문서 종류"
-                },
-                "pattern": {
-                    "type": "string",
-                    "description": "검색할 키워드 또는 Python 정규식"
-                },
-                "context_lines": {
-                    "type": "integer",
-                    "description": "매칭 줄 앞뒤로 포함할 줄 수 (기본 3)",
-                    "default": 3
-                }
-            },
-            "required": ["source", "pattern"]
-        }
-    },
-    {
-        "name": "get_slide_table",
-        "description": (
-            "PPT의 특정 슬라이드 번호에 있는 표를 셀 단위(빈 칸 포함 '-')로 정확히 반환한다. "
-            "공수·인력·비율·합계처럼 표 수치 재확인이 필요할 때 반드시 이 도구를 사용한다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "slide_number": {
-                    "type": "integer",
-                    "description": "조회할 슬라이드 번호 (1-based)"
-                }
-            },
-            "required": ["slide_number"]
-        }
-    },
-    {
-        "name": "list_slides",
-        "description": (
-            "전체 슬라이드 번호와 각 슬라이드의 제목(첫 텍스트 줄)을 목차 형태로 반환한다. "
-            "어느 슬라이드에 어떤 내용이 있는지 훑어볼 때 사용한다."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {}
-        }
-    },
     {
         "name": "submit_report",
         "description": (
             "검수를 완료하고 최종 JSON 보고서를 제출한다. "
-            "모든 검수 항목(9개)을 확인한 뒤 이 도구를 한 번만 호출한다."
+            "4개 문서를 모두 분석한 뒤 이 도구를 한 번만 호출한다."
         ),
         "input_schema": {
             "type": "object",
@@ -811,153 +754,6 @@ TOOLS = [
 ]
 
 
-def _tool_search_document(job_id: str, source: str, pattern: str, context_lines: int = 3) -> str:
-    """grep 방식 부분 조회 — _DOC_CACHE에서 해당 문서 텍스트를 검색"""
-    cache = _DOC_CACHE.get(job_id, {})
-    text = cache.get(source, "")
-    if not text:
-        return f"[오류] 문서 '{source}'를 찾을 수 없습니다."
-    lines = text.split("\n")
-    hits: list[str] = []
-    try:
-        compiled = re.compile(pattern, re.IGNORECASE)
-    except re.error as e:
-        return f"[오류] 잘못된 정규식: {e}"
-    for i, line in enumerate(lines):
-        if compiled.search(line):
-            start = max(0, i - context_lines)
-            end   = min(len(lines), i + context_lines + 1)
-            block = "\n".join(lines[start:end])
-            hits.append(f"[줄 {i+1}]\n{block}")
-    if not hits:
-        return "매칭 없음"
-    result = "\n---\n".join(hits[:50])
-    if len(hits) > 50:
-        result += f"\n\n[안내] 총 {len(hits)}건 매칭. 상위 50건만 표시. 더 좁은 패턴으로 재검색 권장."
-    return result
-
-
-def _tool_get_slide_table(job_id: str, slide_number: int) -> str:
-    """python-pptx로 특정 슬라이드의 표만 정밀 추출"""
-    cache = _DOC_CACHE.get(job_id, {})
-    ppt_data = cache.get("ppt_data")
-    if not ppt_data:
-        return "[오류] PPT 원본 데이터가 캐시에 없습니다."
-    try:
-        from pptx import Presentation
-        prs = Presentation(io.BytesIO(ppt_data))
-        slides = prs.slides
-        if slide_number < 1 or slide_number > len(slides):
-            return f"[오류] 슬라이드 번호 {slide_number}는 범위 밖입니다 (전체 {len(slides)}개)."
-        slide = slides[slide_number - 1]
-        tables_found = []
-        text_blocks = []
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                t = shape.text_frame.text.strip()
-                if t:
-                    text_blocks.append(t)
-            if shape.has_table:
-                rows_out = []
-                for row in shape.table.rows:
-                    cells = [cell.text.strip() if cell.text.strip() else "-" for cell in row.cells]
-                    rows_out.append(" | ".join(cells))
-                tables_found.append("\n".join(rows_out))
-        result_parts = []
-        if text_blocks:
-            result_parts.append("[텍스트]\n" + "\n".join(text_blocks))
-        if tables_found:
-            for ti, tbl in enumerate(tables_found, 1):
-                result_parts.append(f"[표 {ti}]\n{tbl}")
-        if not result_parts:
-            return f"슬라이드 {slide_number}: 텍스트·표 없음"
-        return f"=== 슬라이드 {slide_number} ===\n" + "\n\n".join(result_parts)
-    except Exception as e:
-        return f"[오류] 슬라이드 {slide_number} 추출 실패: {e}"
-
-
-def _tool_list_slides(job_id: str) -> str:
-    """PPT 목차 — 슬라이드 번호 + 제목(첫 텍스트 줄) 반환"""
-    cache = _DOC_CACHE.get(job_id, {})
-    ppt_text = cache.get("ppt", "")
-    if not ppt_text:
-        return "[오류] PPT 텍스트 캐시가 없습니다."
-    # [슬라이드 N] 마커 기준 분리
-    parts = re.split(r'(?=\[슬라이드 \d+\])', ppt_text)
-    lines_out = []
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        # 첫 줄 = "[슬라이드 N]", 두 번째 줄 = 제목 후보
-        first_lines = part.split("\n", 2)
-        slide_marker = first_lines[0].strip() if first_lines else ""
-        title = first_lines[1].strip() if len(first_lines) > 1 else "(내용 없음)"
-        if len(title) > 60:
-            title = title[:60] + "…"
-        lines_out.append(f"{slide_marker}: {title}")
-    if not lines_out:
-        return "슬라이드 목차를 추출할 수 없습니다."
-    total = len(lines_out)
-    return f"전체 {total}개 슬라이드\n" + "\n".join(lines_out)
-
-
-def _tool_get_full_text(job_id: str, source: str, start_slide: int = 0, end_slide: int = 0) -> str:
-    """문서 전체(또는 구간) 텍스트 반환.
-    start_slide/end_slide 지정 시 해당 슬라이드 구간만 반환 (ppt 전용).
-    """
-    import re as _re
-    cache = _DOC_CACHE.get(job_id, {})
-    text = cache.get(source, "")
-    if not text:
-        return f"[오류] 문서 '{source}'를 찾을 수 없습니다."
-
-    # 슬라이드 구간 필터링 (ppt 전용)
-    if source == "ppt" and (start_slide > 0 or end_slide > 0):
-        s_start = start_slide if start_slide > 0 else 1
-        s_end   = end_slide   if end_slide   > 0 else 999999
-        # [슬라이드 N] 구분자 기준으로 분할
-        # split 결과: ['앞텍스트', '[슬라이드 1]', '내용', '[슬라이드 2]', '내용', ...]
-        parts = _re.split(r'(\[슬라이드 \d+\])', text)
-        result_parts: list[str] = []
-        i = 0
-        while i < len(parts):
-            m = _re.match(r'\[슬라이드 (\d+)\]', parts[i])
-            if m:
-                current_num = int(m.group(1))
-                content = parts[i + 1] if i + 1 < len(parts) else ""
-                if s_start <= current_num <= s_end:
-                    result_parts.append(parts[i] + content)
-                i += 2
-            else:
-                i += 1
-        if not result_parts:
-            return f"[안내] 슬라이드 {s_start}~{s_end} 범위에 텍스트가 없습니다."
-        all_slide_nums = _re.findall(r'\[슬라이드 (\d+)\]', text)
-        total = int(all_slide_nums[-1]) if all_slide_nums else 0
-        header = f"[구간 {s_start}~{s_end} / 전체 {total}슬라이드]\n"
-        return header + "\n".join(result_parts)
-
-    return text
-
-
-def _dispatch_tool(job_id: str, tool_name: str, tool_input: dict) -> str:
-    """Claude의 tool_use 요청을 실제 함수로 라우팅"""
-    if tool_name == "search_document":
-        return _tool_search_document(
-            job_id,
-            tool_input.get("source", ""),
-            tool_input.get("pattern", ""),
-            tool_input.get("context_lines", 3),
-        )
-    elif tool_name == "get_slide_table":
-        return _tool_get_slide_table(job_id, tool_input.get("slide_number", 1))
-    elif tool_name == "list_slides":
-        return _tool_list_slides(job_id)
-    else:
-        return f"[오류] 알 수 없는 도구: {tool_name}"
-
-
 def run_review(
     audit_rfp_data: bytes,   audit_rfp_name: str,
     target_rfp_data: bytes,  target_rfp_name: str,
@@ -967,9 +763,9 @@ def run_review(
     job_id: str = "",
 ) -> dict:
     """
-    4개 파일을 Claude Tool Use(다중 턴) 방식으로 분석하여 검수 JSON 반환.
-    Claude가 search_document / get_slide_table / list_slides 도구를 반복 호출하며
-    필요한 부분만 조회한 뒤, submit_report로 최종 JSON을 제출한다.
+    4개 파일을 Claude 단일 호출로 분석하여 검수 JSON 반환.
+    4개 문서 전체 텍스트를 한 번에 입력하고 submit_report 도구로 결과를 수신한다.
+    멀티턴 히스토리 누적 없음 → 토큰 ~90% 절감.
     """
     key = api_key or ANTHROPIC_API_KEY
     if not key:
@@ -986,7 +782,6 @@ def run_review(
         elif ext in (".pptx", ".ppt"):
             return _extract_text_from_pptx(data)
         elif ext in (".html", ".htm"):
-            # portal HTML은 tblSchedule/tblManList 직접 파싱
             return _parse_portal_html(data)
         elif ext == ".hwpx":
             return _extract_text_from_hwpx(data)
@@ -1007,21 +802,11 @@ def run_review(
         f"PPT={len(proposal_ppt_text):,}자"
     )
 
-    # ── 문서 캐시 등록 (tool 함수들이 job_id로 조회) ────────────────
-    cache_key = job_id or "default"
-    _DOC_CACHE[cache_key] = {
-        "audit_rfp":  audit_rfp_text,
-        "target_rfp": target_rfp_text,
-        "portal":     portal_html_text,
-        "ppt":        proposal_ppt_text,
-        "ppt_data":   proposal_ppt_data,   # get_slide_table용 원본 bytes
-    }
-
     # ── 날짜 ─────────────────────────────────────────────────────
     from core.config import now_kst
     today = now_kst().strftime("%Y.%m.%d")
 
-    # ── 오탈자 사전 검출 (메인 루프와 독립) ──────────────────────
+    # ── 오탈자 사전 검출 (메인 호출과 독립) ──────────────────────
     logger.info("[review] 오탈자 사전 검출 시작")
     typo_results = _detect_typos_standalone(proposal_ppt_text, key, model)
     logger.info(f"[review] 오탈자 사전 검출 완료: {len(typo_results)}건")
@@ -1029,386 +814,183 @@ def run_review(
     import json as _json
     typo_json_str = _json.dumps(typo_results, ensure_ascii=False, indent=2)
 
-    # ── 초기 사용자 메시지 ────────────────────────────────────────
-    init_user_content = f"""오늘 날짜: {today}
+    # ── 단일 호출용 사용자 메시지 구성 ───────────────────────────
+    # 4개 문서 전체 텍스트를 한 번에 포함하여 1회 Claude 호출로 완료
+    user_content = f"""오늘 날짜: {today}
 
-4개 문서에 대한 정성제안서 PPT 검수를 시작하라.
-
-## 문서 종류 (search_document의 source 파라미터)
-- audit_rfp  : 감리사업 RFP (사업명·발주기관·일정·인력 기준)
-- target_rfp : 대상사업 RFP (irrelevant 검출 전용)
-- portal     : 포털 제안작업표 HTML (일정·공수·인력 확정값)
-- ppt        : 정성제안서 PPT (검수 대상)
-
-## 작업 순서 (필수)
-1. list_slides → PPT 목차 파악
-2. search_document(portal, "MD|공수|단계|일정") → 포털 일정·공수 확인
-3. search_document(audit_rfp, "사업명|발주기관|감리원|기간") → 기준값 확인
-4. **search_document(ppt, "MD|공수|투입|합계") → PPT 공수 표기 슬라이드 탐색**
-5. **4번 결과에서 공수 관련 슬라이드 번호를 파악하고, get_slide_table(슬라이드번호)로 표 정밀 확인**
-   - PPT마다 공수 표기 방식이 다르다 (감리원만/감리원+전문가/팀별 소계/단계별 합계 등)
-   - 표를 직접 읽고 **단계별 전체 투입 공수(감리원+전문가+테스트팀 등 모든 인력 합산)**를 파악한다
-   - 단계 감리팀 소계만 읽으면 틀린다 — 전문가팀·테스트팀 등 추가 인력이 있으면 반드시 합산한다
-   - 단계별 공수가 명시된 표가 없으면 search_document(ppt, "요구정의|설계|구현|종료")로 재탐색한다
-6. 의심 슬라이드는 get_slide_table로 추가 확인
-7. 필요한 만큼 search_document를 반복 호출하여 모든 검수 항목(9개) 확인
-8. 확인이 완료되면 submit_report로 최종 JSON 제출
-
-## 오탈자(typoChecklist) — 사전 검출 결과 사용
-오탈자 검출은 별도 프로세스에서 이미 완료되었다.
-아래 [오탈자 사전 검출 결과]를 typoChecklist에 그대로 반영한다.
-추가로 오탈자를 발견하면 목록에 추가해도 된다.
-
-## PPT 공수(MD) 읽기 규칙
-- PPT마다 공수 표기 구조가 다르므로 표를 직접 읽고 판단한다
-- **PPT공수(MD) = 해당 단계에 투입되는 모든 인력(감리원+전문가+테스트팀 등)의 공수 합계**
-- 감리원(단계 감리팀) 공수만 쓰면 틀린다 — 전문가팀·테스트팀 공수를 반드시 포함한다
-- "투입공수 합계", "총 XXX MD" 같은 합계 셀이 있으면 그 값을 우선 활용한다
-- 단계별 공수가 별도 표로 없고 인력별로만 표기된 경우: 각 인력의 해당 단계 공수를 합산한다
+아래 4개 문서를 분석하여 정성제안서 PPT를 검수하고, 즉시 submit_report 도구로 최종 JSON을 제출하라.
+도구 호출은 submit_report 하나만 허용된다. 추가 검색 없이 아래 제공된 문서만으로 검수한다.
 
 ## 포털 HTML 공수(MD) / 일정 읽기 방법
-- portal 문서는 백엔드가 tblSchedule/tblManList를 직접 파싱하여 구조화한 텍스트로 제공된다
-- 각 단계별로 [단계명] / 날짜 / 감리원 제안MD / 전문가 제안MD / **단계 합계MD** 가 명시되어 있다
-- **HTML공수(MD) = "단계 합계MD" 값을 그대로 사용**
-- 맨 아래 [합계] 섹션에 전체 합계MD가 있으며 이 값으로 검증한다
-- 별도 계산 없이 파싱된 값을 그대로 읽으면 된다
+- portal 문서의 각 단계: [단계명] / 날짜 / 감리원 제안MD / 전문가 제안MD / **단계 합계MD** 순으로 명시
+- **HTML공수(MD) = "단계 합계MD" 값만 사용** (감리원 단독값 사용 금지)
+- 맨 아래 [합계] 섹션 전체 합계MD로 검증
 
-## 검수 항목 (9개)
+## PPT 공수(MD) 읽기 규칙
+- **PPT공수(MD) = 해당 단계 투입 모든 인력(감리원+전문가+테스트팀 등) 공수 합계**
+- 감리원(단계 감리팀) 공수만 쓰면 틀린다 — 전문가팀·테스트팀 반드시 포함
+- "투입공수 합계", "총 XXX MD" 합계 셀이 있으면 우선 활용
+
+## 대상사업 RFP 사용 범위
+- [대상사업 RFP]는 **irrelevant(잔존문구 검출) 전용** — 다른 검수 항목에 사용하지 않는다
+
+## 오탈자(typoChecklist) — 사전 검출 결과
+오탈자 검출은 이미 완료되었다. 아래 결과를 typoChecklist에 그대로 반영하고 추가 발견분을 더한다.
+{typo_json_str}
+
+## 검수 항목 (9개 — 모두 포함)
 baseline / critical / major / minor / checkNeeded /
 schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
 
-## [오탈자 사전 검출 결과] — typoChecklist에 그대로 반영할 것
-{typo_json_str}
+---
 
-지금 바로 list_slides를 호출하여 시작하라."""
+## [감리사업 RFP] — 사업명·발주기관·일정·인력 기준
+{audit_rfp_text}
 
-    messages: list[dict] = [{"role": "user", "content": init_user_content}]
+---
 
-    # ── Claude Tool Use 다중 턴 루프 ─────────────────────────────
+## [대상사업 RFP] — irrelevant 검출 전용
+{target_rfp_text}
+
+---
+
+## [포털 제안작업표 HTML] — 일정·공수·인력 확정값
+{portal_html_text}
+
+---
+
+## [정성제안서 PPT] — 검수 대상
+{proposal_ppt_text}
+
+---
+
+위 4개 문서를 바탕으로 9개 검수 항목을 모두 작성하여 즉시 submit_report로 제출하라."""
+
+    # ── Claude 단일 호출 ──────────────────────────────────────────
     import anthropic
 
     cl = anthropic.Anthropic(api_key=key)
-    MAX_TURNS = 40          # 최대 왕복 횟수
     final_report: dict | None = None
     stop_reason = "unknown"
 
-    # tool_result 보존 최근 턴 수 (이 범위 내 결과는 원본 유지)
-    _KEEP_RECENT_TOOL_RESULTS = 2   # 최근 2개만 원본 보존 (이전은 즉시 생략)
-    # tool_result 단일 항목 최대 보존 문자 수 (초과분은 즉시 잘라냄)
-    _MAX_TOOL_RESULT_CHARS = 6000      # 너무 짧으면 Claude가 정보 부족으로 루프 낭비
+    logger.info(f"[review] 단일 호출 시작: model={model}, 입력={len(user_content):,}자")
 
-    def _block_to_dict(b) -> dict:
-        """Anthropic SDK 블록 객체 → dict 변환"""
-        if isinstance(b, dict):
-            return b
-        if hasattr(b, "model_dump"):
-            return b.model_dump()
-        if hasattr(b, "__dict__"):
-            return {k: v for k, v in b.__dict__.items() if not k.startswith("_")}
-        return {"type": str(type(b)), "content": str(b)}
-
-    def _trim_messages(msgs: list[dict]) -> list[dict]:
-        """매 턴마다 호출: 오래된 tool_result를 무조건 압축.
-        - 최근 _KEEP_RECENT_TOOL_RESULTS 개의 tool_result 블록은 원본 보존
-        - 그 이전 tool_result는 '[생략]'으로 교체
-        - 모든 tool_result는 _MAX_TOOL_RESULT_CHARS 이내로 즉시 잘라냄
-        - 첫 번째 user 메시지(초기 지시)는 항상 원본 보존
-        """
-        import json as _json
-
-        # SDK 객체 → dict 변환 먼저 수행
-        normalized: list[dict] = []
-        for m in msgs:
-            if isinstance(m.get("content"), list):
-                normalized.append({**m, "content": [_block_to_dict(b) for b in m["content"]]})
-            else:
-                normalized.append(m.copy())
-
-        # 전체 tool_result 블록 위치를 역순으로 수집 (최신 → 오래된 순)
-        # (msg_idx, block_idx) 튜플
-        tr_positions: list[tuple[int, int]] = []
-        for mi, m in enumerate(normalized):
-            if mi == 0:
-                continue  # 초기 지시 메시지는 건드리지 않음
-            if m.get("role") == "user" and isinstance(m.get("content"), list):
-                for bi, blk in enumerate(m["content"]):
-                    if isinstance(blk, dict) and blk.get("type") == "tool_result":
-                        tr_positions.append((mi, bi))
-
-        # 최신 N개는 보존, 나머지는 생략으로 교체
-        keep_set = set(tr_positions[-_KEEP_RECENT_TOOL_RESULTS:])
-
-        for (mi, bi) in tr_positions:
-            blk = normalized[mi]["content"][bi]
-            content = blk.get("content", "")
-            if (mi, bi) not in keep_set:
-                # 오래된 결과 → 완전 생략
-                normalized[mi]["content"][bi] = {
-                    "type": "tool_result",
-                    "tool_use_id": blk.get("tool_use_id", ""),
-                    "content": "[생략]",
-                }
-            else:
-                # 최근 결과라도 너무 크면 잘라냄
-                if isinstance(content, str) and len(content) > _MAX_TOOL_RESULT_CHARS:
-                    normalized[mi]["content"][bi] = {
-                        **blk,
-                        "content": content[:_MAX_TOOL_RESULT_CHARS] + "\n...[잘림]",
-                    }
-
-        # assistant 블록 내 tool_use input도 과도하게 크면 잘라냄
-        for mi, m in enumerate(normalized):
-            if m.get("role") == "assistant" and isinstance(m.get("content"), list):
-                for bi, blk in enumerate(m["content"]):
-                    if isinstance(blk, dict) and blk.get("type") == "tool_use":
-                        inp = blk.get("input", {})
-                        for k, v in inp.items():
-                            if isinstance(v, str) and len(v) > _MAX_TOOL_RESULT_CHARS:
-                                normalized[mi]["content"][bi]["input"][k] = v[:_MAX_TOOL_RESULT_CHARS] + "...[잘림]"
-
-        try:
-            total_chars = sum(
-                len(_json.dumps(m, ensure_ascii=False)) for m in normalized
-            )
-            logger.info(f"[review] 히스토리 압축: {total_chars:,}자 ({len(normalized)}메시지)")
-        except Exception:
-            pass
-        return normalized
-
-    logger.info(f"[review] Tool Use 루프 시작: model={model}, max_turns={MAX_TURNS}")
-
-    for turn in range(MAX_TURNS):
-        logger.info(f"[review] 턴 {turn+1}/{MAX_TURNS} — Claude 호출")
-        # 히스토리 크기 초과 방지
-        messages = _trim_messages(messages)
+    try:
         response = cl.messages.create(
             model=model,
-            max_tokens=16000,
+            max_tokens=50000,
             system=_SYSTEM_PROMPT,
             tools=TOOLS,
-            messages=messages,
+            tool_choice={"type": "any"},   # submit_report 반드시 호출하도록 강제
+            messages=[{"role": "user", "content": user_content}],
         )
         stop_reason = response.stop_reason
-        # 입력/출력 토큰 모두 로깅 (비용 추적)
         in_tok  = response.usage.input_tokens  if response.usage else 0
         out_tok = response.usage.output_tokens if response.usage else 0
         logger.info(
-            f"[review] 턴 {turn+1} 완료: stop={stop_reason}, "
+            f"[review] 단일 호출 완료: stop={stop_reason}, "
             f"블록수={len(response.content)}, "
             f"입력={in_tok:,}tok 출력={out_tok:,}tok"
         )
 
-        # assistant 응답을 메시지 히스토리에 추가 (SDK 객체 → dict 변환)
-        assistant_content = [_block_to_dict(blk) for blk in response.content]
-        messages.append({"role": "assistant", "content": assistant_content})
-
-        # ── stop_reason 처리 ────────────────────────────────────
-        if stop_reason == "max_tokens":
-            # 출력 토큰 한도 초과 → 중단된 지점부터 계속 작성하도록 재촉
-            logger.warning(f"[review] 턴 {turn+1} max_tokens 초과 → 계속 요청")
-            messages.append({"role": "user", "content": "계속 작성하라. 중단된 부분부터 이어서 작성하고, 반드시 submit_report 도구로 최종 JSON을 제출하라."})
-            continue
-        if stop_reason != "tool_use":
-            logger.info(f"[review] stop_reason={stop_reason} → 루프 종료")
-            break
-
-        # ── 도구 호출 처리 ────────────────────────────────────────
-        tool_results: list[dict] = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
-            tool_name  = block.name
-            tool_input = block.input
-            tool_id    = block.id
-
-            logger.info(f"[review] 도구 호출: {tool_name}({list(tool_input.keys())})")
-
-            # list_slides → 일반 도구 처리로 진행 (아래 기본 처리로 fall-through)
-            if tool_name == "list_slides":
-                result = _dispatch_tool(cache_key, tool_name, tool_input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_id,
-                    "content": result,
-                })
-                continue
-
-            # submit_report → 단순 승인 (오탈자는 사전 검출로 이미 완료)
-            if tool_name == "submit_report":
-                # 단순 승인: 커버리지 차단 없이 바로 최종 리포트로 확정
-                final_report = tool_input.get("report", {})
-                logger.info("[review] submit_report 수신 → 루프 종료")
+        # submit_report 블록 추출
+        for blk in response.content:
+            name = getattr(blk, "name", None) or (blk.get("name") if isinstance(blk, dict) else None)
+            if name == "submit_report":
+                inp = getattr(blk, "input", None) or (blk.get("input") if isinstance(blk, dict) else {})
+                final_report = inp.get("report", {})
                 stop_reason = "submit_report"
+                logger.info("[review] submit_report 수신 완료")
                 break
 
-            # 나머지 도구 실행 (list_slides / submit_report는 위에서 처리)
-            output = _dispatch_tool(cache_key, tool_name, tool_input)
-            # tool 결과가 너무 크면 잘라서 전달 (토큰 초과 방지)
-            MAX_TOOL_CHARS = 6000   # 첫 전송도 즉시 6K자 제한 (압축과 통일)
-            if len(output) > MAX_TOOL_CHARS:
-                output = output[:MAX_TOOL_CHARS] + f"\n\n[잘림] {MAX_TOOL_CHARS}자로 잘렸습니다. 더 좁은 키워드로 재검색하거나 get_slide_table로 조회하세요."
-                logger.warning(f"[review] tool 결과 잘림: {tool_name} → {MAX_TOOL_CHARS}자")
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tool_id,
-                "content": output,
-            })
-
-        # submit_report가 나왔으면 외부 루프도 종료
-        if stop_reason == "submit_report":
-            break
-
-        # tool_results를 다음 턴 user 메시지로 추가
-        if tool_results:
-            messages.append({"role": "user", "content": tool_results})
-        else:
-            # tool_use인데 tool_results가 비어 있으면 루프 종료 (이상 상태)
-            logger.warning("[review] tool_use인데 처리된 결과 없음 → 루프 강제 종료")
-            break
-
-    logger.info(f"[review] Tool Use 루프 종료: turns={turn+1}, stop={stop_reason}, report={'있음' if final_report else '없음'}")
-
-    # ── MAX_TURNS 소진 후에도 submit_report 미수신 시 강제 1회 추가 호출 ──
-    if final_report is None and stop_reason == "tool_use":
-        logger.warning("[review] MAX_TURNS 소진 + submit_report 미수신 → 강제 제출 요청")
-        messages = _trim_messages(messages)
-        messages.append({
-            "role": "user",
-            "content": (
-                "지금까지 수집한 정보로 즉시 submit_report를 호출하여 최종 검수 결과를 제출하라. "
-                "추가 도구 호출 없이 바로 submit_report 하나만 호출하라."
-            ),
-        })
-        try:
-            force_resp = cl.messages.create(
-                model=model,
-                max_tokens=16000,
-                system=_SYSTEM_PROMPT,
-                tools=TOOLS,
-                messages=messages,
-            )
-            logger.info(f"[review] 강제 제출 응답: stop={force_resp.stop_reason}, 블록수={len(force_resp.content)}")
-            for blk in force_resp.content:
-                d = _block_to_dict(blk)
-                if d.get("type") == "tool_use" and d.get("name") == "submit_report":
-                    final_report = d.get("input", {}).get("report", {})
-                    stop_reason = "submit_report"
-                    logger.info("[review] 강제 제출 submit_report 수신 완료")
+        # submit_report 없이 end_turn으로 끝난 경우 → 텍스트에서 JSON 추출 시도
+        if final_report is None:
+            raw = ""
+            for blk in response.content:
+                t = getattr(blk, "type", None) or (blk.get("type") if isinstance(blk, dict) else None)
+                if t == "text":
+                    raw = getattr(blk, "text", "") or (blk.get("text", "") if isinstance(blk, dict) else "")
                     break
-        except Exception as e:
-            logger.error(f"[review] 강제 제출 호출 실패: {e}")
+            logger.warning(f"[review] submit_report 없음 — 텍스트 JSON 추출 시도: {len(raw):,}자")
 
-    # ── 캐시 정리 ─────────────────────────────────────────────────
-    _DOC_CACHE.pop(cache_key, None)
+            def _sanitize_json_strings(s: str) -> str:
+                res: list[str] = []
+                in_string = False
+                escaped = False
+                for ch in s:
+                    if escaped:
+                        res.append(ch); escaped = False; continue
+                    if ch == "\\":
+                        escaped = True; res.append(ch); continue
+                    if ch == '"':
+                        in_string = not in_string; res.append(ch); continue
+                    if in_string:
+                        if ch == "\n": res.append("\\n")
+                        elif ch == "\r": res.append("\\r")
+                        elif ch == "\t": res.append("\\t")
+                        else: res.append(ch)
+                    else:
+                        res.append(ch)
+                return "".join(res)
+
+            def _try_parse(s: str) -> dict | None:
+                try:
+                    return json.loads(s)
+                except json.JSONDecodeError:
+                    return None
+
+            json_str = raw.strip()
+            m2 = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", json_str)
+            if m2:
+                json_str = m2.group(1) if m2.group(1).startswith("{") else "{" + m2.group(1)
+            result_candidate = _try_parse(json_str)
+            if result_candidate is None:
+                sanitized = _sanitize_json_strings(json_str)
+                result_candidate = _try_parse(sanitized)
+            if result_candidate is None:
+                last_brace = json_str.rfind("}")
+                if last_brace > 0:
+                    result_candidate = _try_parse(json_str[:last_brace + 1]) or \
+                                       _try_parse(_sanitize_json_strings(json_str[:last_brace + 1]))
+            if result_candidate is not None:
+                final_report = result_candidate
+                logger.info("[review] 텍스트 JSON 추출 성공")
+            else:
+                logger.warning(f"[review] JSON 파싱 최종 실패. 처음 1000자: {raw[:1000]}")
+
+    except Exception as e:
+        logger.error(f"[review] 단일 호출 실패: {e}")
+        stop_reason = f"error: {e}"
 
     # ── 결과 확정 ─────────────────────────────────────────────────
     if final_report is not None:
-        # submit_report 도구로 dict를 직접 받은 경우 → 파싱 불필요
         result = final_report
-        logger.info(f"[review] submit_report로 결과 수신 완료")
+        logger.info("[review] 결과 확정 완료")
     else:
-        # 루프가 텍스트 응답(end_turn)으로 종료된 경우 → 마지막 assistant 텍스트에서 JSON 추출
-        raw = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "assistant":
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    for block in content:
-                        if hasattr(block, "type") and block.type == "text":
-                            raw = block.text
-                            break
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            raw = block.get("text", "")
-                            break
-                elif isinstance(content, str):
-                    raw = content
-                if raw:
-                    break
-
-        logger.info(f"[review] 텍스트 응답에서 JSON 추출 시도: {len(raw):,}자 (stop={stop_reason})")
-
-        def _sanitize_json_strings(s: str) -> str:
-            """JSON 문자열 값 안에 들어간 실제 제어문자를 이스케이프"""
-            res: list[str] = []
-            in_string = False
-            escaped = False
-            for ch in s:
-                if escaped:
-                    res.append(ch); escaped = False; continue
-                if ch == "\\":
-                    escaped = True; res.append(ch); continue
-                if ch == '"':
-                    in_string = not in_string; res.append(ch); continue
-                if in_string:
-                    if ch == "\n": res.append("\\n")
-                    elif ch == "\r": res.append("\\r")
-                    elif ch == "\t": res.append("\\t")
-                    else: res.append(ch)
-                else:
-                    res.append(ch)
-            return "".join(res)
-
-        def _try_parse(s: str) -> dict | None:
-            try:
-                return json.loads(s)
-            except json.JSONDecodeError:
-                return None
-
-        json_str = raw.strip()
-        # 코드블록 제거
-        m2 = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", json_str)
-        if m2:
-            json_str = m2.group(1) if m2.group(1).startswith("{") else "{" + m2.group(1)
-
-        result = _try_parse(json_str)
-        if result is None:
-            sanitized = _sanitize_json_strings(json_str)
-            result = _try_parse(sanitized)
-            if result is not None:
-                logger.info("[review] JSON sanitize 후 파싱 성공")
-        if result is None:
-            last_brace = json_str.rfind("}")
-            if last_brace > 0:
-                result = _try_parse(json_str[:last_brace + 1]) or \
-                         _try_parse(_sanitize_json_strings(json_str[:last_brace + 1]))
-                if result is not None:
-                    logger.info("[review] 말미 잘라내기 후 파싱 성공")
-
-        if result is None:
-            logger.warning(
-                f"[review] JSON 파싱 최종 실패 (stop={stop_reason}).\n"
-                f"  응답 처음 1000자: {raw[:1000]}\n"
-                f"  응답 끝  500자: {raw[-500:]}"
-            )
-            result = {
-                "id": "parse-error",
-                "name": "파싱 오류",
-                "org": "",
-                "date": f"{today} 검수",
-                "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
-                "verdict": (
-                    "Tool Use 방식 검수에서 submit_report가 반환되지 않았습니다. "
-                    f"루프 종료 사유: {stop_reason}. "
-                    "파일을 다시 업로드하거나 관리자에게 문의하세요."
-                ),
-                "baseline": [],
-                "critical": [], "major": [], "minor": [], "checkNeeded": [],
-                "schedule": [], "scheduleNote": "",
-                "personnel": [],
-                "irrelevant": {"summary": "파싱 오류로 분석 불가", "items": []},
-                "typoChecklist": [], "typoNote": "",
-                "priority": {"crit": [], "major": [], "check": []},
-                "_debug_raw": raw[:3000],
-                "_debug_tail": raw[-1000:],
-                "_stop_reason": stop_reason,
-            }
+        result = {
+            "id": "parse-error",
+            "name": "파싱 오류",
+            "org": "",
+            "date": f"{today} 검수",
+            "counts": {"crit": 0, "major": 0, "minor": 0, "check": 0},
+            "verdict": (
+                "단일 호출 검수에서 submit_report가 반환되지 않았습니다. "
+                f"종료 사유: {stop_reason}. "
+                "파일을 다시 업로드하거나 관리자에게 문의하세요."
+            ),
+            "baseline": [],
+            "critical": [], "major": [], "minor": [], "checkNeeded": [],
+            "schedule": [], "scheduleNote": "",
+            "personnel": [],
+            "irrelevant": {"summary": "파싱 오류로 분석 불가", "items": []},
+            "typoChecklist": [], "typoNote": "",
+            "priority": {"crit": [], "major": [], "check": []},
+            "_stop_reason": stop_reason,
+        }
 
     # ── 필드 기본값 보정 ──────────────────────────────────────────
-    # 혹시 Claude가 5개 제거 필드를 출력했으면 삭제
     for _removed in ("overview", "scopeCoverage", "qualificationCheck", "costCheck", "deliverableCheck"):
         result.pop(_removed, None)
-    # irrelevant: 문자열이면 신규 구조로 변환
     irr = result.get("irrelevant", "")
     if isinstance(irr, str):
         result["irrelevant"] = {
