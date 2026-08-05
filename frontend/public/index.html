@@ -856,9 +856,9 @@
             <div id="rv-drop-audit" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
               ondragover="rvDragOver(event,'audit')" ondragleave="rvDragLeave('audit')" ondrop="rvDrop(event,'audit')" onclick="document.getElementById('rv-file-audit').click()">
               <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
-              <p id="rv-name-audit" class="text-xs text-slate-400">PDF / HWP / HWPX / DOCX</p>
+              <p id="rv-name-audit" class="text-xs text-slate-400">PDF</p>
             </div>
-            <input id="rv-file-audit" type="file" accept=".pdf,.hwp,.hwpx,.docx,.txt" class="hidden" onchange="rvFileSelect(event,'audit')">
+            <input id="rv-file-audit" type="file" accept=".pdf" class="hidden" onchange="rvFileSelect(event,'audit')">
           </div>
           <!-- 대상사업 RFP -->
           <div>
@@ -868,9 +868,9 @@
             <div id="rv-drop-target" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
               ondragover="rvDragOver(event,'target')" ondragleave="rvDragLeave('target')" ondrop="rvDrop(event,'target')" onclick="document.getElementById('rv-file-target').click()">
               <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
-              <p id="rv-name-target" class="text-xs text-slate-400">PDF / HWP / HWPX / DOCX</p>
+              <p id="rv-name-target" class="text-xs text-slate-400">PDF</p>
             </div>
-            <input id="rv-file-target" type="file" accept=".pdf,.hwp,.hwpx,.docx,.txt" class="hidden" onchange="rvFileSelect(event,'target')">
+            <input id="rv-file-target" type="file" accept=".pdf" class="hidden" onchange="rvFileSelect(event,'target')">
           </div>
           <!-- 포털 제안작업표 -->
           <div>
@@ -892,9 +892,9 @@
             <div id="rv-drop-ppt" class="rv-drop-zone border-2 border-dashed border-slate-200 rounded-xl p-4 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition"
               ondragover="rvDragOver(event,'ppt')" ondragleave="rvDragLeave('ppt')" ondrop="rvDrop(event,'ppt')" onclick="document.getElementById('rv-file-ppt').click()">
               <i class="fas fa-cloud-upload-alt text-slate-300 text-2xl mb-1"></i>
-              <p id="rv-name-ppt" class="text-xs text-slate-400">PPTX / PDF 드롭 또는 클릭</p>
+              <p id="rv-name-ppt" class="text-xs text-slate-400">PDF</p>
             </div>
-            <input id="rv-file-ppt" type="file" accept=".pptx,.ppt,.pdf" class="hidden" onchange="rvFileSelect(event,'ppt')">
+            <input id="rv-file-ppt" type="file" accept=".pdf" class="hidden" onchange="rvFileSelect(event,'ppt')">
           </div>
         </div>
 
