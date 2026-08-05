@@ -1189,10 +1189,13 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
             messages=messages,
         )
         stop_reason = response.stop_reason
+        # 입력/출력 토큰 모두 로깅 (비용 추적)
+        in_tok  = response.usage.input_tokens  if response.usage else 0
+        out_tok = response.usage.output_tokens if response.usage else 0
         logger.info(
             f"[review] 턴 {turn+1} 완료: stop={stop_reason}, "
             f"블록수={len(response.content)}, "
-            f"출력={response.usage.output_tokens if response.usage else '?'}tok"
+            f"입력={in_tok:,}tok 출력={out_tok:,}tok"
         )
 
         # assistant 응답을 메시지 히스토리에 추가 (SDK 객체 → dict 변환)
