@@ -876,14 +876,17 @@ schedule+scheduleNote / personnel / irrelevant / typoChecklist+typoNote
     logger.info(f"[review] 단일 호출 시작: model={model}, 입력={len(user_content):,}자")
 
     try:
-        response = cl.messages.create(
+        # 10분 초과 가능 요청 → 스트리밍 필수 (Anthropic SDK 정책)
+        with cl.messages.stream(
             model=model,
             max_tokens=50000,
             system=_SYSTEM_PROMPT,
             tools=TOOLS,
             tool_choice={"type": "any"},   # submit_report 반드시 호출하도록 강제
             messages=[{"role": "user", "content": user_content}],
-        )
+        ) as stream:
+            response = stream.get_final_message()
+
         stop_reason = response.stop_reason
         in_tok  = response.usage.input_tokens  if response.usage else 0
         out_tok = response.usage.output_tokens if response.usage else 0
